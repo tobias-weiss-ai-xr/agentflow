@@ -31,12 +31,18 @@ run_suite() {
     printf '║ %-58s ║\n' "tests/$(basename "$(dirname "$suite_file")")/$suite_name"
     echo "╚══════════════════════════════════════════════════════════╝"
   fi
-  local run_before="$TF_TESTS_RUN"
-  bash "$suite_file"
+  local output
+  output="$(bash "$suite_file" 2>&1)"
   local rc=$?
-  local run_after="$TF_TESTS_RUN"
-  local suite_run=$((run_after - run_before))
-  TOTAL_RUN=$((TOTAL_RUN + suite_run))
+  echo "$output"
+  # Parse summary line from suite output
+  local suite_run suite_pass suite_fail
+  suite_run="$(echo "$output" | grep -oP '[0-9]+ run' | grep -oP '[0-9]+' | tail -1)"
+  suite_pass="$(echo "$output" | grep -oP '[0-9]+ passed' | grep -oP '[0-9]+' | tail -1)"
+  suite_fail="$(echo "$output" | grep -oP '[0-9]+ failed' | grep -oP '[0-9]+' | tail -1)"
+  TOTAL_RUN=$((TOTAL_RUN + ${suite_run:-0}))
+  TOTAL_PASS=$((TOTAL_PASS + ${suite_pass:-0}))
+  TOTAL_FAIL=$((TOTAL_FAIL + ${suite_fail:-0}))
   return $rc
 }
 
@@ -87,13 +93,12 @@ printf '║  Suites: %d  Failed: %d                                  ║\n' "$(e
 echo "╠══════════════════════════════════════════════════════════╣"
 
 if [[ "${TF_TAP:-0}" == "1" ]]; then
-  echo "1..$TF_TESTS_RUN"
-  echo "# Total: $TF_TESTS_RUN run, $TF_TESTS_PASS passed, $TF_TESTS_FAIL failed"
+  echo "1..$TOTAL_RUN"
+  echo "# Total: $TOTAL_RUN run, $TOTAL_PASS passed, $TOTAL_FAIL failed"
 else
   printf '║  Total:  \033[%dm%d passed\033[0m, \033[%dm%d failed\033[0m' \
-    $((TF_TESTS_FAIL == 0 ? 32 : 31)) "$TF_TESTS_PASS" \
-    $((TF_TESTS_FAIL > 0 ? 31 : 32)) "$TF_TESTS_FAIL"
-  [[ $TF_TESTS_SKIP -gt 0 ]] && printf ', \033[33m%d skipped\033[0m' "$TF_TESTS_SKIP"
+    $((TOTAL_FAIL == 0 ? 32 : 31)) "$TOTAL_PASS" \
+    $((TOTAL_FAIL > 0 ? 31 : 32)) "$TOTAL_FAIL"
   echo ""
 fi
 echo "╚══════════════════════════════════════════════════════════╝"
