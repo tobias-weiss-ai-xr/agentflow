@@ -65,6 +65,16 @@ See plan §13. In summary your change must:
 
 {{PREVIOUS_ERROR}}
 
+## If you are a merge-conflict retry
+
+Your previous attempt passed the acceptance gate but failed to merge because
+main advanced while you worked (conflicting files are named in the error
+above). Your work is **preserved on this branch**. Do this:
+1. Run `git rebase main` — resolve any conflict markers in the named files
+   (keep BOTH your work and the new main changes where they don't collide).
+2. Re-run the acceptance gate; it must pass on the rebased code.
+3. Commit the resolution and finish as normal.
+
 ## HARD REQUIREMENT: you MUST modify files
 
 Your task is judged ONLY by real file changes in your scope. The orchestrator

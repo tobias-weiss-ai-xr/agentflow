@@ -94,9 +94,17 @@ tf_dispatch_one() {
 
   tf_info "$id: dispatching to worker=$worker ($provider/$model)"
 
-  # 1. Create worktree
-  local wt
-  wt="$(tf_worktree_create "$id")" || {
+  # 1. Create worktree. If this is a retry of a merge-conflict failure, reuse
+  #    the preserved branch so the agent resolves the conflict instead of
+  #    redoing all its work from scratch.
+  local wt keep_branch=""
+  local prev_err attempts
+  prev_err="$(tf_status_get "$id" .last_error 2>/dev/null || echo "")"
+  attempts="$(tf_status_get "$id" .attempts 2>/dev/null || echo 0)"
+  if [[ "$attempts" -gt 0 && "$prev_err" == *"merge conflict"* ]]; then
+    keep_branch="--keep-branch"
+  fi
+  wt="$(tf_worktree_create "$id" main $keep_branch)" || {
     tf_fail_task "$id" "worktree creation failed"
     return 1
   }
@@ -181,9 +189,16 @@ tf_dispatch_one() {
       tf_worktree_delete_branch "$id"
       return 0
     else
-      tf_fail_task "$id" "merge conflict (gate passed but main diverged)"
-      tf_worktree_remove "$id" --force
-      tf_worktree_delete_branch "$id"
+      # Merge failed (rebase conflicted). KEEP the branch + worktree so the
+      # work is preserved; report which files conflicted for the retry prompt.
+      local conflicts
+      conflicts="$(tf_worktree_conflicts "$id" | tr '\n' ' ')"
+      if [[ -n "$conflicts" ]]; then
+        tf_fail_task "$id" "merge conflict in: $conflicts (gate passed but main diverged; branch kept for retry)"
+      else
+        tf_fail_task "$id" "merge failed (gate passed but main diverged; branch kept for retry)"
+      fi
+      tf_info "$id: preserved worktree + branch for retry or manual resolution"
       return 1
     fi
   else
