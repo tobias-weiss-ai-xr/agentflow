@@ -189,4 +189,69 @@ tf_timed "create+remove cycle" \
   bash -c ". $HERE/../../lib/common.sh; . $HERE/../../lib/worktree.sh; WT=\$(tf_worktree_create TIMED); tf_worktree_remove TIMED"
 tf_group_end
 
+
+
+# ---- Rebase-based merge (main advanced while agent worked) ----
+tf_group_begin; tf_test "merge rebases branch onto advanced main (different files)"
+S3="$SBOX/rebase-repo"
+mkdir -p "$S3"; cd "$S3"
+git init -q -b main; git config user.email t@t.t; git config user.name test
+mkdir -p core/crates/a/src core/crates/b/src
+echo a > core/crates/a/src/lib.rs
+echo "workspace" > Cargo.toml
+git add -A; git commit -qm base
+
+export TF_CONFIG_DIR="$SBOX/config" TF_STATE_DIR="$SBOX/state2" TF_LOG_DIR="$SBOX/logs2"
+export TF_REPO_DIR="$S3" TF_BRANCH_PREFIX="agent" TF_WORKTREE_ROOT="$S3/.tf-worktrees"
+export TF_MERGE_LOCK="$SBOX/state2/merge.lock"
+mkdir -p "$TF_STATE_DIR" "$TF_LOG_DIR"
+
+# Task branch: adds file in crate a
+WT="$(tf_worktree_create RB1)"
+echo "acroform" > "$WT/core/crates/a/src/acroform.rs"
+(cd "$WT" && git add -A && git commit -qm "feat(RB1): acroform")
+
+# Main advances concurrently: adds file in crate b (different file)
+(cd "$S3" && git checkout -q main)
+echo "slide" > "$S3/core/crates/b/src/model.rs"
+(cd "$S3" && git add -A && git commit -qm "feat(SL-1): slide")
+
+# Merge must rebase + succeed
+tf_worktree_merge RB1
+rc=$?
+tf_assert "merge succeeded after main advanced" test $rc -eq 0
+tf_assert "acroform on main" test -f "$S3/core/crates/a/src/acroform.rs"
+tf_assert "slide on main" test -f "$S3/core/crates/b/src/model.rs"
+tf_group_end
+
+# ---- Rebase conflict: branch kept, work preserved ----
+tf_group_begin; tf_test "conflicting merge keeps branch (work preserved)"
+export TF_REPO_DIR="$S3" TF_STATE_DIR="$SBOX/state3" TF_LOG_DIR="$SBOX/logs3"
+export TF_MERGE_LOCK="$SBOX/state3/merge.lock"
+mkdir -p "$TF_STATE_DIR" "$TF_LOG_DIR"
+
+# Task branch edits Cargo.toml line 1
+WT2="$(tf_worktree_create RB2)"
+echo "task-cargo" > "$WT2/Cargo.toml"
+echo "acroform2" > "$WT2/core/crates/a/src/acroform2.rs"
+(cd "$WT2" && git add -A && git commit -qm "feat(RB2): cargo")
+
+# Main advances: also edits Cargo.toml line 1 (conflict!)
+(cd "$S3" && git checkout -q main)
+echo "main-cargo" > "$S3/Cargo.toml"
+(cd "$S3" && git add -A && git commit -qm "feat(SL-2): cargo")
+
+tf_worktree_merge RB2
+rc=$?
+tf_assert_not "conflicting merge fails cleanly" test $rc -eq 0
+tf_assert "branch preserved" bash -c "git -C '$S3' rev-parse --verify agent/RB2 >/dev/null 2>&1"
+tf_assert "worktree preserved" test -d "$WT2"
+tf_assert "work still on branch" bash -c "git -C '$S3' show agent/RB2:core/crates/a/src/acroform2.rs 2>/dev/null | grep -q acroform2"
+# no conflict markers left in main
+tf_assert "main clean after failed merge" bash -c "cd '$S3' && git status --porcelain | grep -q . ; test \$? -eq 1"
+tf_group_end
+
+
+
 tf_test_summary
+

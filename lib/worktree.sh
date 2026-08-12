@@ -34,7 +34,7 @@ tf_worktree_ensure_gitignore() {
 #   the agent resumes its own work rather than starting from scratch.
 tf_worktree_create() {
   local id="$1" base="${2:-main}" keep=0
-  [[ "$3" == "--keep-branch" ]] && keep=1
+  [[ "${3:-}" == "--keep-branch" ]] && keep=1
   local branch="$TF_BRANCH_PREFIX/$id"
   local wt="$TF_WORKTREE_ROOT/$id"
   tf_worktree_ensure_gitignore
@@ -127,22 +127,38 @@ tf_worktree_merge() {
     fi
     # Diverged path: rebase the task branch onto the latest main, then
     # ff-only merge. 3-way rebase auto-resolves the common case where the
-    # task and other tasks touched DIFFERENT files (e.g. main moved while
-    # the agent was working) — this is the main source of "merge conflict
-    # (gate passed but main diverged)" failures.
-    if git rebase --autostash --no-edit main "$branch" >/dev/null 2>&1; then
-      git checkout --quiet main
+    # task and other tasks touched DIFFERENT files (main moved while the
+    # agent was working) — the main source of "merge conflict (gate passed
+    # but main diverged)" failures.
+    #
+    # NOTE: the branch is checked out in the task's worktree, so git refuses
+    # to rebase it from here ("branch already used by worktree"). The rebase
+    # must run from INSIDE the worktree.
+    local wt
+    wt="$TF_WORKTREE_ROOT/$id"
+    # Rebase path (worktree present): rebase runs from INSIDE the worktree
+    # because git refuses to rebase a branch checked out in another worktree.
+    if [[ -d "$wt" ]] && (cd "$wt" && git rebase --autostash main >/dev/null 2>&1); then
+      cd "$TF_REPO_DIR"
       if git merge --ff-only "$branch" >/dev/null 2>&1; then
         if [[ "$before" != "$(git rev-parse HEAD)" ]]; then
           tf_info "$id: rebased onto main and merged (ff-only)"
           return 0
         fi
       fi
+      (cd "$wt" 2>/dev/null && git rebase --abort 2>/dev/null) || true
+      cd "$TF_REPO_DIR"
     fi
-    # Rebase conflicted or produced nothing. Abort cleanly but KEEP the
+    # No-ff fallback (worktree absent or rebase refused): 3-way merge handles
+    # non-overlapping changes without needing the worktree.
+    if git merge --no-ff -m "merge($id): agent task completed" "$branch" >/dev/null 2>&1; then
+      if [[ "$before" != "$(git rev-parse HEAD)" ]]; then
+        return 0
+      fi
+    fi
+    # Merge/rebase conflicted or produced nothing. Abort cleanly but KEEP the
     # branch and worktree so the agent's work is preserved for retry/manual
     # resolution (never delete on merge failure).
-    git rebase --abort 2>/dev/null || true
     git merge --abort 2>/dev/null || true
     git checkout --quiet main 2>/dev/null || true
     git reset --hard --quiet main
