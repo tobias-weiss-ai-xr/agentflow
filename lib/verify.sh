@@ -140,7 +140,7 @@ tf_verify() {
   local id="$1" wt="$2"
   local accept timeout_s log
   accept="$(tf_task_field "$id" .accept)"
-  timeout_s="$(tf_default accept_timeout_s)"; timeout_s="${timeout_s:-600}"
+  timeout_s="$(tf_default accept_timeout_s)"; timeout_s="${timeout_s:-900}"
   log="$TF_LOG_DIR/$id.verify.log"
 
   if [[ -z "$accept" || "$accept" == "null" ]]; then

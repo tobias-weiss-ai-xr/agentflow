@@ -79,7 +79,7 @@ tf_dispatch_one() {
   local provider model dispatch_timeout log
   provider="$(tf_worker_field "$worker" .provider)"
   model="$(tf_worker_field "$worker" .model)"
-  dispatch_timeout="$(tf_default dispatch_timeout_s)"; dispatch_timeout="${dispatch_timeout:-1800}"
+  dispatch_timeout="$(tf_default dispatch_timeout_s)"; dispatch_timeout="${dispatch_timeout:-3600}"
   log="$TF_LOG_DIR/$id.dispatch.log"
 
   local branch="$TF_BRANCH_PREFIX/$id"
