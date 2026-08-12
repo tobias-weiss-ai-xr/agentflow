@@ -24,7 +24,7 @@ TF_WORKTREE_ROOT="${TF_WORKTREE_ROOT:-$TF_REPO_DIR/.tf-worktrees}"
 # Config files
 WORKERS_JSON="$TF_CONFIG_DIR/workers.json"
 TASKS_JSON="$TF_CONFIG_DIR/tasks.json"
-STATUS_JSON="$TF_STATE_DIR/task-status.json"
+STATUS_JSON="${STATUS_JSON:-$TF_STATE_DIR/task-status.json}"
 RUNSTATE_JSON="$TF_STATE_DIR/run-state.json"   # pid/workers-in-use, transient
 
 # Branch prefix for agent work

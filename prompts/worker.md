@@ -63,6 +63,8 @@ See plan §13. In summary your change must:
 - Add the tests specified in {{PLAN_SECTION}}
 - Not break any existing workspace `--lib` test
 
+{{PREVIOUS_ERROR}}
+
 ## When finished
 
 1. Run the acceptance gate. It must be green.

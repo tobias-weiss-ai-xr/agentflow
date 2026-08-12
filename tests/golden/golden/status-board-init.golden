@@ -1,0 +1,5 @@
+TASK     STATUS       WORKER     ATTMP    ENGINE/TITLE
+----     ------       -------    -----    ------------
+G1       ready        -          0        core/Build pipeline
+G2       ready        -          0        core/Parser layer
+G3       ready        -          0        core/Renderer

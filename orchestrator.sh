@@ -202,13 +202,36 @@ tf_run() {
     inflight="$(tf_inflight_count)"
 
     if [[ -z "$ready_ids" && "$inflight" -eq 0 ]]; then
-      # nothing dispatchable and nothing in flight
-      if [[ $failed_n -gt 0 ]]; then
-        tf_error "DEADLOCK: $failed_n task(s) failed, none ready, none running. Exiting."
+      # Nothing dispatchable and nothing in flight.
+      # Check whether this is a true deadlock (failed tasks blocking ready)
+      # or just permanent failures (no tasks can ever become ready).
+      local blocked_by_failed blocked_n perm_failed_n
+      perm_failed_n="$(tf_count_status failed)"
+
+      if [[ $perm_failed_n -gt 0 ]]; then
+        tf_error "DEADLOCK: $perm_failed_n task(s) permanently failed, blocking $((total_n - done_n - perm_failed_n)) remaining"
         tf_status_board
+
+        # Print per-failure diagnosis
+        tf_info "=== Failure diagnosis ==="
+        while IFS= read -r fid; do
+          [[ -z "$fid" ]] && continue
+          local cat sum att
+          cat="$(tf_status_get "$fid" .error_category)"
+          sum="$(tf_status_get "$fid" .error_summary)"
+          att="$(tf_status_get "$fid" .attempts)"
+          tf_info "$fid (attempt $att): [$cat] $sum"
+          # Show what downstream tasks are blocked
+          while IFS= read -r tid2; do
+            [[ -z "$tid2" ]] && continue
+            local deps2
+            deps2="$(tf_task_field "$tid2" '.deps[]')"
+            grep -qxF "$fid" <<< "$deps2" && tf_info "  └─ blocks $tid2"
+          done < <(tf_all_task_ids)
+        done < <(jq -r 'to_entries[] | select(.value.status=="failed") | .key' "$STATUS_JSON")
+        tf_info "=== End diagnosis ==="
         return 1
       else
-        # all done except blocked (shouldn't happen if deps resolve)
         tf_warn "no ready or running tasks but not all done — possible blocked dependency"
         tf_status_board
         return 1

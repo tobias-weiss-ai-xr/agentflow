@@ -159,6 +159,7 @@ tf_status_board() {
 }
 
 # Mark a task failed and schedule a retry if attempts remain.
+# Enriches the error with classification from verify.sh.
 tf_fail_task() {
   local id="$1" err="${2:-unknown error}"
   local attempts max cooldown
@@ -166,25 +167,43 @@ tf_fail_task() {
   attempts=$((attempts + 1))
   max="$(tf_default max_attempts)"; max="${max:-2}"
   cooldown="$(tf_default retry_cooldown_s)"; cooldown="${cooldown:-30}"
+
+  # Enrich error with classification from verify.sh (lazy source to avoid circular dep)
+  local category summary _tf_verify_sourced
+  _tf_verify_sourced="${_TF_VERIFY_SOURCED:-0}"
+  if [[ "$_tf_verify_sourced" == "0" ]]; then
+    # shellcheck source=verify.sh
+    . "$(dirname "${BASH_SOURCE[0]}")/verify.sh"
+    _TF_VERIFY_SOURCED=1
+  fi
+  category="$(tf_get_error_category "$id")"
+  summary="$(tf_get_error_summary "$id")"
+  [[ "$category" == "none" ]] && category="unknown"
+  local enriched_err="$err [$category] $summary"
+
   if [[ $attempts -ge $max ]]; then
     local tmp now
     tmp="$(mktemp)"; now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    jq --arg id "$id" --arg a "$attempts" --arg e "$err" --arg now "$now" \
+    jq --arg id "$id" --arg a "$attempts" --arg e "$enriched_err" \
+      --arg cat "$category" --arg sum "$summary" --arg now "$now" \
       '.[$id].status="failed" | .[$id].attempts=($a|tonumber) | .[$id].last_error=$e
+       | .[$id].error_category=$cat | .[$id].error_summary=$sum
        | .[$id].worker=null | .[$id].next_retry_at=null | .[$id].finished_at=$now' \
        "$STATUS_JSON" > "$tmp"
     tf_locked_mv "$tmp" "$STATUS_JSON"
-    tf_error "$id: FAILED permanently after $attempts attempts — $err"
+    tf_error "$id: FAILED permanently after $attempts attempts — $enriched_err"
   else
     local tmp now retry_at
     tmp="$(mktemp)"; now="$(date -u +%s)"
     retry_at="$(date -u -d "@$((now + cooldown))" +%Y-%m-%dT%H:%M:%SZ)"
-    jq --arg id "$id" --arg a "$attempts" --arg e "$err" --arg r "$retry_at" \
+    jq --arg id "$id" --arg a "$attempts" --arg e "$enriched_err" \
+      --arg cat "$category" --arg sum "$summary" --arg r "$retry_at" \
       '.[$id].status="failed" | .[$id].attempts=($a|tonumber) | .[$id].last_error=$e
+       | .[$id].error_category=$cat | .[$id].error_summary=$sum
        | .[$id].worker=null | .[$id].next_retry_at=$r' \
        "$STATUS_JSON" > "$tmp"
     tf_locked_mv "$tmp" "$STATUS_JSON"
-    tf_warn "$id: failed (attempt $attempts/$max), retry after $retry_at — $err"
+    tf_warn "$id: failed (attempt $attempts/$max), retry after $retry_at — $enriched_err"
   fi
 }
 
