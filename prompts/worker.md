@@ -65,6 +65,24 @@ See plan §13. In summary your change must:
 
 {{PREVIOUS_ERROR}}
 
+## HARD REQUIREMENT: you MUST modify files
+
+Your task is judged ONLY by real file changes in your scope. The orchestrator
+checks `git diff` against the base commit before running the gate.
+
+**If you do not modify at least one in-scope file, the task FAILS immediately** —
+regardless of what you write in your summary. Do NOT:
+- Claim success without making changes (this is detected and counted as a failure)
+- "Provide the commit message" or "report completion" as a substitute for work
+- Stop after reading files / analysis only
+
+If the task is too large, do it in this order and commit progressively:
+1. Make the minimal correct change that compiles
+2. Run the acceptance gate
+3. If green, commit. If red, fix and re-run.
+4. Only if you genuinely cannot make it compile after real attempts should you
+   commit nothing and report the blocker.
+
 ## When finished
 
 1. Run the acceptance gate. It must be green.
