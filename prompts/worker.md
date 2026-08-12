@@ -16,7 +16,7 @@ You have been assigned **exactly one task**. Do it well, verify it, commit it.
 **ID:** `{{TASK_ID}}` (engine: `{{ENGINE}}`)
 **Title:** {{TASK_TITLE}}
 
-Implement the contract defined in {{PLAN_SECTION}}.
+Implement the contract defined in `{{PLAN_SECTION}}`.
 
 ## File scope — edit ONLY these paths
 

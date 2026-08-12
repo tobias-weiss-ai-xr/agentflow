@@ -26,7 +26,7 @@ tf_render_prompt() {
   section="$(tf_task_field "$id" .section)"
   accept="$(tf_task_field "$id" .accept)"
   scope_block="$(tf_task_field "$id" '.scope[]' | sed 's/^/  /')"
-  local plan_section="section $section of"
+  local plan_section="section $section"
 
   # Build error feedback block for retries
   local error_block=""
@@ -63,7 +63,10 @@ $(tf_error_snippet "$TF_LOG_DIR/$id.verify.log" 2>/dev/null | head -40)
   tmpl="${tmpl//\{\{ENGINE\}\}/$engine}"
   tmpl="${tmpl//\{\{PLAN_SECTION\}\}/$plan_section}"
   tmpl="${tmpl//\{\{SCOPE_BLOCK\}\}/$scope_block}"
-  tmpl="${tmpl//\{\{ACCEPT_COMMAND\}\}/$accept}"
+  # ACCEPT_COMMAND may contain && which breaks ${var//p/r}. Use sed.
+  local accept_esc
+  accept_esc="$(printf '%s' "$accept" | sed 's/[&\/]/\\&/g')"
+  tmpl="$(printf '%s' "$tmpl" | sed "s/{{ACCEPT_COMMAND}}/$accept_esc/g")"
   tmpl="${tmpl//\{\{PREVIOUS_ERROR\}\}/$error_block}"
   printf '%s' "$tmpl"
 }
