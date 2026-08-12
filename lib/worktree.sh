@@ -100,6 +100,13 @@ tf_worktree_merge() {
     git reset --hard --quiet main
     git clean --quiet -fd
     if git merge --ff-only "$branch" >/dev/null 2>&1; then
+      # Verify merge actually advanced main (not a no-op)
+      local pre_post
+      pre_post="$(git rev-parse HEAD)"
+      if [[ "$pre_post" == "$(git rev-parse "$branch")" ]]; then
+        tf_warn "$id: ff-only merge was no-op (branch HEAD == main HEAD); skipping"
+        return 1
+      fi
       return 0
     fi
     if git merge --no-ff -m "merge($id): agent task completed" "$branch" >/dev/null 2>&1; then
