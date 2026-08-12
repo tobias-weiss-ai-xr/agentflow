@@ -1,0 +1,1096 @@
+{
+  "_meta": {
+    "source": "plan/2026-07-25-engine-rebuild-execution-plan.md",
+    "task_count": 69,
+    "engines": [
+      "CH",
+      "CO",
+      "DM",
+      "FL",
+      "PDF",
+      "RT",
+      "SL",
+      "SP",
+      "SS",
+      "TL",
+      "foundation"
+    ],
+    "missing_scope": [],
+    "stale_scope_entries": []
+  },
+  "tasks": [
+    {
+      "id": "FC-1",
+      "engine": "foundation",
+      "title": "Path + Range addressing types in wo-common",
+      "section": "\u00a72.1",
+      "deps": [],
+      "scope": [
+        "core/crates/wo-common/src/path.rs",
+        "core/crates/wo-common/src/lib.rs"
+      ],
+      "accept": "cargo test -p wo-common path::",
+      "acceptance_prose": "cargo test -p wo-common path:: \u2014 4 tests: serde round-trip, equality, Range doc, debug format.",
+      "manual": false
+    },
+    {
+      "id": "FC-2",
+      "engine": "foundation",
+      "title": "ModelOp enum + EditableModel trait in wo-common",
+      "section": "\u00a72.2",
+      "deps": [
+        "FC-1"
+      ],
+      "scope": [
+        "core/crates/wo-common/src/op.rs",
+        "core/crates/wo-common/src/lib.rs"
+      ],
+      "accept": "cargo test -p wo-common op::",
+      "acceptance_prose": "trait compiles; 3 unit tests on Vec<String> stub proving Insert/Delete/Replace round-trip and invert reverses.",
+      "manual": false
+    },
+    {
+      "id": "FC-3",
+      "engine": "foundation",
+      "title": "Uniform WASM export convention (create_model/apply_op/model_to_bytes/layout_and_render)",
+      "section": "\u00a72.3",
+      "deps": [
+        "FC-2"
+      ],
+      "scope": [
+        "core/crates/wo-renderer-wasm/src/lib.rs",
+        "core/crates/wo-renderer-wasm/src/stub_model.rs"
+      ],
+      "accept": "wasm-pack build core/crates/wo-renderer-wasm --target web --dev",
+      "acceptance_prose": "stub Vec<String> model compiles to WASM; JS inserts 1 op, reads back 1 paragraph.",
+      "manual": false
+    },
+    {
+      "id": "FC-4",
+      "engine": "foundation",
+      "title": "Frontend command-router (replaces TipTap/WASM split)",
+      "section": "\u00a72.4",
+      "deps": [],
+      "scope": [
+        "packages/editor-common/src/core/command-router.ts",
+        "packages/editor-common/src/core/__tests__/command-router.test.ts"
+      ],
+      "accept": "pnpm --filter @world-office/editor-common test -- command-router",
+      "acceptance_prose": "unit test registers fake router, dispatches {command:'bold'}, asserts receipt; editor-common pnpm test green.",
+      "manual": false
+    },
+    {
+      "id": "DM-0",
+      "engine": "DM",
+      "title": "Create OpenSpec change (\u00a716)",
+      "section": "\u00a73.5",
+      "deps": [],
+      "scope": [
+        "openspec/changes/rebuild-doc-mutation-engine/"
+      ],
+      "accept": "openspec validate rebuild-doc-mutation-engine",
+      "acceptance_prose": "`openspec validate rebuild-doc-mutation-engine` OK",
+      "manual": false
+    },
+    {
+      "id": "DM-1",
+      "engine": "DM",
+      "title": "Refactor `DocxBody \u2192 blocks` + update all handle-sites",
+      "section": "\u00a73.4",
+      "deps": [
+        "DM-0"
+      ],
+      "scope": [
+        "core/crates/wo-ooxml/src/model.rs",
+        "core/crates/wo-ooxml/src/parser.rs",
+        "core/crates/wo-ooxml/src/serializer.rs",
+        "core/crates/wo-docx-renderer/src/layout.rs",
+        "core/crates/wo-renderer-wasm/src/lib.rs"
+      ],
+      "accept": "cargo test -p wo-ooxml --lib && cargo test -p wo-docx-renderer --lib",
+      "acceptance_prose": "workspace `--lib` green; conformance `06-font-times` round-trips byte-identical",
+      "manual": false
+    },
+    {
+      "id": "DM-2",
+      "engine": "DM",
+      "title": "Create crate `wo-ooxml-ops`, `DocOp`/`DocModel`/`DocOpError`",
+      "section": "\u00a73.1",
+      "deps": [
+        "DM-1"
+      ],
+      "scope": [
+        "core/crates/wo-ooxml-ops/"
+      ],
+      "accept": "cargo build -p wo-ooxml-ops",
+      "acceptance_prose": "`cargo build -p wo-ooxml-ops`",
+      "manual": false
+    },
+    {
+      "id": "DM-3",
+      "engine": "DM",
+      "title": "`text.rs`: InsertText/DeleteText/SplitParagraph/MergeWithPrevious",
+      "section": "\u00a73.5",
+      "deps": [
+        "DM-2"
+      ],
+      "scope": [
+        "core/crates/wo-ooxml-ops/src/text.rs",
+        "core/crates/wo-ooxml-ops/src/text/tests.rs"
+      ],
+      "accept": "cargo test -p wo-ooxml-ops text::",
+      "acceptance_prose": "12 tests incl. Unicode, empty-para, merge-at-start",
+      "manual": false
+    },
+    {
+      "id": "DM-4",
+      "engine": "DM",
+      "title": "`FormatRun` (split run at boundaries)",
+      "section": "\u00a73.5",
+      "deps": [
+        "DM-3"
+      ],
+      "scope": [
+        "core/crates/wo-ooxml-ops/src/format.rs"
+      ],
+      "accept": "cargo test -p wo-ooxml-ops format::",
+      "acceptance_prose": "6 tests incl. partial-run formatting",
+      "manual": false
+    },
+    {
+      "id": "DM-5",
+      "engine": "DM",
+      "title": "`paragraph.rs`: Insert/Delete/SetParagraphProps",
+      "section": "\u00a73.5",
+      "deps": [
+        "DM-3"
+      ],
+      "scope": [
+        "core/crates/wo-ooxml-ops/src/paragraph.rs"
+      ],
+      "accept": "cargo test -p wo-ooxml-ops paragraph::",
+      "acceptance_prose": "8 tests",
+      "manual": false
+    },
+    {
+      "id": "DM-6",
+      "engine": "DM",
+      "title": "`table.rs`: 6 table ops",
+      "section": "\u00a73.5",
+      "deps": [
+        "DM-1"
+      ],
+      "scope": [
+        "core/crates/wo-ooxml-ops/src/table.rs"
+      ],
+      "accept": "cargo test -p wo-ooxml-ops table::",
+      "acceptance_prose": "14 tests incl. merge\u2192split round-trip",
+      "manual": false
+    },
+    {
+      "id": "DM-7",
+      "engine": "DM",
+      "title": "`image.rs`: InsertImage + `DocxImage` on body",
+      "section": "\u00a73.5",
+      "deps": [
+        "DM-5"
+      ],
+      "scope": [
+        "core/crates/wo-ooxml-ops/src/image.rs",
+        "core/crates/wo-ooxml/src/model.rs"
+      ],
+      "accept": "cargo test -p wo-ooxml-ops image::",
+      "acceptance_prose": "3 tests",
+      "manual": false
+    },
+    {
+      "id": "DM-8",
+      "engine": "DM",
+      "title": "`list.rs`/`section.rs`: SetListLevel, InsertSectionBreak",
+      "section": "\u00a73.5",
+      "deps": [
+        "DM-5"
+      ],
+      "scope": [
+        "core/crates/wo-ooxml-ops/src/list.rs",
+        "core/crates/wo-ooxml-ops/src/section.rs"
+      ],
+      "accept": "cargo test -p wo-ooxml-ops list:: section::",
+      "acceptance_prose": "5 tests",
+      "manual": false
+    },
+    {
+      "id": "DM-9",
+      "engine": "DM",
+      "title": "`impl EditableModel for DocxBody` (ModelOp\u2192DocOp)",
+      "section": "\u00a73.5",
+      "deps": [
+        "DM-2",
+        "DM-3",
+        "DM-4",
+        "DM-5",
+        "DM-6",
+        "DM-7",
+        "DM-8"
+      ],
+      "scope": [
+        "core/crates/wo-ooxml-ops/src/model.rs"
+      ],
+      "accept": "cargo test -p wo-ooxml-ops editable_model::",
+      "acceptance_prose": "4 round-trip tests",
+      "manual": false
+    },
+    {
+      "id": "DM-10",
+      "engine": "DM",
+      "title": "WASM `apply_op` + `model_to_bytes` in `wo-renderer-wasm`",
+      "section": "\u00a74",
+      "deps": [
+        "DM-9"
+      ],
+      "scope": [
+        "core/crates/wo-renderer-wasm/src/lib.rs",
+        "apps/web/apps/documenteditor-react/src/__tests__/apply-op.test.ts"
+      ],
+      "accept": "wasm-pack build core/crates/wo-renderer-wasm --target web --dev",
+      "acceptance_prose": "JS smoke: insert\u2192serialize\u2192re-parse\u2192assert",
+      "manual": false
+    },
+    {
+      "id": "DM-11",
+      "engine": "DM",
+      "title": "Frontend: `command-router.ts`; rewrite `rte-command.ts` via router; fix `SelectControl` bug (`ControlRenderer.tsx:133`\u2192`dispatch.onCommand(spec.id, value)`)",
+      "section": "\u00a75",
+      "deps": [
+        "FC-4",
+        "DM-10"
+      ],
+      "scope": [
+        "packages/editor-common/src/core/command-router.ts",
+        "apps/web/apps/documenteditor-react/src/lib/rte-command.ts",
+        "apps/web/apps/documenteditor-react/src/components/DocumentHolder.tsx",
+        "packages/editor-common/src/ribbon/components/ControlRenderer.tsx"
+      ],
+      "accept": "pnpm --filter @world-office/documenteditor-react lint typecheck test",
+      "acceptance_prose": "8 currently-working cmds still work; **font dropdown works**",
+      "manual": false
+    },
+    {
+      "id": "DM-12",
+      "engine": "DM",
+      "title": "Remove TipTap from default path (feature-flag `WO_TIPTAP=1`)",
+      "section": "\u00a75",
+      "deps": [
+        "DM-11"
+      ],
+      "scope": [
+        "apps/web/apps/documenteditor-react/src/main.tsx",
+        "apps/web/apps/documenteditor-react/vite.config.ts"
+      ],
+      "accept": "pnpm --filter @world-office/documenteditor-react typecheck build",
+      "acceptance_prose": "`pnpm build` smaller; typecheck green",
+      "manual": false
+    },
+    {
+      "id": "TL-1",
+      "engine": "TL",
+      "title": "Multi-column section layout",
+      "section": "\u00a74",
+      "deps": [
+        "DM-8"
+      ],
+      "scope": [
+        "core/crates/wo-docx-renderer/src/layout.rs"
+      ],
+      "accept": "cargo test -p wo-docx-renderer multicolumn",
+      "acceptance_prose": "2-col DOCX renders 2 streams",
+      "manual": true
+    },
+    {
+      "id": "TL-2",
+      "engine": "TL",
+      "title": "Row-break-across-pages + header repeat",
+      "section": "\u00a74",
+      "deps": [
+        "DM-6"
+      ],
+      "scope": [
+        "core/crates/wo-docx-renderer/src/layout.rs"
+      ],
+      "accept": "cargo test -p wo-docx-renderer table_row_break",
+      "acceptance_prose": "3-page table repeats header on p2/p3",
+      "manual": true
+    },
+    {
+      "id": "TL-3",
+      "engine": "TL",
+      "title": "Headers/footers (odd/even/first)",
+      "section": "\u00a74",
+      "deps": [
+        "DM-1"
+      ],
+      "scope": [
+        "core/crates/wo-docx-renderer/src/layout.rs",
+        "core/crates/wo-ooxml/src/model.rs"
+      ],
+      "accept": "cargo test -p wo-docx-renderer header_footer::",
+      "acceptance_prose": "4 tests",
+      "manual": false
+    },
+    {
+      "id": "TL-4",
+      "engine": "TL",
+      "title": "Footnotes/endnotes with renumber",
+      "section": "\u00a74",
+      "deps": [
+        "DM-5"
+      ],
+      "scope": [
+        "core/crates/wo-docx-renderer/src/layout.rs"
+      ],
+      "accept": "cargo test -p wo-docx-renderer footnote::",
+      "acceptance_prose": "2 tests",
+      "manual": false
+    },
+    {
+      "id": "TL-5",
+      "engine": "TL",
+      "title": "Floating images + 7 wrap modes",
+      "section": "\u00a74",
+      "deps": [
+        "DM-7"
+      ],
+      "scope": [
+        "core/crates/wo-docx-renderer/src/layout.rs"
+      ],
+      "accept": "cargo test -p wo-docx-renderer wrap_mode::",
+      "acceptance_prose": "each wrap mode renders correct flow",
+      "manual": true
+    },
+    {
+      "id": "TL-6",
+      "engine": "TL",
+      "title": "Tab stops (5 kinds)",
+      "section": "\u00a74",
+      "deps": [
+        "DM-2"
+      ],
+      "scope": [
+        "core/crates/wo-docx-renderer/src/layout.rs"
+      ],
+      "accept": "cargo test -p wo-docx-renderer tab_stop::",
+      "acceptance_prose": "5 tests",
+      "manual": false
+    },
+    {
+      "id": "TL-7",
+      "engine": "TL",
+      "title": "Hyphenation + justified glyph advance",
+      "section": "\u00a74",
+      "deps": [
+        "SP-3"
+      ],
+      "scope": [
+        "core/crates/wo-docx-renderer/src/layout.rs"
+      ],
+      "accept": "cargo test -p wo-docx-renderer hyphenation::",
+      "acceptance_prose": "DE/EN sample justified correctly",
+      "manual": true
+    },
+    {
+      "id": "FL-1",
+      "engine": "FL",
+      "title": "Lexer + parser + AST",
+      "section": "\u00a75",
+      "deps": [
+        "FC-1"
+      ],
+      "scope": [
+        "core/crates/wo-formula/src/lexer.rs",
+        "core/crates/wo-formula/src/parser.rs",
+        "core/crates/wo-formula/src/ast.rs"
+      ],
+      "accept": "cargo test -p wo-formula grammar::",
+      "acceptance_prose": "30 grammar tests (ops, refs `A1`/`R1C1`, `Sheet1!A1`, arrays)",
+      "manual": false
+    },
+    {
+      "id": "FL-2",
+      "engine": "FL",
+      "title": "eval + math/logical (~40 fns)",
+      "section": "\u00a75",
+      "deps": [
+        "FL-1"
+      ],
+      "scope": [
+        "core/crates/wo-formula/src/eval.rs"
+      ],
+      "accept": "cargo test -p wo-formula eval_basic::",
+      "acceptance_prose": "60 golden-value tests",
+      "manual": false
+    },
+    {
+      "id": "FL-3",
+      "engine": "FL",
+      "title": "text/date/lookup/stat (~200 fns)",
+      "section": "\u00a75",
+      "deps": [
+        "FL-2"
+      ],
+      "scope": [
+        "core/crates/wo-formula/src/functions/"
+      ],
+      "accept": "cargo test -p wo-formula functions::",
+      "acceptance_prose": "200 tests vs Excel-expected",
+      "manual": false
+    },
+    {
+      "id": "FL-4",
+      "engine": "FL",
+      "title": "Dep graph + cycle detection (`#REF!`)",
+      "section": "\u00a75",
+      "deps": [
+        "FL-2"
+      ],
+      "scope": [
+        "core/crates/wo-formula/src/dep_graph.rs"
+      ],
+      "accept": "cargo test -p wo-formula dep_graph::",
+      "acceptance_prose": "5 tests",
+      "manual": false
+    },
+    {
+      "id": "FL-5",
+      "engine": "FL",
+      "title": "`recalc_all` topological order",
+      "section": "\u00a75",
+      "deps": [
+        "FL-4"
+      ],
+      "scope": [
+        "core/crates/wo-formula/src/recalc.rs"
+      ],
+      "accept": "cargo test -p wo-formula recalc::",
+      "acceptance_prose": "1000-cell sheet recalcs <50ms",
+      "manual": false
+    },
+    {
+      "id": "SS-1",
+      "engine": "SS",
+      "title": "Model structs + serde",
+      "section": "\u00a76",
+      "deps": [
+        "FL-1"
+      ],
+      "scope": [
+        "core/crates/wo-sheet/src/model.rs"
+      ],
+      "accept": "cargo test -p wo-sheet model::",
+      "acceptance_prose": "parse `Sheet1` from XLSX via `wo-ooxml`",
+      "manual": false
+    },
+    {
+      "id": "SS-2",
+      "engine": "SS",
+      "title": "`SheetOp` apply + invert",
+      "section": "\u00a76",
+      "deps": [
+        "FL-5",
+        "SS-1"
+      ],
+      "scope": [
+        "core/crates/wo-sheet/src/ops.rs"
+      ],
+      "accept": "cargo test -p wo-sheet ops::",
+      "acceptance_prose": "20 op tests",
+      "manual": false
+    },
+    {
+      "id": "SS-3",
+      "engine": "SS",
+      "title": "Number-format engine (Excel codes)",
+      "section": "\u00a76",
+      "deps": [
+        "SS-1"
+      ],
+      "scope": [
+        "core/crates/wo-sheet/src/format.rs"
+      ],
+      "accept": "cargo test -p wo-sheet format::",
+      "acceptance_prose": "40 format golden tests",
+      "manual": false
+    },
+    {
+      "id": "SS-4",
+      "engine": "SS",
+      "title": "Conditional formatting (12 rules)",
+      "section": "\u00a76",
+      "deps": [
+        "SS-2"
+      ],
+      "scope": [
+        "core/crates/wo-sheet/src/conditional.rs"
+      ],
+      "accept": "cargo test -p wo-sheet conditional::",
+      "acceptance_prose": "12 tests",
+      "manual": false
+    },
+    {
+      "id": "SS-5",
+      "engine": "SS",
+      "title": "Pivot table engine",
+      "section": "\u00a76",
+      "deps": [
+        "FL-3",
+        "SS-1"
+      ],
+      "scope": [
+        "core/crates/wo-sheet/src/pivot.rs"
+      ],
+      "accept": "cargo test -p wo-sheet pivot::",
+      "acceptance_prose": "3 end-to-end pivots",
+      "manual": false
+    },
+    {
+      "id": "SS-6",
+      "engine": "SS",
+      "title": "Data validation",
+      "section": "\u00a76",
+      "deps": [
+        "SS-2"
+      ],
+      "scope": [
+        "core/crates/wo-sheet/src/validation.rs"
+      ],
+      "accept": "cargo test -p wo-sheet validation::",
+      "acceptance_prose": "8 tests",
+      "manual": false
+    },
+    {
+      "id": "SS-7",
+      "engine": "SS",
+      "title": "`EditableModel` + WASM exports (\u00a72.3)",
+      "section": "\u00a72.3",
+      "deps": [
+        "SS-2",
+        "FC-3"
+      ],
+      "scope": [
+        "core/crates/wo-renderer-wasm/src/lib.rs"
+      ],
+      "accept": "wasm-pack build core/crates/wo-renderer-wasm --target web --dev",
+      "acceptance_prose": "JS round-trip",
+      "manual": false
+    },
+    {
+      "id": "SS-8",
+      "engine": "SS",
+      "title": "Frontend: 9 right-menu panels \u2192 `apply_op`",
+      "section": "\u00a76",
+      "deps": [
+        "FC-4",
+        "SS-7"
+      ],
+      "scope": [
+        "apps/web/apps/spreadsheeteditor-react/src/components/RightMenu/"
+      ],
+      "accept": "pnpm --filter @world-office/spreadsheeteditor-react lint typecheck test",
+      "acceptance_prose": "cells mutate, grid redraws",
+      "manual": false
+    },
+    {
+      "id": "SL-1",
+      "engine": "SL",
+      "title": "Model + serde (reuse PPTX structs in wo-ooxml)",
+      "section": "\u00a77",
+      "deps": [
+        "DM-1"
+      ],
+      "scope": [
+        "core/crates/wo-slide/src/model.rs"
+      ],
+      "accept": "cargo test -p wo-slide model::",
+      "acceptance_prose": "parse existing PPTX conformance file",
+      "manual": false
+    },
+    {
+      "id": "SL-2",
+      "engine": "SL",
+      "title": "`SlideOp` apply + invert",
+      "section": "\u00a77",
+      "deps": [
+        "SL-1"
+      ],
+      "scope": [
+        "core/crates/wo-slide/src/ops.rs"
+      ],
+      "accept": "cargo test -p wo-slide ops::",
+      "acceptance_prose": "15 op tests",
+      "manual": false
+    },
+    {
+      "id": "SL-3",
+      "engine": "SL",
+      "title": "Auto-shape geometry (187 DrawingML presets)",
+      "section": "\u00a77",
+      "deps": [
+        "SL-1"
+      ],
+      "scope": [
+        "core/crates/wo-slide/src/geometry.rs"
+      ],
+      "accept": "cargo test -p wo-slide geometry::",
+      "acceptance_prose": "each preset renders expected path bounds",
+      "manual": false
+    },
+    {
+      "id": "SL-4",
+      "engine": "SL",
+      "title": "Animation timeline runtime",
+      "section": "\u00a77",
+      "deps": [
+        "SL-2"
+      ],
+      "scope": [
+        "core/crates/wo-slide/src/animation.rs"
+      ],
+      "accept": "cargo test -p wo-slide animation::",
+      "acceptance_prose": "2-slide timeline plays headless",
+      "manual": false
+    },
+    {
+      "id": "SL-5",
+      "engine": "SL",
+      "title": "Chart embedding via `wo-chart`",
+      "section": "\u00a77",
+      "deps": [
+        "CH-4"
+      ],
+      "scope": [
+        "core/crates/wo-slide/src/chart_embed.rs"
+      ],
+      "accept": "cargo test -p wo-slide chart_embed::",
+      "acceptance_prose": "bar/line/pie appear on slide",
+      "manual": false
+    },
+    {
+      "id": "SL-6",
+      "engine": "SL",
+      "title": "`EditableModel` + WASM exports",
+      "section": "\u00a72.3",
+      "deps": [
+        "SL-2",
+        "FC-3"
+      ],
+      "scope": [
+        "core/crates/wo-renderer-wasm/src/lib.rs"
+      ],
+      "accept": "wasm-pack build core/crates/wo-renderer-wasm --target web --dev",
+      "acceptance_prose": "JS round-trip",
+      "manual": false
+    },
+    {
+      "id": "SL-7",
+      "engine": "SL",
+      "title": "Frontend: 8 right-menu panels \u2192 `apply_op`",
+      "section": "\u00a77",
+      "deps": [
+        "FC-4",
+        "SL-6"
+      ],
+      "scope": [
+        "apps/web/apps/presentationeditor-react/src/components/RightMenu/"
+      ],
+      "accept": "pnpm --filter @world-office/presentationeditor-react lint typecheck test",
+      "acceptance_prose": "panels mutate slide",
+      "manual": false
+    },
+    {
+      "id": "CH-1",
+      "engine": "CH",
+      "title": "Model + serde",
+      "section": "\u00a78",
+      "deps": [
+        "FC-1"
+      ],
+      "scope": [
+        "core/crates/wo-chart/src/model.rs"
+      ],
+      "accept": "cargo test -p wo-chart model::",
+      "acceptance_prose": "round-trip a chart from PPTX",
+      "manual": false
+    },
+    {
+      "id": "CH-2",
+      "engine": "CH",
+      "title": "bar/line/pie render via `wo-renderer`",
+      "section": "\u00a78",
+      "deps": [
+        "CH-1"
+      ],
+      "scope": [
+        "core/crates/wo-chart/src/render.rs"
+      ],
+      "accept": "cargo test -p wo-chart render_bar_line_pie::",
+      "acceptance_prose": "3 raster snapshots match golden PNGs (tol 2%)",
+      "manual": true
+    },
+    {
+      "id": "CH-3",
+      "engine": "CH",
+      "title": "scatter/area/radar/doughnut",
+      "section": "\u00a78",
+      "deps": [
+        "CH-2"
+      ],
+      "scope": [
+        "core/crates/wo-chart/src/render.rs"
+      ],
+      "accept": "cargo test -p wo-chart render_scatter_area_radar::",
+      "acceptance_prose": "4 golden tests",
+      "manual": true
+    },
+    {
+      "id": "CH-4",
+      "engine": "CH",
+      "title": "`EditableModel` + WASM export",
+      "section": "\u00a72.3",
+      "deps": [
+        "CH-2",
+        "FC-3"
+      ],
+      "scope": [
+        "core/crates/wo-renderer-wasm/src/lib.rs"
+      ],
+      "accept": "wasm-pack build core/crates/wo-renderer-wasm --target web --dev",
+      "acceptance_prose": "JS sets series data",
+      "manual": false
+    },
+    {
+      "id": "RT-1",
+      "engine": "RT",
+      "title": "Anchor points",
+      "section": "\u00a79",
+      "deps": [
+        "FC-1"
+      ],
+      "scope": [
+        "core/crates/wo-route/src/anchor.rs"
+      ],
+      "accept": "cargo test -p wo-route anchor::",
+      "acceptance_prose": "4 tests per side",
+      "manual": false
+    },
+    {
+      "id": "RT-2",
+      "engine": "RT",
+      "title": "Orthogonal routing",
+      "section": "\u00a79",
+      "deps": [
+        "RT-1"
+      ],
+      "scope": [
+        "core/crates/wo-route/src/orthogonal.rs"
+      ],
+      "accept": "cargo test -p wo-route orthogonal::",
+      "acceptance_prose": "route avoids 2 obstacles",
+      "manual": false
+    },
+    {
+      "id": "RT-3",
+      "engine": "RT",
+      "title": "A* Manhattan + obstacle grid",
+      "section": "\u00a79",
+      "deps": [
+        "RT-2"
+      ],
+      "scope": [
+        "core/crates/wo-route/src/astar.rs"
+      ],
+      "accept": "cargo test -p wo-route astar::",
+      "acceptance_prose": "shortest path found",
+      "manual": false
+    },
+    {
+      "id": "RT-4",
+      "engine": "RT",
+      "title": "Bezier smoothing",
+      "section": "\u00a79",
+      "deps": [
+        "RT-2"
+      ],
+      "scope": [
+        "core/crates/wo-route/src/bezier.rs"
+      ],
+      "accept": "cargo test -p wo-route bezier::",
+      "acceptance_prose": "smooth curve through waypoints",
+      "manual": false
+    },
+    {
+      "id": "RT-5",
+      "engine": "RT",
+      "title": "Visio integration + right-menu wiring",
+      "section": "\u00a79",
+      "deps": [
+        "RT-3",
+        "FC-4"
+      ],
+      "scope": [
+        "apps/web/apps/visioeditor-react/src/components/"
+      ],
+      "accept": "pnpm --filter @world-office/visioeditor-react lint typecheck test",
+      "acceptance_prose": "connectors redraw on shape move",
+      "manual": false
+    },
+    {
+      "id": "PDF-1",
+      "engine": "PDF",
+      "title": "`pdfium-render` dep + vendored static lib for WASM",
+      "section": "\u00a710",
+      "deps": [
+        "FC-1"
+      ],
+      "scope": [
+        "core/crates/wo-pdf-render/Cargo.toml",
+        "core/crates/wo-pdf-render/build.rs"
+      ],
+      "accept": "cargo build -p wo-pdf-render",
+      "acceptance_prose": "`cargo build -p wo-pdf-render`",
+      "manual": false
+    },
+    {
+      "id": "PDF-2",
+      "engine": "PDF",
+      "title": "`PdfRenderer` trait + `PdfiumBackend::render_page`",
+      "section": "\u00a710",
+      "deps": [
+        "PDF-1"
+      ],
+      "scope": [
+        "core/crates/wo-pdf-render/src/renderer.rs"
+      ],
+      "accept": "cargo test -p wo-pdf-render render_page::",
+      "acceptance_prose": "raster 1-page PDF; golden PNG match",
+      "manual": true
+    },
+    {
+      "id": "PDF-3",
+      "engine": "PDF",
+      "title": "Text extraction + annotation parse",
+      "section": "\u00a710",
+      "deps": [
+        "PDF-2"
+      ],
+      "scope": [
+        "core/crates/wo-pdf-render/src/text.rs",
+        "core/crates/wo-pdf-render/src/annotation.rs"
+      ],
+      "accept": "cargo test -p wo-pdf-render text:: annotation::",
+      "acceptance_prose": "3 tests",
+      "manual": false
+    },
+    {
+      "id": "PDF-4",
+      "engine": "PDF",
+      "title": "AcroForm read/write",
+      "section": "\u00a710",
+      "deps": [
+        "PDF-3"
+      ],
+      "scope": [
+        "core/crates/wo-pdf-render/src/acroform.rs"
+      ],
+      "accept": "cargo test -p wo-pdf-render acroform::",
+      "acceptance_prose": "fill a field, re-save, persists",
+      "manual": false
+    },
+    {
+      "id": "PDF-5",
+      "engine": "PDF",
+      "title": "WASM exports (\u00a72.3)",
+      "section": "\u00a72.3",
+      "deps": [
+        "PDF-2",
+        "FC-3"
+      ],
+      "scope": [
+        "core/crates/wo-renderer-wasm/src/lib.rs"
+      ],
+      "accept": "wasm-pack build core/crates/wo-renderer-wasm --target web --dev",
+      "acceptance_prose": "JS renders page to canvas",
+      "manual": false
+    },
+    {
+      "id": "PDF-6",
+      "engine": "PDF",
+      "title": "Frontend: 8 right-menu panels \u2192 `apply_op`",
+      "section": "\u00a710",
+      "deps": [
+        "FC-4",
+        "PDF-5"
+      ],
+      "scope": [
+        "apps/web/apps/pdfeditor-react/src/components/RightMenu/"
+      ],
+      "accept": "pnpm --filter @world-office/pdfeditor-react lint typecheck test",
+      "acceptance_prose": "annotate + form-fill work",
+      "manual": false
+    },
+    {
+      "id": "CO-1",
+      "engine": "CO",
+      "title": "Define `ModelOp` wire schema + version field",
+      "section": "\u00a711",
+      "deps": [
+        "FC-2"
+      ],
+      "scope": [
+        "services/coauthoring-service/src/model_op.rs"
+      ],
+      "accept": "cargo test -p coauthoring-service model_op_schema::",
+      "acceptance_prose": "JSON-schema test",
+      "manual": false
+    },
+    {
+      "id": "CO-2",
+      "engine": "CO",
+      "title": "Replace `Document.crdt` (text) with op-log of `ModelOp` (automerge Custom)",
+      "section": "\u00a711",
+      "deps": [
+        "FC-2"
+      ],
+      "scope": [
+        "services/coauthoring-service/src/document.rs"
+      ],
+      "accept": "cargo test -p coauthoring-service merge::",
+      "acceptance_prose": "merge two replicas with conflicting inserts",
+      "manual": false
+    },
+    {
+      "id": "CO-3",
+      "engine": "CO",
+      "title": "Cursor/selection sharing per-path",
+      "section": "\u00a711",
+      "deps": [
+        "CO-2"
+      ],
+      "scope": [
+        "services/coauthoring-service/src/cursor.rs"
+      ],
+      "accept": "cargo test -p coauthoring-service cursor::",
+      "acceptance_prose": "2-client live test",
+      "manual": false
+    },
+    {
+      "id": "CO-4",
+      "engine": "CO",
+      "title": "Late-join replay from op-log",
+      "section": "\u00a711",
+      "deps": [
+        "CO-2"
+      ],
+      "scope": [
+        "services/coauthoring-service/src/replay.rs"
+      ],
+      "accept": "cargo test -p coauthoring-service replay::",
+      "acceptance_prose": "3rd client catches up",
+      "manual": false
+    },
+    {
+      "id": "CO-5",
+      "engine": "CO",
+      "title": "Frontend: `collaboration-client` emits `ModelOp` not text",
+      "section": "\u00a711",
+      "deps": [
+        "FC-4",
+        "CO-2"
+      ],
+      "scope": [
+        "packages/sdk-bridge/src/collaboration-client.ts"
+      ],
+      "accept": "pnpm --filter @world-office/sdk-bridge test",
+      "acceptance_prose": "43 existing tests adapted",
+      "manual": false
+    },
+    {
+      "id": "CO-6",
+      "engine": "CO",
+      "title": "Per-engine integration: doc (DM), sheet (SS), slide (SL)",
+      "section": "\u00a711",
+      "deps": [
+        "DM-10",
+        "SS-7",
+        "SL-6"
+      ],
+      "scope": [
+        "services/coauthoring-service/src/integration.rs"
+      ],
+      "accept": "cargo test -p coauthoring-service integration::",
+      "acceptance_prose": "each editor co-auth 1 doc",
+      "manual": false
+    },
+    {
+      "id": "SP-1",
+      "engine": "SP",
+      "title": "`.aff` parser (FLAG, SFX, PFX, REP)",
+      "section": "\u00a712",
+      "deps": [
+        "FC-1"
+      ],
+      "scope": [
+        "core/crates/wo-spell/src/aff.rs"
+      ],
+      "accept": "cargo test -p wo-spell aff::",
+      "acceptance_prose": "parse en_US.aff",
+      "manual": false
+    },
+    {
+      "id": "SP-2",
+      "engine": "SP",
+      "title": "`.dic` + suggestion (edit-distance + phonetic)",
+      "section": "\u00a712",
+      "deps": [
+        "SP-1"
+      ],
+      "scope": [
+        "core/crates/wo-spell/src/dic.rs",
+        "core/crates/wo-spell/src/suggest.rs"
+      ],
+      "accept": "cargo test -p wo-spell suggest::",
+      "acceptance_prose": "95% top-1 accuracy on common typos corpus",
+      "manual": false
+    },
+    {
+      "id": "SP-3",
+      "engine": "SP",
+      "title": "Hyphenation (Liang's algorithm, TEX pattern)",
+      "section": "\u00a712",
+      "deps": [
+        "SP-1"
+      ],
+      "scope": [
+        "core/crates/wo-spell/src/hyphenate.rs"
+      ],
+      "accept": "cargo test -p wo-spell hyphenate::",
+      "acceptance_prose": "\"project\" \u2192 proj-ect",
+      "manual": false
+    },
+    {
+      "id": "SP-4",
+      "engine": "SP",
+      "title": "WASM export + frontend hook",
+      "section": "\u00a712",
+      "deps": [
+        "SP-2",
+        "FC-3"
+      ],
+      "scope": [
+        "core/crates/wo-renderer-wasm/src/lib.rs",
+        "apps/web/apps/documenteditor-react/src/hooks/useSpellchecker.ts"
+      ],
+      "accept": "wasm-pack build core/crates/wo-renderer-wasm --target web --dev",
+      "acceptance_prose": "replace `nspell` stub in doc editor",
+      "manual": false
+    }
+  ]
+}

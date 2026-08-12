@@ -1,0 +1,47 @@
+{
+  "_comment": "Worker roster for wo-orchestrator. Each worker is a (provider, model) pair verified in ~/.pi/agent/models.json. The orchestrator dispatches at most one task per worker at a time via pi headless mode.",
+  "workers": [
+    {
+      "name": "zai",
+      "provider": "zai",
+      "model": "glm-5-turbo",
+      "endpoint": "https://api.z.ai/api/coding/paas/v4",
+      "note": "Z.AI GLM 5 Turbo — fast, good for text-heavy tasks",
+      "enabled": true,
+      "max_concurrent": 1
+    },
+    {
+      "name": "tud",
+      "provider": "tud",
+      "model": "Mistral-Medium-3.5-128B",
+      "endpoint": "https://llm-service.ai.tu-darmstadt.de/v1",
+      "note": "TU Darmstadt Mistral Medium 3.5 128B — strong reasoning",
+      "enabled": true,
+      "max_concurrent": 1
+    },
+    {
+      "name": "opencode",
+      "provider": "opencode-free",
+      "model": "deepseek-v4-flash",
+      "endpoint": "https://opencode.ai/zen/v1",
+      "note": "OpenCode Zen free tier DeepSeek V4 Flash — DISABLED: needs OAuth login (no API key), re-enable after `pi --provider opencode-free /login`",
+      "enabled": false,
+      "max_concurrent": 1
+    },
+    {
+      "name": "local-flash",
+      "provider": "litellm",
+      "model": "deepseek-v4-flash/local",
+      "endpoint": "http://127.0.0.1:4000/v1",
+      "note": "Local DeepSeek V4 Flash via LiteLLM gateway (AI cluster / legion)",
+      "enabled": true,
+      "max_concurrent": 1
+    }
+  ],
+  "defaults": {
+    "dispatch_timeout_s": 1800,
+    "accept_timeout_s": 600,
+    "max_attempts": 3,
+    "retry_cooldown_s": 30
+  }
+}
