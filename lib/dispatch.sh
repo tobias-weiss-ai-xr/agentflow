@@ -134,11 +134,21 @@ tf_dispatch_one() {
 
   # 3b. No-op detection: check if the worker actually modified any scope files.
   #     If nothing changed, fail immediately rather than wasting gate time.
-  local changed_files
-  changed_files="$(cd "$wt" && git diff --name-only HEAD 2>/dev/null)"
-  local untracked_files
+  #     We compare the worktree's HEAD against the base (main) to detect
+  #     both uncommitted changes AND committed changes.
+  local base_ref
+  base_ref="$(cd "$TF_REPO_DIR" && git rev-parse --verify main 2>/dev/null)"
+  local wt_head
+  wt_head="$(cd "$wt" && git rev-parse --verify HEAD 2>/dev/null)"
+  local changed_files untracked_files
+  changed_files="$(cd "$wt" && git diff --name-only "$base_ref" 2>/dev/null)"
   untracked_files="$(cd "$wt" && git ls-files --others --exclude-standard 2>/dev/null)"
-  if [[ -z "$changed_files" && -z "$untracked_files" ]]; then
+  local committed_changes
+  if [[ "$wt_head" != "$base_ref" ]]; then
+    # Branch has commits — check for actual file changes
+    committed_changes="$(cd "$wt" && git diff --name-only "$base_ref" HEAD 2>/dev/null)"
+  fi
+  if [[ -z "$changed_files" && -z "$untracked_files" && -z "$committed_changes" ]]; then
     tf_fail_task "$id" "no changes: LLM did not modify any files in scope (dispatch log: $TF_LOG_DIR/$id.dispatch.log)"
     # Write error.json for retry feedback
     mkdir -p "$TF_LOG_DIR"
@@ -147,7 +157,7 @@ tf_dispatch_one() {
     tf_worktree_delete_branch "$id"
     return 1
   fi
-  tf_info "$id: worker modified $(echo "$changed_files $untracked_files" | wc -w) file(s)"
+  tf_info "$id: worker modified $(echo "$changed_files $untracked_files $committed_changes" | wc -w) file(s)"
 
   # 4. Verify (acceptance gate) — now with error classification
   tf_status_set "$id" verifying
