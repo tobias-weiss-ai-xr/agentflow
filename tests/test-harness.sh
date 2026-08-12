@@ -335,6 +335,254 @@ tf_gen_filepath() {
 
 TF_GOLDEN_DIR="${TF_GOLDEN_DIR:-tests/golden}"
 
+# ---------------------------------------------------------------------------
+# Deterministic seeding (TF_SEED) — reproducible property/fuzz runs
+# ---------------------------------------------------------------------------
+TF_SEED="${TF_SEED:-$(date +%s%N)}"
+TF_RNG_STATE="$TF_SEED"
+
+# Initialize the RNG from TF_SEED. Print the seed so runs can be reproduced.
+tf_seed_init() {
+  TF_SEED="${TF_SEED:-$(date +%s%N)}"
+  TF_RNG_STATE="$TF_SEED"
+  # shellcheck disable=SC2155
+  printf '    \033[36mSEED\033[0m  %s (set TF_SEED=%s to reproduce)\n' "$TF_SEED" "$TF_SEED"
+}
+
+# Deterministic pseudo-random number in [0, bound). Replaces $RANDOM.
+tf_rand() {
+  local bound="${1:-32768}"
+  # xorshift64 — deterministic, fast, good distribution
+  TF_RNG_STATE=$(( TF_RNG_STATE ^ (TF_RNG_STATE << 13) ))
+  TF_RNG_STATE=$(( TF_RNG_STATE ^ (TF_RNG_STATE >> 7) ))
+  TF_RNG_STATE=$(( TF_RNG_STATE ^ (TF_RNG_STATE << 17) ))
+  echo $(( (TF_RNG_STATE & 0x7FFFFFFF) % bound ))
+}
+
+# Deterministic generator of random task ids (seeded).
+tf_gen_seeded_id() {
+  local n="${1:-50}"
+  local chars='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-'
+  local i j len id
+  for ((i = 0; i < n; i++)); do
+    len=$(( $(tf_rand 7) + 2 ))
+    id=""
+    for ((j = 0; j < len; j++)); do
+      id+="${chars:$(tf_rand ${#chars}):1}"
+    done
+    echo "$id"
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Counterexample shrinking (delta debugging)
+# ---------------------------------------------------------------------------
+
+# tf_shrink <property_fn> <input> [<max_rounds=10>]
+#   Given an input that fails property_fn (returns non-zero), shrink it
+#   to a minimal failing case using delta debugging. Property fn takes
+#   the candidate on $1. Echoes the minimal failing input on stdout.
+tf_shrink() {
+  local prop="$1" input="$2" max_rounds="${3:-10}"
+  local current="$input"
+  local round size n chunk i candidate reduced
+  for ((round = 0; round < max_rounds; round++)); do
+    size="${#current}"
+    [[ "$size" -le 1 ]] && break
+    n=2
+    reduced=0
+    while [[ "$n" -le "$size" ]]; do
+      chunk=$(( size / n ))
+      chunk=$(( chunk == 0 ? 1 : chunk ))
+      i=0
+      while [[ $i -lt "$size" ]]; do
+        candidate="${current:0:i}${current:i+chunk}"
+        if [[ -n "$candidate" ]] && ! $prop "$candidate" >/dev/null 2>&1; then
+          current="$candidate"
+          size="${#current}"
+          reduced=1
+          break 2   # restart with the reduced input
+        fi
+        i=$((i + chunk))
+      done
+      n=$((n * 2))
+    done
+    [[ "$reduced" == "0" ]] && break
+  done
+  printf '%s' "$current"
+}
+
+# ---------------------------------------------------------------------------
+# Table-driven testing
+# ---------------------------------------------------------------------------
+
+# tf_table_test <description> <fn> <rows_csv...>
+#   Runs fn for each row. Each row is a single-quoted CSV: "id,arg1,arg2,...".
+#   fn is called as: fn <row_id> <col1> <col2> ...
+#   Row ids are printed as sub-assertions.
+tf_table_test() {
+  local desc="$1" fn="$2"; shift 2
+  local total=0 pass=0 row
+  for row in "$@"; do
+    total=$((total + 1))
+    local id args
+    id="${row%%,*}"
+    args="${row#*,}"
+    # split args on commas into separate shell-quoted arguments
+    local IFS=','
+    # shellcheck disable=SC2206
+    local parts=($args)
+    IFS=' '
+    local q="" p
+    for p in "${parts[@]}"; do
+      q+=" '${p//\'/\'\\''\'}'"
+    done
+    if eval "$fn '$id'$q" >/dev/null 2>&1; then
+      pass=$((pass + 1))
+      printf '    \033[32mok\033[0m   %s [%s]\n' "$desc" "$id"
+    else
+      printf '    \033[31mBAD\033[0m  %s [%s] — row=%q\n' "$desc" "$id" "$row"
+      TF_GROUP_FAILED=1
+    fi
+  done
+  printf '    \033[32mok\033[0m   %s: %d/%d rows passed\n' "$desc" "$pass" "$total"
+}
+
+# ---------------------------------------------------------------------------
+# Mutation testing
+# ---------------------------------------------------------------------------
+TF_MUT_TOTAL=0
+TF_MUT_KILLED=0
+TF_MUT_SURVIVED=0
+
+# tf_mutation_test <name> <target_file> <test_runner> <mutations...>
+#   Mutation testing: for each mutation expression (a sed -i expression),
+#   apply it to a COPY of target_file, run test_runner against the copy,
+#   and check the test FAILS (mutation killed).
+#
+#   target_file: path relative to TF_MUT_SRC (default: repo root, but tests
+#                override with TF_MUT_SRC pointing at a sandbox copy).
+#   test_runner: command that runs the test suite against the mutated tree.
+#   mutation:   sed expression, e.g. 's/done/completed/'
+#
+#   A mutation is KILLED if the test fails on the mutated source.
+#   SURVIVED means the tests don't catch the injected bug — a quality gap.
+#
+#   IMPORTANT: mutations are applied to a sandbox copy, never the real lib.
+tf_mutation_test() {
+  local name="$1" target="$2" runner="$3"; shift 3
+  local src_base="${TF_MUT_SRC:-$TF_DIR}"
+  local target_path="$src_base/$target"
+  if [[ ! -f "$target_path" ]]; then
+    printf '    \033[31mBAD\033[0m  mutation %s — target %s missing\n' "$name" "$target"
+    TF_GROUP_FAILED=1
+    return 1
+  fi
+  local work
+  work="$(mktemp -d)"
+  local result=0
+  for expr in "$@"; do
+    TF_MUT_TOTAL=$((TF_MUT_TOTAL + 1))
+    # sandbox copy of the whole source dir so tests can source siblings
+    local mutdir="$work/mut"
+    rm -rf "$mutdir"; mkdir -p "$mutdir"
+    cp -r "$src_base/." "$mutdir/"
+    local tfile="$mutdir/$target"
+    if ! sed -i "$expr" "$tfile" 2>/dev/null; then
+      printf '    \033[33mSKIP\033[0m  mutation %s — sed expr invalid: %q\n' "$name" "$expr"
+      continue
+    fi
+    # run the test against the mutated copy. The runner command may contain
+    # the placeholder __MUTDIR__ which is substituted with the sandbox path.
+    local run_cmd="${runner//__MUTDIR__/$mutdir}"
+    if (cd "$mutdir" && eval "$run_cmd" >/dev/null 2>&1); then
+      TF_MUT_SURVIVED=$((TF_MUT_SURVIVED + 1))
+      printf '    \033[31mSURVIVED\033[0m  %s — %q (tests did NOT catch this bug)\n' "$name" "$expr"
+      TF_GROUP_FAILED=1
+      result=1
+    else
+      TF_MUT_KILLED=$((TF_MUT_KILLED + 1))
+      printf '    \033[32mKILLED\033[0m  %s — %q\n' "$name" "$expr"
+    fi
+  done
+  rm -rf "$work"
+  return $result
+}
+
+# Print mutation score summary.
+tf_mutation_report() {
+  local total="$TF_MUT_TOTAL" killed="$TF_MUT_KILLED" survived="$TF_MUT_SURVIVED"
+  printf '    \033[36mMUTATION SCORE\033[0m  %d/%d killed (%d%%), %d survived\n' \
+    "$killed" "$total" $(( total == 0 ? 0 : killed * 100 / total )) "$survived"
+}
+
+# ---------------------------------------------------------------------------
+# Coverage tracking
+# ---------------------------------------------------------------------------
+TF_COV_FUNCS=""
+
+# tf_coverage_mark <function_name> — mark a source function as exercised.
+tf_coverage_mark() {
+  local fn="$1"
+  [[ " $TF_COV_FUNCS " == *" $fn "* ]] || TF_COV_FUNCS="$TF_COV_FUNCS $fn"
+}
+
+# tf_coverage_report <lib_dir> — report which tf_* functions were exercised.
+tf_coverage_report() {
+  local libdir="${1:-$TF_DIR/lib}"
+  local all="" fn
+  for f in "$libdir"/*.sh; do
+    while IFS= read -r fn; do
+      [[ -n "$fn" ]] && all="$all $fn"
+    done < <(grep -oE '^tf_[a-z_]+\(' "$f" | sed 's/(//')
+  done
+  local total=0 covered=0 f
+  for f in $all; do
+    total=$((total + 1))
+    if [[ " $TF_COV_FUNCS " == *" $f "* ]]; then
+      covered=$((covered + 1))
+    fi
+  done
+  printf '    \033[36mCOVERAGE\033[0m  %d/%d source functions exercised (%d%%)\n' \
+    "$covered" "$total" $(( total == 0 ? 0 : covered * 100 / total ))
+}
+
+# ---------------------------------------------------------------------------
+# JSON validity assertion
+# ---------------------------------------------------------------------------
+tf_assert_valid_json() {
+  local desc="$1" file="$2"
+  if jq -e . "$file" >/dev/null 2>&1; then
+    printf '    \033[32mok\033[0m   %s (valid JSON)\n' "$desc"
+  else
+    printf '    \033[31mBAD\033[0m  %s (INVALID JSON: %s)\n' "$desc" "$(head -c 100 "$file" 2>/dev/null | tr '\n' ' ')"
+    TF_GROUP_FAILED=1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Chaos / fault injection helpers
+# ---------------------------------------------------------------------------
+
+# tf_chaos_truncate <file> [<bytes>] — truncate a file to simulate partial write.
+tf_chaos_truncate() {
+  local file="$1" bytes="${2:-0}"
+  truncate -s "$bytes" "$file" 2>/dev/null || dd if=/dev/null of="$file" bs=1 seek="$bytes" count=0 2>/dev/null
+}
+
+# tf_chaos_corrupt <file> — overwrite middle bytes with garbage.
+tf_chaos_corrupt() {
+  local file="$1"
+  local sz
+  sz="$(stat -c %s "$file" 2>/dev/null || echo 0)"
+  [[ "$sz" -eq 0 ]] && return
+  local mid=$((sz / 2))
+  head -c "$mid" "$file" > "$file.tmp"
+  printf '\xff\xfe\x00GARBAGE' >> "$file.tmp"
+  tail -c "$((sz - mid))" "$file" >> "$file.tmp" 2>/dev/null
+  mv "$file.tmp" "$file"
+}
+
 # tf_assert_golden <name> <actual_content>
 #   Compares actual content against stored golden file. If TF_UPDATE_GOLDEN=1,
 #   writes the actual content as the new golden file.
@@ -448,6 +696,13 @@ tf_test_summary() {
   [[ $TF_TESTS_SKIP -gt 0 ]] && printf ', \033[33m%d skipped\033[0m' "$TF_TESTS_SKIP"
   [[ $TF_TESTS_XFAIL -gt 0 ]] && printf ', \033[36m%d xfail\033[0m' "$TF_TESTS_XFAIL"
   echo ""
+  if [[ "$TF_MUT_TOTAL" -gt 0 ]]; then
+    printf 'Mutations: \033[32m%d killed\033[0m, \033[31m%d survived\033[0m (score %d%%)\n' \
+      "$TF_MUT_KILLED" "$TF_MUT_SURVIVED" $(( TF_MUT_KILLED * 100 / TF_MUT_TOTAL ))
+  fi
+  if [[ -n "$TF_COV_FUNCS" ]]; then
+    tf_coverage_report "$TF_DIR/lib"
+  fi
   [[ "$TF_TESTS_FAIL" -gt 0 ]] && rc=1
   tf_cleanup
   return $rc

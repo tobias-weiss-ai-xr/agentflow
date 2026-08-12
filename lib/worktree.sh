@@ -99,11 +99,13 @@ tf_worktree_merge() {
     git checkout --quiet main 2>/dev/null || true
     git reset --hard --quiet main
     git clean --quiet -fd
+    local before
+    before="$(git rev-parse HEAD)"
     if git merge --ff-only "$branch" >/dev/null 2>&1; then
-      # Verify merge actually advanced main (not a no-op)
-      local pre_post
-      pre_post="$(git rev-parse HEAD)"
-      if [[ "$pre_post" == "$(git rev-parse "$branch")" ]]; then
+      # Verify merge actually advanced main (not a no-op): after an ff-only
+      # merge HEAD always equals the branch — the no-op case is when HEAD did
+      # NOT move at all (branch points at the same commit as main).
+      if [[ "$before" == "$(git rev-parse HEAD)" ]]; then
         tf_warn "$id: ff-only merge was no-op (branch HEAD == main HEAD); skipping"
         return 1
       fi

@@ -143,7 +143,7 @@ tf_dispatch_one() {
   local changed_files untracked_files
   changed_files="$(cd "$wt" && git diff --name-only "$base_ref" 2>/dev/null)"
   untracked_files="$(cd "$wt" && git ls-files --others --exclude-standard 2>/dev/null)"
-  local committed_changes
+  local committed_changes=""
   if [[ "$wt_head" != "$base_ref" ]]; then
     # Branch has commits — check for actual file changes
     committed_changes="$(cd "$wt" && git diff --name-only "$base_ref" HEAD 2>/dev/null)"

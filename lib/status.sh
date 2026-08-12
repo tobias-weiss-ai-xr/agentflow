@@ -36,6 +36,8 @@ tf_locked_mv() {
     rm -f "$tmp"
     return 1
   fi
+  # Ensure the destination directory exists (fresh sandbox / missing dir).
+  mkdir -p "$(dirname "$dest")" "$(dirname "$TF_STATUS_LOCK")"
   (
     flock 9
     mv "$tmp" "$dest"
@@ -49,9 +51,17 @@ tf_status_init() {
   local tmp
   tmp="$(mktemp)"
   # Start from existing state (or {}), then ensure every known task exists.
+  # If the existing file is corrupted (crash/torn write), fall back to {} so
+  # we always rebuild a valid ledger instead of propagating the corruption.
   local existing="{}"
-  [[ -f "$STATUS_JSON" ]] && existing="$(cat "$STATUS_JSON")"
-  jq --argjson existing "$existing" '
+  if [[ -f "$STATUS_JSON" ]]; then
+    if jq -e . "$STATUS_JSON" >/dev/null 2>&1; then
+      existing="$(cat "$STATUS_JSON")"
+    else
+      tf_warn "status file corrupt ($STATUS_JSON); rebuilding from tasks.json"
+    fi
+  fi
+  if ! jq --argjson existing "$existing" '
     [ $existing ] as $e
     | reduce .tasks[] as $t ($e[0];
       if has($t.id) then . else
@@ -60,7 +70,17 @@ tf_status_init() {
           started_at: null, finished_at: null, last_error: null, next_retry_at: null
         }
       end)
-  ' "$TASKS_JSON" > "$tmp"
+  ' "$TASKS_JSON" > "$tmp"; then
+    # Also recover if $existing itself was unparseable (shouldn't happen now).
+    tf_warn "rebuilding status from tasks.json only (previous state unusable)"
+    jq '
+      reduce .tasks[] as $t ({};
+        .[$t.id] = {
+          status: "ready", attempts: 0, worker: null, branch: null,
+          started_at: null, finished_at: null, last_error: null, next_retry_at: null
+        })
+    ' "$TASKS_JSON" > "$tmp"
+  fi
   tf_locked_mv "$tmp" "$STATUS_JSON"
   tf_info "initialised status for $(jq 'length' "$STATUS_JSON") tasks"
 }

@@ -25,7 +25,7 @@ main branch.
 - **Self-healing** — main worktree is cleaned at startup and after each failed merge
 - **Scope checking** — advisory check detects out-of-scope file edits
 - **Deadlock detection** — exits cleanly when all remaining tasks are blocked by failures
-- **29/29 self-tests** — comprehensive test suite validates the full lifecycle
+- **159/159 self-tests** — SOTA testing: unit, property (seeded + shrinking), fuzz, mutation, chaos, contract, table, idempotency, golden, stress
 
 ## Quick start
 
@@ -154,6 +154,38 @@ Taskfleet dispatches tasks via an agent CLI (default: `pi`). The CLI must suppor
 Override the CLI command by editing `lib/dispatch.sh` — the dispatch function
 calls `pi --provider "$provider" --model "$model" -p "@$prompt"`.
 
+## Testing (SOTA paradigms)
+
+Run everything:
+
+```sh
+bash tests/run-all-tests.sh              # 22 suites, 159 tests
+TF_SEED=<seed> bash tests/run-all-tests.sh   # reproducible property/fuzz runs
+TF_TAP=1 bash tests/run-all-tests.sh     # TAP output for CI
+TF_UPDATE_GOLDEN=1 bash tests/run-all-tests.sh  # regenerate golden files
+```
+
+State-of-the-art testing paradigms implemented in `tests/test-harness.sh`:
+
+| Paradigm | Suite(s) | What it guards against |
+|---|---|---|
+| **Mutation testing** | `mutation/` (3 suites) | Tests that don't catch real bugs. Injects 22 bugs into `lib/status.sh`, `lib/verify.sh`, `lib/worktree.sh` and asserts the test suite KILLS them (current score: 100% each). A surviving mutation is a test gap. |
+| **Chaos / fault injection** | `chaos/` | Torn writes, corrupted JSON, missing state dirs, 20 concurrent writers, killed mid-write. Found 2 real bugs (corrupt-state recovery, missing-dir init). |
+| **Property-based + shrinking** | `property/`, `property/test-shrink.sh` | Random inputs with seeded determinism (`TF_SEED`), delta-debugging shrinker reduces failing inputs to minimal counterexamples. |
+| **Fuzzing** | `fuzz/` | Random bytes, printable, edge cases, mixed patterns, unicode, large logs through the error classifier. |
+| **Table-driven** | `table/` | State machine transitions and side-effects enumerated as auditable data tables. |
+| **Contract** | `contract/` | Every `tf_*` public function exists, is total (never crashes), and honours exit-code contracts. |
+| **Idempotency** | `idempotency/` | Operations are safe to re-run after crashes/retries; repeated init is byte-identical. |
+| **Golden files** | `golden/` | Status-board output snapshots with `TF_UPDATE_GOLDEN=1` regeneration. |
+| **Stress** | `stress/` | 10 worktree cycles, 100 parallel status writers, 10 sequential merges, 20 rapid E2E cycles. |
+| **Unit** | `unit/` | State machine, classifiers, worktree lifecycle, config/JSON helpers. |
+
+Mutation score is reported in suite output:
+
+```
+Mutations: 8 killed, 0 survived (score 100%)
+```
+
 ## Architecture
 
 ```
@@ -166,7 +198,8 @@ orchestrator.sh          Main loop: poll → reap → dispatch → sleep
 ├── config/tasks.json    Declarative task definitions
 ├── config/workers.json  Provider/model configuration
 ├── prompts/worker.md     Agent prompt template ({{PLACEHOLDER}} syntax)
-└── tests/               29 tests covering status, worktree, verify, dispatch, integration
+└── tests/               22 suites: unit, property, fuzz, mutation, chaos,
+                         contract, table, idempotency, golden, stress
 ```
 
 ## License

@@ -57,9 +57,17 @@ SUITES=(
   "unit/test-verify.sh"
   "unit/test-worktree.sh"
   "property/test-dispatch.sh"
+  "property/test-shrink.sh"
   "fuzz/test-verify.sh"
   "stress/test-concurrent.sh"
   "golden/test-status-board.sh"
+  "mutation/test-status.sh"
+  "mutation/test-verify.sh"
+  "mutation/test-worktree.sh"
+  "chaos/test-status.sh"
+  "contract/test-contracts.sh"
+  "table/test-status.sh"
+  "idempotency/test-status.sh"
 )
 
 # Add integration + legacy suites
