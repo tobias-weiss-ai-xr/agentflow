@@ -199,13 +199,21 @@ tf_write_error_json() {
 # tf_get_error_category <task_id> → prints category or "none"
 tf_get_error_category() {
   local errfile="$TF_LOG_DIR/$1.error.json"
-  [[ -f "$errfile" ]] && jq -r '.category // "none"' "$errfile" || echo "none"
+  if [[ -f "$errfile" ]]; then
+    jq -r '.category // "none"' "$errfile"
+  else
+    tf_status_get "$1" .error_category 2>/dev/null || echo "none"
+  fi
 }
 
 # tf_get_error_summary <task_id> → prints summary or ""
 tf_get_error_summary() {
   local errfile="$TF_LOG_DIR/$1.error.json"
-  [[ -f "$errfile" ]] && jq -r '.summary // ""' "$errfile"
+  if [[ -f "$errfile" ]]; then
+    jq -r '.summary // ""' "$errfile"
+  else
+    tf_status_get "$1" .error_summary 2>/dev/null || echo ""
+  fi
 }
 
 # tf_get_last_attempt <task_id> → prints attempt number

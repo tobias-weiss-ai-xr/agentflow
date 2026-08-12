@@ -137,6 +137,9 @@ tf_dispatch_one() {
   untracked_files="$(cd "$wt" && git ls-files --others --exclude-standard 2>/dev/null)"
   if [[ -z "$changed_files" && -z "$untracked_files" ]]; then
     tf_fail_task "$id" "no changes: LLM did not modify any files in scope (dispatch log: $TF_LOG_DIR/$id.dispatch.log)"
+    # Write error.json for retry feedback
+    mkdir -p "$TF_LOG_DIR"
+    echo '{"category":"no_op","summary":"LLM produced no tool calls or file modifications","classified_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' > "$TF_LOG_DIR/$id.error.json"
     tf_worktree_remove "$id" --force
     tf_worktree_delete_branch "$id"
     return 1
