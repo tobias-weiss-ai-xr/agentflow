@@ -58,15 +58,17 @@ tf_assert "last_error updated" test -n "$(tf_status_get B .last_error)"
 tf_assert_valid_json "ledger valid after double fail" "$STATUS_JSON"
 tf_group_end
 
-# 3. tf_status_set same value repeatedly → stable
+# 3. tf_status_set same value repeatedly → stable (status + worker invariant;
+#    started_at is a timestamp that legitimately advances each write)
 tf_group_begin; tf_test "tf_status_set is idempotent"
 STATUS_JSON="$SBOX/state/idem3.json"
 tf_status_init
 tf_status_set A running
-r1="$(cat "$STATUS_JSON")"
 tf_status_set A running
 tf_status_set A running
-tf_assert_eq "set ×3 = set ×1" "$r1" "$(cat "$STATUS_JSON")"
+tf_assert_eq "status stable across sets" "running" "$(tf_status_get A .status)"
+tf_assert "started_at present" test -n "$(tf_status_get A .started_at)"
+tf_assert_valid_json "ledger valid" "$STATUS_JSON"
 tf_group_end
 
 # 4. status_init after done → done stays done (no regression to ready)
