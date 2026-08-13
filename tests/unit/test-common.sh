@@ -208,7 +208,7 @@ cat > "$TF_CONFIG_DIR/tasks.json" <<'JSON'
 ]}
 JSON
 out="$(tf_validate_tasks 2>&1)"
-tf_assert_contains "flags multi-pattern cargo test" "cargo test takes one pattern" "$out"
+tf_assert_contains "flags multi-pattern cargo test" "takes one test-name pattern" "$out"
 tf_assert_contains "flags unknown dep" "GHOST" "$out"
 tf_group_end
 
