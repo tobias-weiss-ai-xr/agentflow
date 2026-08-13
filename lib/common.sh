@@ -230,11 +230,13 @@ tf_validate_tasks() {
       tf_warn "task $id: no accept command (manual sign-off)"
       continue
     fi
-    # cargo test with TWO bare patterns is invalid: `cargo test a:: b::`
-    if echo "$accept" | grep -qP 'cargo test -p \S+ \S+ \S+'; then
+    # cargo test with TWO bare test-name patterns is invalid: `cargo test a:: b::`.
+    # Flags (-p, --lib, -- --list) are fine. Match two consecutive bare patterns
+    # (alphanumeric/underscore/colon), i.e. no leading dash.
+    if echo "$accept" | grep -qP 'cargo test -p \S+ [a-zA-Z0-9_:]+ [a-zA-Z0-9_:]+'; then
       local bad
-      bad="$(echo "$accept" | grep -oP 'cargo test -p \S+ \S+ \S+' | head -1)"
-      tf_warn "task $id: gate likely invalid (cargo test takes one pattern): $bad"
+      bad="$(echo "$accept" | grep -oP 'cargo test -p \S+ [a-zA-Z0-9_:]+ [a-zA-Z0-9_:]+' | head -1)"
+      tf_warn "task $id: gate likely invalid (cargo test takes one test-name pattern): $bad"
       issues=$((issues + 1))
     fi
     # deps must reference known task ids
