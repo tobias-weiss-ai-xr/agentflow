@@ -101,7 +101,7 @@ tf_dispatch_one() {
   local prev_err attempts
   prev_err="$(tf_status_get "$id" .last_error 2>/dev/null || echo "")"
   attempts="$(tf_status_get "$id" .attempts 2>/dev/null || echo 0)"
-  if [[ "$attempts" -gt 0 && "$prev_err" == *"merge conflict"* ]]; then
+  if [[ "$attempts" -gt 0 && "$prev_err" == *"merge"* ]]; then
     keep_branch="--keep-branch"
   fi
   wt="$(tf_worktree_create "$id" main $keep_branch)" || {

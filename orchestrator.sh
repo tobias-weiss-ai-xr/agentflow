@@ -97,7 +97,7 @@ fi
 # branches (kill -9 leftovers break fresh worktree creation) and run-state
 # entries whose dispatch process is dead (phantom "running" tasks).
 # Preserve branches flagged for conflict-retry (keep-branch).
-local_preserved="$(jq -r 'to_entries[] | select(.value.last_error != null and (.value.last_error | contains("merge conflict"))) | .value.branch' "$STATUS_JSON" 2>/dev/null | grep -v '^null$' | tr '\n' ' ')"
+local_preserved="$(jq -r 'to_entries[] | select(.value.last_error != null and (.value.last_error | contains("merge"))) | .value.branch' "$STATUS_JSON" 2>/dev/null | grep -v '^null$' | tr '\n' ' ')"
 tf_recover_stale_worktrees "$local_preserved"
 tf_reset_dead_runstate
 
