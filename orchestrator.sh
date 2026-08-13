@@ -237,9 +237,14 @@ tf_run() {
           local cat2 att2
           cat2="$(tf_status_get "$fid" .error_category)"
           att2="$(tf_status_get "$fid" .attempts)"
+          # Reset anything that is NOT a definitive model failure. Merge
+          # conflicts (branch preserved), unknown, empty, infra/provider
+          # categories are transient and deserve a graceful retry.
           case "$cat2" in
-            unknown|rate_limit|auth_error|network_error|missing_lib_target)
-              tf_warn "$fid: infra/provider failure [$cat2] — auto-resetting for graceful retry"
+            compile_error|test_failure|no_op|missing_package)
+              ;;  # definitive model failure — stays failed
+            *)
+              tf_warn "$fid: transient failure category [$cat2] — auto-resetting for graceful retry"
               tf_status_set "$fid" ready '.attempts=0 | .last_error=null | .next_retry_at=null | .error_category=null | .error_summary=null' 2>/dev/null || true
               auto_retry=1
               ;;
