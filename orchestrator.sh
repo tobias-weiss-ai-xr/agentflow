@@ -80,12 +80,30 @@ done
 # ---------------------------------------------------------------------------
 # Entry
 # ---------------------------------------------------------------------------
+
+# Robustness: kill stale orchestrator/pi processes from interrupted runs
+# BEFORE touching any state, so orphaned dispatch subshells can't pollute
+# this run (duplicate work, phantom run-state, deadlocks).
+tf_kill_stale_processes
+
 tf_status_init
 
 if [[ "$TF_MODE" == "status" ]]; then
   tf_status_board
   exit 0
 fi
+
+# Robustness: recover from interrupted-run artifacts — stale worktrees and
+# branches (kill -9 leftovers break fresh worktree creation) and run-state
+# entries whose dispatch process is dead (phantom "running" tasks).
+# Preserve branches flagged for conflict-retry (keep-branch).
+local_preserved="$(jq -r 'to_entries[] | select(.value.last_error != null and (.value.last_error | contains("merge conflict"))) | .value.branch' "$STATUS_JSON" 2>/dev/null | grep -v '^null$' | tr '\n' ' ')"
+tf_recover_stale_worktrees "$local_preserved"
+tf_reset_dead_runstate
+
+# Robustness: validate the task ledger (broken gates / unknown deps cost
+# attempts otherwise). Advisory — warn but don't abort.
+tf_validate_tasks || true
 
 TF_MERGE_LOCK="${TF_MERGE_LOCK:-$TF_STATE_DIR/merge.lock}"
 mkdir -p "$TF_STATE_DIR"
@@ -209,6 +227,28 @@ tf_run() {
       perm_failed_n="$(tf_count_status failed)"
 
       if [[ $perm_failed_n -gt 0 ]]; then
+        # Robustness (L6): before declaring deadlock, give INFRA-failed tasks
+        # (worktree creation, gate env, provider health) a graceful retry —
+        # these are transient and shouldn't permanently block the pipeline.
+        # Only model-failure categories (compile/test/no_op) stay failed.
+        local auto_retry=0
+        while IFS= read -r fid; do
+          [[ -z "$fid" ]] && continue
+          local cat2 att2
+          cat2="$(tf_status_get "$fid" .error_category)"
+          att2="$(tf_status_get "$fid" .attempts)"
+          case "$cat2" in
+            unknown|rate_limit|auth_error|network_error|missing_lib_target)
+              tf_warn "$fid: infra/provider failure [$cat2] — auto-resetting for graceful retry"
+              tf_status_set "$fid" ready '.attempts=0 | .last_error=null | .next_retry_at=null | .error_category=null | .error_summary=null' 2>/dev/null || true
+              auto_retry=1
+              ;;
+          esac
+        done < <(jq -r 'to_entries[] | select(.value.status=="failed") | .key' "$STATUS_JSON")
+        if [[ "$auto_retry" -eq 1 ]]; then
+          tf_info "auto-reset infra-failed tasks; continuing (round $round)"
+          continue
+        fi
         tf_error "DEADLOCK: $perm_failed_n task(s) permanently failed, blocking $((total_n - done_n - perm_failed_n)) remaining"
         tf_status_board
 
@@ -256,9 +296,17 @@ tf_run() {
     while IFS= read -r tid; do
       [[ -z "$tid" ]] && continue
       [[ "$inflight" -ge "$TF_MAX_PARALLEL" ]] && break
+      # pick the first HEALTHY free worker (skip dead/rate-limited endpoints)
       local fw
-      fw="$(tf_free_workers | head -1)"
-      [[ -z "$fw" ]] && { tf_info "no free workers, waiting"; break; }
+      while IFS= read -r cand; do
+        [[ -z "$cand" ]] && continue
+        if tf_worker_healthy "$cand"; then
+          fw="$cand"; break
+        else
+          tf_warn "worker $cand endpoint unhealthy — skipping this round"
+        fi
+      done < <(tf_free_workers)
+      [[ -z "$fw" ]] && { tf_info "no free healthy workers, waiting"; break; }
       # dispatch in background. Fine-grained locks (status + merge) protect
       # the shared state; the long pi run is fully parallel across worktrees.
       tf_dispatch_one "$tid" "$fw" &

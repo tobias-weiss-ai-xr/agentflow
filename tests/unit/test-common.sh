@@ -199,4 +199,32 @@ test_unique_worker_names() {
 tf_property "worker_names unique" test_unique_worker_names 10
 tf_group_end
 
+# ---- Robustness: task validation (L3) ----
+tf_group_begin; tf_test "tf_validate_tasks flags invalid cargo test gates"
+cat > "$TF_CONFIG_DIR/tasks.json" <<'JSON'
+{"tasks":[
+  {"id":"A","engine":"t","title":"A","section":"§1","deps":[],"scope":["x"],"accept":"cargo test -p wo-x a:: b::","manual":false},
+  {"id":"B","engine":"t","title":"B","section":"§1","deps":["GHOST"],"scope":["y"],"accept":"true","manual":false}
+]}
+JSON
+out="$(tf_validate_tasks 2>&1)"
+tf_assert_contains "flags multi-pattern cargo test" "cargo test takes one pattern" "$out"
+tf_assert_contains "flags unknown dep" "GHOST" "$out"
+tf_group_end
+
+# ---- Robustness: dispatch failure classification (L4) ----
+tf_group_begin; tf_test "tf_classify_dispatch_failure detects rate limits and auth"
+mkdir -p "$TF_LOG_DIR"
+echo '{"code":"1308","message":"Usage limit reached for 5 hour"}' > "$TF_LOG_DIR/rl.log"
+echo '401 Unauthorized: invalid api key' > "$TF_LOG_DIR/auth.log"
+echo 'connection refused: curl(7)' > "$TF_LOG_DIR/net.log"
+tf_assert_eq "rate limit" "rate_limit" "$(tf_classify_dispatch_failure "$TF_LOG_DIR/rl.log")"
+tf_assert_eq "auth" "auth_error" "$(tf_classify_dispatch_failure "$TF_LOG_DIR/auth.log")"
+tf_assert_eq "network" "network_error" "$(tf_classify_dispatch_failure "$TF_LOG_DIR/net.log")"
+tf_assert_eq "benign log empty" "" "$(tf_classify_dispatch_failure "$TF_LOG_DIR/../no-such.log")"
+tf_group_end
+
+
+
+
 tf_test_summary
