@@ -159,7 +159,14 @@ tf_verify() {
   local rc=0
   (
     cd "$wt" || exit 127
-    timeout "$timeout_s" bash -lc "${TF_GATE_ENV:+export $TF_GATE_ENV; }$accept"
+    # Prepend cargo bin so rustup's rustc is found before /usr/bin/rustc
+    # (system rustc lacks the wasm32 target and breaks wasm-pack gates).
+    # TF_GATE_ENV carries project-specific vars (e.g. RUSTUP_TOOLCHAIN=nightly,
+    # PDFIUM_DYNAMIC_LIB_PATH=...). Escaped \$HOME/\$PATH expand inside the
+    # login shell, not at construction time.
+    local gate_env=""
+    [[ -n "${TF_GATE_ENV:-}" ]] && gate_env="export $TF_GATE_ENV; "
+    timeout "$timeout_s" bash -lc "export PATH=\$HOME/.cargo/bin:\$PATH; $gate_env$accept"
   ) >> "$log" 2>&1 || rc=$?
 
   if [[ $rc -eq 0 ]]; then

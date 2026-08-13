@@ -266,4 +266,22 @@ classify_always_structured() {
 tf_property "classify_always_structured" classify_always_structured 30
 tf_group_end
 
+
+# ---- Robustness: gate sandbox (L5) must prepend cargo bin (regression) ----
+tf_group_begin; tf_test "gate shell prepends ~/.cargo/bin so rustup rustc is found"
+grep -q 'cargo/bin' "$HERE/../../lib/verify.sh" || TF_GROUP_FAILED=1
+if grep -q 'cargo/bin' "$HERE/../../lib/verify.sh"; then
+  printf '    \033[32mok\033[0m   verify.sh prepends cargo bin\n'
+else
+  printf '    \033[31mBAD\033[0m  verify.sh lacks cargo-bin PATH prepend (wasm gates will use /usr/bin/rustc)\n'
+fi
+# and the gate_env mechanism still exists
+grep -q 'TF_GATE_ENV' "$HERE/../../lib/verify.sh" || TF_GROUP_FAILED=1
+if grep -q 'TF_GATE_ENV' "$HERE/../../lib/verify.sh"; then
+  printf '    \033[32mok\033[0m   TF_GATE_ENV mechanism present\n'
+else
+  printf '    \033[31mBAD\033[0m  TF_GATE_ENV missing\n'
+fi
+tf_group_end
+
 tf_test_summary
