@@ -1,0 +1,9 @@
+{
+  "repos": {
+    "": "",
+    "main": "..",
+    "docs": "../ taskfleet-docs",
+    "infra": "../taskfleet-infra",
+    "web": "../taskfleet-web"
+  }
+}

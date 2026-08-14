@@ -1,0 +1,339 @@
+{
+  "generated": "2026-08-14T05:22:51.357157+00:00",
+  "count": 17,
+  "items": [
+    {
+      "title": "yohey-w/multi-agent-shogun",
+      "url": "https://github.com/yohey-w/multi-agent-shogun",
+      "category": "competitor",
+      "source": "github-parallel-llm-dispatch",
+      "tags": [
+        "orchestration",
+        "parallel-dispatch",
+        "multi-agent",
+        "code-agent"
+      ],
+      "score": 6.5,
+      "summary": "Samurai-inspired multi-agent system for Claude Code. Orchestrate parallel AI tasks via tmux with shogun → karo → ashigaru hierarchy. Uses tmux for isolation instead of git worktrees. Claude Code specific.",
+      "extra": {
+        "stars": 1412,
+        "language": "Shell",
+        "topics": [
+          "claude-code",
+          "multi-agent",
+          "orchestration",
+          "parallel"
+        ]
+      }
+    },
+    {
+      "title": "tzone85/vortex-dispatch",
+      "url": "https://github.com/tzone85/vortex-dispatch",
+      "category": "competitor",
+      "source": "github-parallel-llm-dispatch",
+      "tags": [
+        "parallel-dispatch",
+        "multi-agent",
+        "code-agent",
+        "retry-recovery",
+        "observability"
+      ],
+      "score": 6.0,
+      "summary": "AI agents (Claude Code, Codex, Gemini CLI) ship merged PRs. Decomposes work, runs stories in parallel git worktrees with per-story ephemeral Postgres. 5-tier failure escalation. Event-sourced. Go implementation.",
+      "extra": {
+        "stars": 0,
+        "language": "Go",
+        "topics": []
+      }
+    },
+    {
+      "title": "mcdays94/pocock-agents",
+      "url": "https://github.com/mcdays94/pocock-agents",
+      "category": "competitor",
+      "source": "github-multi-agent-git-worktree",
+      "tags": [
+        "git-worktree",
+        "parallel-dispatch",
+        "acceptance-gates",
+        "code-agent"
+      ],
+      "score": 5.8,
+      "summary": "Pair of OpenCode agents implementing Matt Pocock's skill-driven workflow as grill/plan/dispatch pipeline with parallel TDD workers on git worktrees. OpenCode-specific. TDD-focused. No error classification.",
+      "extra": {
+        "stars": 26,
+        "language": "Shell",
+        "topics": []
+      }
+    },
+    {
+      "title": "mrap/boi",
+      "url": "https://github.com/mrap/boi",
+      "category": "competitor",
+      "source": "github-multi-agent-git-worktree",
+      "tags": [
+        "git-worktree",
+        "dependency-dag",
+        "acceptance-gates",
+        "code-agent"
+      ],
+      "score": 5.5,
+      "summary": "Dispatch TOML specs to parallel Claude Code agents with DAG dependencies, isolated git worktrees, and machine-verified gates. Written in Go. Claude Code specific. Likely inspired by taskfleet.",
+      "extra": {
+        "stars": 0,
+        "language": "Go",
+        "topics": []
+      }
+    },
+    {
+      "title": "first-fluke/oh-my-agent",
+      "url": "https://github.com/first-fluke/oh-my-agent",
+      "category": "competitor",
+      "source": "github-llm-acceptance-gate",
+      "tags": [
+        "llm-verification",
+        "acceptance-gates",
+        "multi-agent",
+        "observability"
+      ],
+      "score": 5.2,
+      "summary": "Multi-agent harness that checks the work via artifact-based verification (stop-hook gates, independent judges, append-only event logs). Supports Claude Code, Codex, Cursor, and 10+ runtimes.",
+      "extra": {
+        "stars": 1226,
+        "language": "TypeScript",
+        "topics": []
+      }
+    },
+    {
+      "title": "omnigent-ai/omnigent",
+      "url": "https://github.com/omnigent-ai/omnigent",
+      "category": "framework",
+      "source": "github-agent-harness-multi",
+      "tags": [
+        "orchestration",
+        "multi-agent",
+        "code-agent",
+        "observability",
+        "human-in-loop"
+      ],
+      "score": 5.0,
+      "summary": "Open-source AI agent framework and meta-harness. Orchestrate Claude Code, Codex, Cursor, Pi, and custom agents. Swap harnesses without rewriting. Enforce policies and sandboxing.",
+      "extra": {
+        "stars": 8818,
+        "language": "TypeScript",
+        "topics": [
+          "claude-code",
+          "codex",
+          "multi-agent",
+          "harness"
+        ]
+      }
+    },
+    {
+      "title": "cft0808/edict",
+      "url": "https://github.com/cft0808/edict",
+      "category": "framework",
+      "source": "github-multi-agent-framework",
+      "tags": [
+        "orchestration",
+        "multi-agent",
+        "observability",
+        "human-in-loop"
+      ],
+      "score": 4.8,
+      "summary": "9 specialized AI agents with real-time dashboard, model config, and full audit trails. OpenClaw Multi-Agent Orchestration System.",
+      "extra": {
+        "stars": 16374,
+        "language": "TypeScript",
+        "topics": [
+          "multi-agent",
+          "orchestration",
+          "dashboard"
+        ]
+      }
+    },
+    {
+      "title": "open-multi-agent/open-multi-agent",
+      "url": "https://github.com/open-multi-agent/open-multi-agent",
+      "category": "framework",
+      "source": "github-multi-agent-framework",
+      "tags": [
+        "orchestration",
+        "dependency-dag",
+        "multi-agent"
+      ],
+      "score": 4.5,
+      "summary": "TypeScript AI agent orchestration framework with dynamic workflows. Coordinator plans the task DAG at runtime and runs on any LLM (Claude, ChatGPT, Gemini, DeepSeek, local).",
+      "extra": {
+        "stars": 6774,
+        "language": "TypeScript",
+        "topics": [
+          "multi-agent",
+          "orchestration",
+          "dag",
+          "llm"
+        ]
+      }
+    },
+    {
+      "title": "unohee/OpenSwarm",
+      "url": "https://github.com/unohee/OpenSwarm",
+      "category": "framework",
+      "source": "github-ai-dev-team",
+      "tags": [
+        "orchestration",
+        "multi-agent",
+        "code-agent",
+        "human-in-loop"
+      ],
+      "score": 4.3,
+      "summary": "Autonomous AI dev team orchestrator powered by Claude Code CLI. Discord control, Linear integration, cognitive memory.",
+      "extra": {
+        "stars": 836,
+        "language": "TypeScript",
+        "topics": []
+      }
+    },
+    {
+      "title": "massgen/MassGen",
+      "url": "https://github.com/massgen/MassGen",
+      "category": "framework",
+      "source": "github-agent-swarm-parallel",
+      "tags": [
+        "parallel-dispatch",
+        "multi-agent",
+        "orchestration"
+      ],
+      "score": 4.2,
+      "summary": "Multi-agent scaling system running in terminal. Autonomously orchestrates frontier models and agents to collaborate, reason, and produce high-quality results.",
+      "extra": {
+        "stars": 1114,
+        "language": "",
+        "topics": []
+      }
+    },
+    {
+      "title": "first-fluke/oh-my-agent",
+      "url": "https://github.com/SmythOS/sre",
+      "category": "framework",
+      "source": "github-agent-observability",
+      "tags": [
+        "observability",
+        "orchestration",
+        "multi-agent"
+      ],
+      "score": 4.0,
+      "summary": "SmythOS Runtime Environment (SRE) — open-source, cloud-native runtime for agentic AI. Secure, modular, production-ready agent management across local, cloud, and edge.",
+      "extra": {
+        "stars": 1292,
+        "language": "",
+        "topics": []
+      }
+    },
+    {
+      "title": "zeynepyorulmaz/openclaw-orchestrator",
+      "url": "https://github.com/zeynepyorulmaz/openclaw-orchestrator",
+      "category": "framework",
+      "source": "github-multi-agent-framework",
+      "tags": [
+        "orchestration",
+        "multi-agent",
+        "parallel-dispatch",
+        "observability"
+      ],
+      "score": 4.0,
+      "summary": "Adaptive multi-agent orchestration framework. Break down complex goals into parallel tasks, route to specialized LLM agents, iterate with real-time web dashboard. TypeScript, Zod-validated, SQLite-backed.",
+      "extra": {
+        "stars": 33,
+        "language": "TypeScript",
+        "topics": []
+      }
+    },
+    {
+      "title": "Vibe-Skills",
+      "url": "https://github.com/foryourhealth111-pixel/Vibe-Skills",
+      "category": "framework",
+      "source": "github-agent-harness-multi",
+      "tags": [
+        "orchestration",
+        "multi-agent",
+        "code-agent"
+      ],
+      "score": 3.8,
+      "summary": "General-purpose Skill that automatically routes local Skills and intelligently orchestrates harness workflows.",
+      "extra": {
+        "stars": 2708,
+        "language": "",
+        "topics": []
+      }
+    },
+    {
+      "title": "swarmclawai/swarmclaw",
+      "url": "https://github.com/swarmclawai/swarmclaw",
+      "category": "framework",
+      "source": "github-agent-swarm-parallel",
+      "tags": [
+        "orchestration",
+        "multi-agent"
+      ],
+      "score": 3.8,
+      "summary": "Open-source self-hosted AI agent runtime and multi-agent framework. Agent memory, MCP tools, schedules, delegation, and 23+ LLM providers.",
+      "extra": {
+        "stars": 646,
+        "language": "",
+        "topics": []
+      }
+    },
+    {
+      "title": "framerslab/agentos",
+      "url": "https://github.com/framerslab/agentos",
+      "category": "framework",
+      "source": "github-agent-harness-multi",
+      "tags": [
+        "orchestration",
+        "multi-agent"
+      ],
+      "score": 3.5,
+      "summary": "TypeScript AI agent framework with cognitive memory, runtime tool forging, multi-agent orchestration, and 11 LLM providers.",
+      "extra": {
+        "stars": 615,
+        "language": "TypeScript",
+        "topics": []
+      }
+    },
+    {
+      "title": "enchanter-ai/sylph",
+      "url": "https://github.com/enchanter-ai/sylph",
+      "category": "framework",
+      "source": "github-codex-claude-parallel",
+      "tags": [
+        "parallel-dispatch",
+        "code-agent"
+      ],
+      "score": 3.5,
+      "summary": "Zero-touch Git orchestration. AI autonomously manages parallel branches, segments tasks, writes Conventional Commits, and opens clean PRs.",
+      "extra": {
+        "stars": 1,
+        "language": "",
+        "topics": []
+      }
+    },
+    {
+      "title": "beastlabai/multi-llm-plugin",
+      "url": "https://github.com/beastlabai/multi-llm-plugin",
+      "category": "framework",
+      "source": "github-agent-harness-multi",
+      "tags": [
+        "multi-agent",
+        "code-agent",
+        "parallel-dispatch"
+      ],
+      "score": 3.5,
+      "summary": "Multi-LLM orchestration plugin for Claude Code. Parallel plan review, task generation, implementation, and code review across 12 coding harnesses (Codex, Cursor, opencode, pi, aider...).",
+      "extra": {
+        "stars": 8,
+        "language": "TypeScript",
+        "topics": []
+      }
+    }
+  ]
+}

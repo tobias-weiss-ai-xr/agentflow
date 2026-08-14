@@ -1,0 +1,268 @@
+# taskfleet-research competitive landscape ingestion sources.
+#
+# Each source resolves to either:
+#   - a GitHub search query : {"type": "github", "query": "...", "sort": "stars"}
+#   - an arXiv API query     : {"type": "arxiv", "categories": [...], "max": N}
+#
+# `category` is a coarse bucket for the digest rendering.
+# `weight` boosts relevance scoring for higher-trust or more-relevant sources.
+# `min_topics` drops items that match fewer than N keywords.
+
+sources:
+  # ---------- GitHub: direct competitors (parallel LLM + git worktree + gates) ----------
+  - name: github-parallel-llm-dispatch
+    type: github
+    query: "parallel LLM task orchestration"
+    sort: stars
+    max: 20
+    category: competitor
+    weight: 3.0
+    min_topics: 2
+
+  - name: github-multi-agent-git-worktree
+    type: github
+    query: "multi-agent git worktree parallel dispatch"
+    sort: stars
+    max: 15
+    category: competitor
+    weight: 3.0
+    min_topics: 1
+
+  - name: github-multi-agent-shogun-like
+    type: github
+    query: "Claude Code parallel multi-agent orchestrate tmux"
+    sort: stars
+    max: 10
+    category: competitor
+    weight: 2.5
+    min_topics: 1
+
+  - name: github-llm-acceptance-gate
+    type: github
+    query: "LLM agent acceptance gate verify merge"
+    sort: stars
+    max: 10
+    category: competitor
+    weight: 2.5
+    min_topics: 1
+
+  - name: github-code-agent-orchestrator
+    type: github
+    query: "code agent orchestrator dispatch parallel task"
+    sort: stars
+    max: 15
+    category: framework
+    weight: 2.0
+    min_topics: 2
+
+  - name: github-codex-claude-parallel
+    type: github
+    query: "Codex Claude parallel branch agent"
+    sort: stars
+    max: 10
+    category: framework
+    weight: 2.0
+    min_topics: 2
+
+  - name: github-agent-harness-multi
+    type: github
+    query: "agent harness multi-model orchestrate"
+    sort: stars
+    max: 10
+    category: framework
+    weight: 1.8
+    min_topics: 2
+
+  # ---------- GitHub: adjacent frameworks (broader multi-agent) ----------
+  - name: github-multi-agent-framework
+    type: github
+    query: "multi-agent LLM orchestration workflow DAG"
+    sort: stars
+    max: 15
+    category: framework
+    weight: 1.5
+    min_topics: 2
+
+  - name: github-agent-swarm-parallel
+    type: github
+    query: "agent swarm parallel LLM task"
+    sort: stars
+    max: 10
+    category: framework
+    weight: 1.5
+    min_topics: 2
+
+  - name: github-ai-dev-team
+    type: github
+    query: "autonomous AI dev team orchestrate"
+    sort: stars
+    max: 10
+    category: framework
+    weight: 1.5
+    min_topics: 2
+
+  # ---------- GitHub: tooling (observability, testing, CI for agents) ----------
+  - name: github-agent-observability
+    type: github
+    query: "LLM agent observability tracing dashboard"
+    sort: stars
+    max: 10
+    category: tooling
+    weight: 1.2
+    min_topics: 1
+
+  - name: github-agent-testing
+    type: github
+    query: "LLM agent testing evaluation benchmark"
+    sort: stars
+    max: 10
+    category: tooling
+    weight: 1.2
+    min_topics: 1
+
+  # ---------- arXiv: research papers ----------
+  - name: arxiv-multi-agent-orchestration
+    type: arxiv
+    categories: ["cs.AI", "cs.SE", "cs.DC"]
+    max: 40
+    category: paper
+    weight: 2.0
+    query_filter: '("multi-agent" OR "multi agent" OR "orchestrat*") AND ("LLM" OR "language model" OR "code generation")'
+
+  - name: arxiv-parallel-code-generation
+    type: arxiv
+    categories: ["cs.SE", "cs.PL", "cs.AI"]
+    max: 30
+    category: paper
+    weight: 1.8
+    query_filter: '("parallel" OR "concurrent") AND ("code generation" OR "program synthesis" OR "automated programming")'
+
+  - name: arxiv-agent-verification
+    type: arxiv
+    categories: ["cs.SE", "cs.AI", "cs.LO"]
+    max: 30
+    category: paper
+    weight: 1.8
+    query_filter: '("LLM" OR "language model" OR "code") AND ("verification" OR "acceptance test" OR "formal method" OR "self-check")'
+
+  - name: arxiv-task-decomposition
+    type: arxiv
+    categories: ["cs.AI", "cs.CL"]
+    max: 30
+    category: paper
+    weight: 1.5
+    query_filter: '("task decomposition" OR "plan generation" OR "goal decomposition") AND ("agent" OR "LLM" OR "language model")'
+
+# ----------------- Keyword classification -----------------
+# Items matching these keywords are tagged with the given topic label.
+# A match also boosts relevance score.
+keywords:
+  orchestration:
+    - "orchestrat"
+    - "multi-agent"
+    - "multi agent"
+    - "agent framework"
+    - "agent runtime"
+    - "task orchestration"
+    - "agent coordination"
+  parallel-dispatch:
+    - "parallel"
+    - "concurrent"
+    - "parallel execution"
+    - "parallel task"
+    - "parallel agent"
+    - "parallel dispatch"
+    - "concurrent execution"
+    - "worker pool"
+  git-worktree:
+    - "git worktree"
+    - "worktree"
+    - "isolated branch"
+    - "branch isolation"
+    - "parallel branch"
+  acceptance-gates:
+    - "acceptance gate"
+    - "acceptance test"
+    - "verification gate"
+    - "merge gate"
+    - "quality gate"
+    - "machine-verified"
+    - "automated verification"
+    - "stop-hook"
+  multi-agent:
+    - "multi-agent"
+    - "multi agent"
+    - "agent swarm"
+    - "agent team"
+    - "agent collaboration"
+    - "specialized agent"
+  code-agent:
+    - "code agent"
+    - "coding agent"
+    - "Claude Code"
+    - "Codex"
+    - "Copilot"
+    - "AI programmer"
+    - "autonomous coding"
+    - "software engineer agent"
+    - "SWE-agent"
+    - "OpenHands"
+  llm-verification:
+    - "self-check"
+    - "self-verify"
+    - "LLM verification"
+    - "code verification"
+    - "agent verification"
+    - "output validation"
+    - "hallucination detect"
+  dependency-dag:
+    - "DAG"
+    - "dependency graph"
+    - "task graph"
+    - "topological"
+    - "dependency-aware"
+    - "task scheduling"
+  retry-recovery:
+    - "retry"
+    - "error recovery"
+    - "failure recovery"
+    - "merge conflict"
+    - "conflict resolution"
+    - "self-healing"
+    - "fault tolerance"
+  observability:
+    - "observability"
+    - "telemetry"
+    - "dashboard"
+    - "tracing"
+    - "metrics"
+    - "audit trail"
+    - "event sourcing"
+    - "real-time"
+  human-in-loop:
+    - "human-in-the-loop"
+    - "human in the loop"
+    - "HITL"
+    - "approval gate"
+    - "manual review"
+    - "escalation"
+  content-generation:
+    - "content generation"
+    - "content pipeline"
+    - "batch generation"
+    - "parallel generation"
+  prompt-engineering:
+    - "prompt template"
+    - "prompt versioning"
+    - "prompt optimization"
+    - "A/B test"
+    - "prompt management"
+
+# How long (days) an item is "fresh" for recency scoring.
+fresh_window_days: 7
+# Discard items with relevance score below this.
+min_score: 0.5
+# Cap total items emitted in the digest.
+max_digest_items: 80
+# Retention for dedup seen-store (days).
+retention_days: 90

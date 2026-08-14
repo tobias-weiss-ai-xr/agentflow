@@ -13,6 +13,10 @@
 . "$(dirname "${BASH_SOURCE[0]}")/worktree.sh"
 # shellcheck source=verify.sh
 . "$(dirname "${BASH_SOURCE[0]}")/verify.sh"
+# shellcheck source=receipt.sh
+. "$(dirname "${BASH_SOURCE[0]}")/receipt.sh"
+# shellcheck source=schedule.sh
+. "$(dirname "${BASH_SOURCE[0]}")/schedule.sh"
 
 # tf_render_prompt <task_id>  → prints filled prompt to stdout.
 # Uses bash parameter expansion (NOT envsubst) so only our explicit {{VAR}}
@@ -55,6 +59,41 @@ $(tf_error_snippet "$TF_LOG_DIR/$id.verify.log" 2>/dev/null | head -40)
 \`\`\`
 
 "
+
+    # Category-specific retry blocks
+    case "$category" in
+      no_op)
+        # The agent produced no changes last time. Be very explicit.
+        local scope_files
+        scope_files="$(tf_task_field "$id" '.scope[]' | sed 's/^/  - /')"
+        error_block+="
+## ⚠️ CRITICAL — Previous attempt produced ZERO changes
+
+You MUST modify the following files. This is not optional. Do not just read them
+or analyze them — you must write actual code changes:
+
+$([ -n "$scope_files" ] && echo "$scope_files" || echo "  (check scope in task definition)")
+
+Use your file editing tools to make the required changes. The acceptance gate
+will REJECT your work if no files are modified. Do NOT exit without making changes.
+
+"
+        ;;
+      timeout)
+        # The agent ran out of time. Focus on the most important file.
+        local primary_scope
+        primary_scope="$(tf_task_field "$id" '.scope[0]' 2>/dev/null || echo '')"
+        if [[ -n "$primary_scope" ]]; then
+          error_block+="
+## ⚠️ Previous attempt timed out
+
+Focus on the primary file: $primary_scope. If the task is too large, implement
+the core functionality first and add tests, then iterate if time allows.
+
+"
+        fi
+        ;;
+    esac
   fi
 
   tmpl="$(cat "$TF_PROMPT_DIR/worker.md")"
@@ -80,6 +119,14 @@ tf_dispatch_one() {
   provider="$(tf_worker_field "$worker" .provider)"
   model="$(tf_worker_field "$worker" .model)"
   dispatch_timeout="$(tf_default dispatch_timeout_s)"; dispatch_timeout="${dispatch_timeout:-3600}"
+  # Apply timeout multiplier from category-aware retry (timeout failures)
+  local timeout_mult
+  timeout_mult="$(tf_status_get "$id" .timeout_multiplier)"
+  timeout_mult="${timeout_mult:-1}"
+  if (( $(echo "$timeout_mult > 1" | bc -l 2>/dev/null || echo 0) )); then
+    dispatch_timeout="$(echo "$dispatch_timeout * $timeout_mult" | bc -l 2>/dev/null | cut -d. -f1)"
+    tf_info "$id: using scaled timeout ${dispatch_timeout}s (multiplier: $timeout_mult)"
+  fi
   log="$TF_LOG_DIR/$id.dispatch.log"
 
   local branch="$TF_BRANCH_PREFIX/$id"
@@ -94,23 +141,41 @@ tf_dispatch_one() {
 
   tf_info "$id: dispatching to worker=$worker ($provider/$model)"
 
+  # Record dispatch start in receipt ledger
+  tf_receipt_begin "$id" "$worker" "$provider" "$model" "$branch"
+
   # 1. Create worktree. If this is a retry of a merge-conflict failure, reuse
   #    the preserved branch so the agent resolves the conflict instead of
   #    redoing all its work from scratch.
   local wt keep_branch=""
+  local base="main"
   local prev_err attempts
   prev_err="$(tf_status_get "$id" .last_error 2>/dev/null || echo "")"
   attempts="$(tf_status_get "$id" .attempts 2>/dev/null || echo 0)"
+  
+  # Check if this is a speculative dispatch (all deps except one running dep are done)
+  if tf_is_speculatively_ready "$id"; then
+    local base_dep
+    base_dep="$(tf_speculative_base_dep "$id")"
+    if [[ -n "$base_dep" ]]; then
+      base="$TF_BRANCH_PREFIX/$base_dep"
+      tf_info "$id: SPECULATIVE dispatch based on running dependency $base_dep (branch: $base)"
+    fi
+  fi
+  
   if [[ "$attempts" -gt 0 && "$prev_err" == *"merge"* ]]; then
     keep_branch="--keep-branch"
   fi
-  wt="$(tf_worktree_create "$id" main $keep_branch)" || {
+  wt="$(tf_worktree_create "$id" "$base" $keep_branch)" || {
     tf_fail_task "$id" "worktree creation failed"
     return 1
   }
 
   # 2. Render prompt (includes error feedback on retries)
-  local prompt_file="$TF_STATE_DIR/$id.prompt.md"
+  local prompt_file
+  prompt_file="$TF_STATE_DIR/$id.prompt.md"
+  # Resolve to absolute path (TF_STATE_DIR may be relative)
+  [[ "$prompt_file" != /* ]] && prompt_file="$(cd "$(dirname "$prompt_file")" 2>/dev/null && pwd)/$(basename "$prompt_file")"
   tf_render_prompt "$id" > "$prompt_file"
 
   # 3. Run pi headless inside the worktree
@@ -125,13 +190,34 @@ tf_dispatch_one() {
   } > "$log"
 
   local rc=0
-  (
-    cd "$wt" || exit 127
-    timeout "$dispatch_timeout" pi \
-      --provider "$provider" \
-      --model "$model" \
-      -p "@$prompt_file"
-  ) >> "$log" 2>&1 || rc=$?
+  if [[ "$provider" == "vllm" ]]; then
+    # Direct Python call to vllm endpoint (bypasses pi entirely)
+    local output_file
+    output_file="$(tf_task_field "$id" '.scope[0]' 2>/dev/null || echo '')"
+    local task_min_lines
+    task_min_lines="$(tf_task_field "$id" .min_lines 2>/dev/null || echo '')"
+    [[ "$task_min_lines" == "null" || -z "$task_min_lines" ]] && task_min_lines=
+    local max_tokens=49152
+    if [[ -n "$task_min_lines" && "$task_min_lines" -gt 500 ]]; then
+      max_tokens=65536
+    fi
+    (
+      cd "$wt" || exit 127
+      "$TF_LIB_DIR/vllm-worker.py" \
+        --prompt "$prompt_file" \
+        --output "$output_file" \
+        --model "$model" \
+        --max-tokens "$max_tokens"
+    ) >> "$log" 2>&1 || rc=$?
+  else
+    (
+      cd "$wt" || exit 127
+      timeout "$dispatch_timeout" pi \
+        --provider "$provider" \
+        --model "$model" \
+        -p "@$prompt_file"
+    ) >> "$log" 2>&1 || rc=$?
+  fi
 
   if [[ $rc -ne 0 ]]; then
     local reason
@@ -139,6 +225,9 @@ tf_dispatch_one() {
     else reason="pi exited $rc"; fi
     tf_warn "$id: $reason — attempting acceptance gate anyway (worker may have committed)"
   fi
+
+  # Record dispatch completion in receipt ledger
+  tf_receipt_finish_dispatch "$id" "$log" "$rc"
 
   # 3b. No-op detection: check if the worker actually modified any scope files.
   #     If nothing changed, fail immediately rather than wasting gate time.
@@ -161,6 +250,7 @@ tf_dispatch_one() {
     # Write error.json for retry feedback
     mkdir -p "$TF_LOG_DIR"
     echo '{"category":"no_op","summary":"LLM produced no tool calls or file modifications","classified_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' > "$TF_LOG_DIR/$id.error.json"
+    tf_receipt_close "$id" "failed" "no_op: no files modified"
     tf_worktree_remove "$id" --force
     tf_worktree_delete_branch "$id"
     return 1
@@ -172,6 +262,9 @@ tf_dispatch_one() {
   local verdict
   verdict="$(tf_verify "$id" "$wt")" || true
 
+  # Record gate outcome in receipt ledger
+  tf_receipt_finish_gate "$id" "$verdict" "$accept"
+
   # 5. Advisory scope check
   tf_verify_scope "$id" "$wt" >>"$TF_LOG_DIR/$id.scope.log" 2>&1 || true
 
@@ -181,10 +274,33 @@ tf_dispatch_one() {
        git commit -q -m "feat($id): $(tf_task_field "$id" .title)" 2>/dev/null) || true
   fi
 
+  # 6b. Cross-vendor verify gate (if configured)
+  #     After the primary gate passes, optionally dispatch verification to a
+  #     DIFFERENT provider/model. Independent model + independent context =
+  #     structurally impossible to fool with same-model self-agreement.
+  local verify_worker verify_verdict
+  verify_worker="$(tf_task_field "$id" .verify_worker 2>/dev/null || echo '')"
+  [[ "$verify_worker" == "null" ]] && verify_worker=""
+  if [[ "$verdict" == PASS* && -n "$verify_worker" ]]; then
+    tf_info "$id: cross-vendor verify gate → $verify_worker"
+    tf_status_set "$id" verifying "(.worker=\"$verify_worker\")"
+    verify_verdict="$(tf_cross_vendor_verify "$id" "$wt" "$verify_worker")" || verify_verdict="FAIL: verify dispatch error"
+    tf_receipt_finish_gate "$id" "$verify_verdict" "cross-vendor:$verify_worker"
+    if [[ "$verify_verdict" != PASS* ]]; then
+      tf_fail_task "$id" "cross-vendor verify gate: $verify_verdict"
+      tf_receipt_close "$id" "failed" "cross_vendor_verify_failed"
+      tf_worktree_remove "$id" --force
+      tf_worktree_delete_branch "$id"
+      return 1
+    fi
+    tf_info "$id: cross-vendor verify PASS"
+  fi
+
   # 7. Status update + merge
   if [[ "$verdict" == PASS* ]]; then
     if tf_worktree_merge "$id"; then
       tf_done_task "$id"
+      tf_receipt_close "$id" "done"
       tf_worktree_remove "$id"
       tf_worktree_delete_branch "$id"
       return 0
@@ -198,11 +314,13 @@ tf_dispatch_one() {
       else
         tf_fail_task "$id" "merge failed (gate passed but main diverged; branch kept for retry)"
       fi
+      tf_receipt_close "$id" "failed" "merge_conflict"
       tf_info "$id: preserved worktree + branch for retry or manual resolution"
       return 1
     fi
   else
     tf_fail_task "$id" "acceptance gate: $verdict"
+    tf_receipt_close "$id" "failed" "gate_failed"
     tf_worktree_remove "$id" --force
     tf_worktree_delete_branch "$id"
     return 1
@@ -228,4 +346,81 @@ tf_dispatch_one_dryrun() {
   echo "  prompt: $TF_STATE_DIR/$id.prompt.md"
   tf_render_prompt "$id" | head -5
   echo "  ..."
+}
+
+# tf_cross_vendor_verify <task_id> <worktree_path> <verify_worker_name>
+#   Runs an independent verification using a different provider/model.
+#   Returns "PASS" or "FAIL: <reason>". Does NOT run the full acceptance
+#   gate (tests) again — instead, asks the verify agent to review the diff
+#   and task spec for correctness.
+tf_cross_vendor_verify() {
+  local id="$1" wt="$2" vw="$3"
+  local vprovider vmodel verify_timeout verify_log
+  vprovider="$(tf_worker_field "$vw" .provider)"
+  vmodel="$(tf_worker_field "$vw" .model)"
+  verify_timeout="$(tf_default verify_cross_vendor_timeout_s)"; verify_timeout="${verify_timeout:-600}"
+  verify_log="$TF_LOG_DIR/$id.cross-verify.log"
+
+  # Build the verify prompt: task spec + diff + primary gate output
+  local diff_content gate_output verify_prompt
+  diff_content="$(cd "$wt" && git diff main...HEAD 2>/dev/null | head -500)"
+  gate_output="$(tail -30 "$TF_LOG_DIR/$id.verify.log" 2>/dev/null)"
+
+  local task_spec accept_cmd
+  task_spec="$(tf_task_field "$id" .acceptance_prose 2>/dev/null || echo '')"
+  accept_cmd="$(tf_task_field "$id" .accept)"
+  [[ -z "$task_spec" || "$task_spec" == "null" ]] && task_spec="$accept_cmd"
+
+  verify_prompt="You are a code reviewer. Review the following changes against the task specification.
+
+## Task Specification
+$task_spec
+
+## Changes (diff from main)
+\`\`\`diff
+${diff_content:-<no diff output>}
+\`\`\`
+
+## Primary Acceptance Gate Output
+${gate_output:-<no gate output>}
+
+## Your Task
+1. Verify the changes implement the specification correctly
+2. Check for unintended side effects or scope creep
+3. Verify no security vulnerabilities or obvious bugs
+4. If everything is correct, run: true
+5. If you find problems, run: false
+
+You MUST run either true or false as your final command."
+
+  local verify_prompt_file="$TF_STATE_DIR/$id.cross-verify.md"
+  echo "$verify_prompt" > "$verify_prompt_file"
+
+  {
+    echo "=== $id cross-vendor verify ==="
+    echo "verify_worker: $vw ($vprovider/$vmodel)"
+    echo "started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "============================================"
+  } > "$verify_log"
+
+  local rc=0
+  (
+    cd "$wt" || exit 127
+    timeout "$verify_timeout" pi \
+      --provider "$vprovider" \
+      --model "$vmodel" \
+      -p "@$verify_prompt_file"
+  ) >> "$verify_log" 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]]; then
+    echo "PASS"
+    return 0
+  else
+    local reason
+    if [[ $rc -eq 124 ]]; then reason="cross-vendor verify timed out after ${verify_timeout}s"
+    else reason="cross-vendor verify exited $rc"
+    fi
+    echo "FAIL: $reason"
+    return 1
+  fi
 }

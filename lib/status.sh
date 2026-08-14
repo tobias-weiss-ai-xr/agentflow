@@ -140,12 +140,55 @@ tf_is_ready() {
   [[ $all_done -eq 1 ]]
 }
 
-# List ids of all currently-ready tasks.
-tf_ready_task_ids() {
-  local id
-  while IFS= read -r id; do
-    tf_is_ready "$id" && echo "$id"
-  done < <(tf_all_task_ids)
+# Is a task speculatively ready? ready := status==ready AND all deps except
+# exactly ONE are done, that ONE is running, and TF_SPECIAL_DISPATCH_ENABLED=1.
+tf_is_speculatively_ready() {
+  local id="$1"
+  local enabled="${TF_SPECULATIVE_DISPATCH_ENABLED:-0}"
+  [[ "$enabled" == "1" ]] || return 1
+
+  local status deps dep_status dep
+  status="$(tf_status_get "$id" .status)"
+  [[ "$status" == "ready" ]] || return 1
+
+  deps="$(tf_task_field "$id" '.deps[]')"
+  [[ -n "$deps" ]] || return 1  # no deps = not speculative
+
+  local done_count=0 running_count=0 blocked_count=0 not_done_dep=""
+  while IFS= read -r dep; do
+    [[ -z "$dep" ]] && continue
+    dep_status="$(tf_status_get "$dep" .status)"
+    case "$dep_status" in
+      done) done_count=$((done_count + 1)) ;;
+      running|verifying) running_count=$((running_count + 1)); not_done_dep="$dep" ;;
+      *) blocked_count=$((blocked_count + 1)); not_done_dep="$dep" ;;
+    esac
+  done <<< "$deps"
+
+  # Speculatively ready = exactly one running dep, NO blocked deps,
+  # and all other deps (if any) are done.
+  # For a task with only one dep: that dep must be running.
+  # For a task with multiple deps: exactly one running, rest must be done.
+  local total_deps
+  total_deps="$(echo "$deps" | wc -l)"
+  [[ $running_count -eq 1 ]] && [[ $blocked_count -eq 0 ]] && [[ $((running_count + done_count)) -eq $total_deps ]]
+}
+
+# Get the single running dependency for a speculatively-ready task.
+# Only valid if tf_is_speculatively_ready returns true.
+tf_speculative_base_dep() {
+  local id="$1"
+  deps="$(tf_task_field "$id" '.deps[]')"
+  local running_dep=""
+  while IFS= read -r dep; do
+    [[ -z "$dep" ]] && continue
+    dep_status="$(tf_status_get "$dep" .status)"
+    if [[ "$dep_status" == "running" || "$dep_status" == "verifying" ]]; then
+      running_dep="$dep"
+      break
+    fi
+  done <<< "$deps"
+  echo "$running_dep"
 }
 
 # List ids of all currently-running/verifying tasks.
@@ -180,6 +223,7 @@ tf_status_board() {
 
 # Mark a task failed and schedule a retry if attempts remain.
 # Enriches the error with classification from verify.sh.
+# Applies category-specific retry policies (configurable via retry_policies).
 tf_fail_task() {
   local id="$1" err="${2:-unknown error}"
   local attempts max cooldown
@@ -200,6 +244,43 @@ tf_fail_task() {
   summary="$(tf_get_error_summary "$id")"
   [[ "$category" == "none" ]] && category="unknown"
   local enriched_err="$err [$category] $summary"
+
+  # --- Category-specific early termination ---
+  # no_op: the LLM produced no changes. If this is the second consecutive no_op,
+  # permanently fail — the same prompt will likely produce the same result.
+  local no_op_max
+  no_op_max="$(tf_default no_op_max_attempts)"; no_op_max="${no_op_max:-2}"
+  if [[ "$category" == "no_op" && $attempts -ge $no_op_max ]]; then
+    local tmp now
+    tmp="$(mktemp)"; now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    jq --arg id "$id" --arg a "$attempts" --arg e "$enriched_err" \
+      --arg cat "$category" --arg sum "$summary" --arg now "$now" \
+      '.[$id].status="failed" | .[$id].attempts=($a|tonumber) | .[$id].last_error=$e
+       | .[$id].error_category=$cat | .[$id].error_summary=$sum
+       | .[$id].worker=null | .[$id].next_retry_at=null | .[$id].finished_at=$now' \
+       "$STATUS_JSON" > "$tmp"
+    tf_locked_mv "$tmp" "$STATUS_JSON"
+    tf_error "$id: FAILED permanently — $attempts consecutive no_op(s) (prompt likely cannot elicit changes)"
+    return 0
+  fi
+
+  # timeout: store a multiplier so next dispatch gets more time.
+  if [[ "$category" == "timeout" ]]; then
+    local multiplier
+    multiplier="$(tf_default timeout_retry_multiplier)"; multiplier="${multiplier:-1.5}"
+    local current_mult
+    current_mult="$(tf_status_get "$id" .timeout_multiplier)"
+    current_mult="${current_mult:-1}"
+    local new_mult
+    new_mult="$(echo "$current_mult * $multiplier" | bc -l 2>/dev/null)"
+    new_mult="${new_mult:-1.5}"
+    local tmp
+    tmp="$(mktemp)"
+    jq --arg id "$id" --arg m "$new_mult" '.[$id].timeout_multiplier = ($m|tonumber)' \
+      "$STATUS_JSON" > "$tmp"
+    tf_locked_mv "$tmp" "$STATUS_JSON"
+    tf_info "$id: timeout retry — dispatch timeout multiplier set to $new_mult"
+  fi
 
   if [[ $attempts -ge $max ]]; then
     local tmp now

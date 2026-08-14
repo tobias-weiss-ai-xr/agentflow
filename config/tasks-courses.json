@@ -1,0 +1,1036 @@
+{
+  "_meta": {
+    "project": "courses-microsoft-learning-material",
+    "plan": "courses/plan.md",
+    "task_count": 60,
+    "engines": [
+      "content-deep-dive",
+      "content-practice-questions"
+    ],
+    "total_exams": 30,
+    "deep_dive_tasks": 30,
+    "practice_question_tasks": 30
+  },
+  "tasks": [
+    {
+      "id": "DD-AB731",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: AI Transformation Leader (AB-731)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/ai/ai-transformation-leader-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/ai/ai-transformation-leader-deep-dive.md\" && head -1 \"content/microsoft/ai/ai-transformation-leader-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/ai/ai-transformation-leader-deep-dive.md\"); [ \"$LINES\" -ge 350 ] && grep -cF '```' \"content/microsoft/ai/ai-transformation-leader-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/ai/ai-transformation-leader-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/ai/ai-transformation-leader-deep-dive.md, has YAML frontmatter, at least 400 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "AB-731",
+      "exam_slug": "ai-transformation-leader",
+      "content_type": "deep-dive",
+      "min_lines": 350
+    },
+    {
+      "id": "PQ-AB731",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: AI Transformation Leader (AB-731)",
+      "deps": [
+        "DD-AB731"
+      ],
+      "scope": [
+        "content/microsoft/ai/ai-transformation-leader-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/ai/ai-transformation-leader-free-practice-questions.md\" && head -1 \"content/microsoft/ai/ai-transformation-leader-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/ai/ai-transformation-leader-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/ai/ai-transformation-leader-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/ai/ai-transformation-leader-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "AB-731",
+      "exam_slug": "ai-transformation-leader",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-AI900",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Azure AI Fundamentals (AI-900)",
+      "deps": [],
+      "scope": [
+        "content/azure/guides/azure-ai-fundamentals-deep-dive.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-ai-fundamentals-deep-dive.md\" && head -1 \"content/azure/guides/azure-ai-fundamentals-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/azure/guides/azure-ai-fundamentals-deep-dive.md\"); [ \"$LINES\" -ge 400 ] && grep -cF '```' \"content/azure/guides/azure-ai-fundamentals-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/azure/guides/azure-ai-fundamentals-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/azure/guides/azure-ai-fundamentals-deep-dive.md, has YAML frontmatter, at least 400 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "AI-900",
+      "exam_slug": "azure-ai-fundamentals",
+      "content_type": "deep-dive",
+      "min_lines": 400
+    },
+    {
+      "id": "PQ-AI900",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Azure AI Fundamentals (AI-900)",
+      "deps": [
+        "DD-AI900"
+      ],
+      "scope": [
+        "content/azure/guides/azure-ai-fundamentals-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-ai-fundamentals-free-practice-questions.md\" && head -1 \"content/azure/guides/azure-ai-fundamentals-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/azure/guides/azure-ai-fundamentals-free-practice-questions.md\" | awk '$1 >= 40 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/azure/guides/azure-ai-fundamentals-free-practice-questions.md\" | awk '$1 >= 40 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/azure/guides/azure-ai-fundamentals-free-practice-questions.md, has YAML frontmatter, at least 40 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "AI-900",
+      "exam_slug": "azure-ai-fundamentals",
+      "content_type": "practice-questions",
+      "min_questions": 40
+    },
+    {
+      "id": "DD-AI102",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Azure AI Engineer (AI-102)",
+      "deps": [],
+      "scope": [
+        "content/azure/guides/azure-ai-engineer-deep-dive.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-ai-engineer-deep-dive.md\" && head -1 \"content/azure/guides/azure-ai-engineer-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/azure/guides/azure-ai-engineer-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/azure/guides/azure-ai-engineer-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/azure/guides/azure-ai-engineer-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/azure/guides/azure-ai-engineer-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "AI-102",
+      "exam_slug": "azure-ai-engineer",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-AI102",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Azure AI Engineer (AI-102)",
+      "deps": [
+        "DD-AI102"
+      ],
+      "scope": [
+        "content/azure/guides/azure-ai-engineer-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-ai-engineer-free-practice-questions.md\" && head -1 \"content/azure/guides/azure-ai-engineer-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/azure/guides/azure-ai-engineer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/azure/guides/azure-ai-engineer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/azure/guides/azure-ai-engineer-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "AI-102",
+      "exam_slug": "azure-ai-engineer",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-AZ900",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Azure Fundamentals (AZ-900)",
+      "deps": [],
+      "scope": [
+        "content/azure/guides/azure-fundamentals-deep-dive.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-fundamentals-deep-dive.md\" && head -1 \"content/azure/guides/azure-fundamentals-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/azure/guides/azure-fundamentals-deep-dive.md\"); [ \"$LINES\" -ge 400 ] && grep -cF '```' \"content/azure/guides/azure-fundamentals-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/azure/guides/azure-fundamentals-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/azure/guides/azure-fundamentals-deep-dive.md, has YAML frontmatter, at least 400 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "AZ-900",
+      "exam_slug": "azure-fundamentals",
+      "content_type": "deep-dive",
+      "min_lines": 400
+    },
+    {
+      "id": "PQ-AZ900",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Azure Fundamentals (AZ-900) [REPLACE existing]",
+      "deps": [
+        "DD-AZ900"
+      ],
+      "scope": [
+        "content/azure/guides/azure-fundamentals-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-fundamentals-free-practice-questions.md\" && head -1 \"content/azure/guides/azure-fundamentals-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/azure/guides/azure-fundamentals-free-practice-questions.md\" | awk '$1 >= 40 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/azure/guides/azure-fundamentals-free-practice-questions.md\" | awk '$1 >= 40 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/azure/guides/azure-fundamentals-free-practice-questions.md, has YAML frontmatter, at least 40 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "AZ-900",
+      "exam_slug": "azure-fundamentals",
+      "content_type": "practice-questions",
+      "min_questions": 40
+    },
+    {
+      "id": "DD-AZ104",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Azure Administrator (AZ-104)",
+      "deps": [],
+      "scope": [
+        "content/azure/guides/azure-administrator-deep-dive.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-administrator-deep-dive.md\" && head -1 \"content/azure/guides/azure-administrator-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/azure/guides/azure-administrator-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/azure/guides/azure-administrator-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/azure/guides/azure-administrator-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/azure/guides/azure-administrator-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "AZ-104",
+      "exam_slug": "azure-administrator",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-AZ104",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Azure Administrator (AZ-104) [REPLACE existing]",
+      "deps": [
+        "DD-AZ104"
+      ],
+      "scope": [
+        "content/azure/guides/azure-administrator-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-administrator-free-practice-questions.md\" && head -1 \"content/azure/guides/azure-administrator-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/azure/guides/azure-administrator-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/azure/guides/azure-administrator-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/azure/guides/azure-administrator-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "AZ-104",
+      "exam_slug": "azure-administrator",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-AZ204",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Azure Developer (AZ-204)",
+      "deps": [],
+      "scope": [
+        "content/azure/guides/azure-developer-deep-dive.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-developer-deep-dive.md\" && head -1 \"content/azure/guides/azure-developer-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/azure/guides/azure-developer-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/azure/guides/azure-developer-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/azure/guides/azure-developer-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/azure/guides/azure-developer-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "AZ-204",
+      "exam_slug": "azure-developer",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-AZ204",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Azure Developer (AZ-204)",
+      "deps": [
+        "DD-AZ204"
+      ],
+      "scope": [
+        "content/azure/guides/azure-developer-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-developer-free-practice-questions.md\" && head -1 \"content/azure/guides/azure-developer-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/azure/guides/azure-developer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/azure/guides/azure-developer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/azure/guides/azure-developer-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "AZ-204",
+      "exam_slug": "azure-developer",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-AZ305",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Azure Solutions Architect (AZ-305)",
+      "deps": [],
+      "scope": [
+        "content/azure/guides/azure-solutions-architect-deep-dive.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-solutions-architect-deep-dive.md\" && head -1 \"content/azure/guides/azure-solutions-architect-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/azure/guides/azure-solutions-architect-deep-dive.md\"); [ \"$LINES\" -ge 800 ] && grep -cF '```' \"content/azure/guides/azure-solutions-architect-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/azure/guides/azure-solutions-architect-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/azure/guides/azure-solutions-architect-deep-dive.md, has YAML frontmatter, at least 800 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "AZ-305",
+      "exam_slug": "azure-solutions-architect",
+      "content_type": "deep-dive",
+      "min_lines": 800
+    },
+    {
+      "id": "PQ-AZ305",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Azure Solutions Architect (AZ-305) [REPLACE existing]",
+      "deps": [
+        "DD-AZ305"
+      ],
+      "scope": [
+        "content/azure/guides/azure-solutions-architect-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-solutions-architect-free-practice-questions.md\" && head -1 \"content/azure/guides/azure-solutions-architect-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/azure/guides/azure-solutions-architect-free-practice-questions.md\" | awk '$1 >= 60 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/azure/guides/azure-solutions-architect-free-practice-questions.md\" | awk '$1 >= 60 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/azure/guides/azure-solutions-architect-free-practice-questions.md, has YAML frontmatter, at least 60 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "AZ-305",
+      "exam_slug": "azure-solutions-architect",
+      "content_type": "practice-questions",
+      "min_questions": 60
+    },
+    {
+      "id": "DD-AZ400",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Azure DevOps Engineer (AZ-400)",
+      "deps": [],
+      "scope": [
+        "content/azure/guides/azure-devops-engineer-deep-dive.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-devops-engineer-deep-dive.md\" && head -1 \"content/azure/guides/azure-devops-engineer-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/azure/guides/azure-devops-engineer-deep-dive.md\"); [ \"$LINES\" -ge 800 ] && grep -cF '```' \"content/azure/guides/azure-devops-engineer-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/azure/guides/azure-devops-engineer-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/azure/guides/azure-devops-engineer-deep-dive.md, has YAML frontmatter, at least 800 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "AZ-400",
+      "exam_slug": "azure-devops-engineer",
+      "content_type": "deep-dive",
+      "min_lines": 800
+    },
+    {
+      "id": "PQ-AZ400",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Azure DevOps Engineer (AZ-400)",
+      "deps": [
+        "DD-AZ400"
+      ],
+      "scope": [
+        "content/azure/guides/azure-devops-engineer-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-devops-engineer-free-practice-questions.md\" && head -1 \"content/azure/guides/azure-devops-engineer-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/azure/guides/azure-devops-engineer-free-practice-questions.md\" | awk '$1 >= 60 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/azure/guides/azure-devops-engineer-free-practice-questions.md\" | awk '$1 >= 60 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/azure/guides/azure-devops-engineer-free-practice-questions.md, has YAML frontmatter, at least 60 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "AZ-400",
+      "exam_slug": "azure-devops-engineer",
+      "content_type": "practice-questions",
+      "min_questions": 60
+    },
+    {
+      "id": "DD-AZ500",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Azure Security Engineer (AZ-500)",
+      "deps": [],
+      "scope": [
+        "content/azure/guides/azure-security-engineer-deep-dive.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-security-engineer-deep-dive.md\" && head -1 \"content/azure/guides/azure-security-engineer-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/azure/guides/azure-security-engineer-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/azure/guides/azure-security-engineer-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/azure/guides/azure-security-engineer-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/azure/guides/azure-security-engineer-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "AZ-500",
+      "exam_slug": "azure-security-engineer",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-AZ500",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Azure Security Engineer (AZ-500)",
+      "deps": [
+        "DD-AZ500"
+      ],
+      "scope": [
+        "content/azure/guides/azure-security-engineer-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-security-engineer-free-practice-questions.md\" && head -1 \"content/azure/guides/azure-security-engineer-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/azure/guides/azure-security-engineer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/azure/guides/azure-security-engineer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/azure/guides/azure-security-engineer-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "AZ-500",
+      "exam_slug": "azure-security-engineer",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-AZ700",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Azure Network Engineer (AZ-700)",
+      "deps": [],
+      "scope": [
+        "content/azure/guides/azure-network-engineer-deep-dive.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-network-engineer-deep-dive.md\" && head -1 \"content/azure/guides/azure-network-engineer-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/azure/guides/azure-network-engineer-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/azure/guides/azure-network-engineer-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/azure/guides/azure-network-engineer-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/azure/guides/azure-network-engineer-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "AZ-700",
+      "exam_slug": "azure-network-engineer",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-AZ700",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Azure Network Engineer (AZ-700)",
+      "deps": [
+        "DD-AZ700"
+      ],
+      "scope": [
+        "content/azure/guides/azure-network-engineer-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-network-engineer-free-practice-questions.md\" && head -1 \"content/azure/guides/azure-network-engineer-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/azure/guides/azure-network-engineer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/azure/guides/azure-network-engineer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/azure/guides/azure-network-engineer-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "AZ-700",
+      "exam_slug": "azure-network-engineer",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-AZ801",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Windows Server Hybrid Administrator (AZ-801)",
+      "deps": [],
+      "scope": [
+        "content/azure/guides/windows-server-hybrid-administrator-deep-dive.md"
+      ],
+      "accept": "test -f \"content/azure/guides/windows-server-hybrid-administrator-deep-dive.md\" && head -1 \"content/azure/guides/windows-server-hybrid-administrator-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/azure/guides/windows-server-hybrid-administrator-deep-dive.md\"); [ \"$LINES\" -ge 800 ] && grep -cF '```' \"content/azure/guides/windows-server-hybrid-administrator-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/azure/guides/windows-server-hybrid-administrator-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/azure/guides/windows-server-hybrid-administrator-deep-dive.md, has YAML frontmatter, at least 800 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "AZ-801",
+      "exam_slug": "windows-server-hybrid-administrator",
+      "content_type": "deep-dive",
+      "min_lines": 800
+    },
+    {
+      "id": "PQ-AZ801",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Windows Server Hybrid Administrator (AZ-801)",
+      "deps": [
+        "DD-AZ801"
+      ],
+      "scope": [
+        "content/azure/guides/windows-server-hybrid-administrator-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/azure/guides/windows-server-hybrid-administrator-free-practice-questions.md\" && head -1 \"content/azure/guides/windows-server-hybrid-administrator-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/azure/guides/windows-server-hybrid-administrator-free-practice-questions.md\" | awk '$1 >= 60 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/azure/guides/windows-server-hybrid-administrator-free-practice-questions.md\" | awk '$1 >= 60 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/azure/guides/windows-server-hybrid-administrator-free-practice-questions.md, has YAML frontmatter, at least 60 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "AZ-801",
+      "exam_slug": "windows-server-hybrid-administrator",
+      "content_type": "practice-questions",
+      "min_questions": 60
+    },
+    {
+      "id": "DD-DP900",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Azure Data Fundamentals (DP-900)",
+      "deps": [],
+      "scope": [
+        "content/azure/guides/azure-data-fundamentals-deep-dive.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-data-fundamentals-deep-dive.md\" && head -1 \"content/azure/guides/azure-data-fundamentals-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/azure/guides/azure-data-fundamentals-deep-dive.md\"); [ \"$LINES\" -ge 400 ] && grep -cF '```' \"content/azure/guides/azure-data-fundamentals-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/azure/guides/azure-data-fundamentals-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/azure/guides/azure-data-fundamentals-deep-dive.md, has YAML frontmatter, at least 400 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "DP-900",
+      "exam_slug": "azure-data-fundamentals",
+      "content_type": "deep-dive",
+      "min_lines": 400
+    },
+    {
+      "id": "PQ-DP900",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Azure Data Fundamentals (DP-900)",
+      "deps": [
+        "DD-DP900"
+      ],
+      "scope": [
+        "content/azure/guides/azure-data-fundamentals-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-data-fundamentals-free-practice-questions.md\" && head -1 \"content/azure/guides/azure-data-fundamentals-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/azure/guides/azure-data-fundamentals-free-practice-questions.md\" | awk '$1 >= 40 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/azure/guides/azure-data-fundamentals-free-practice-questions.md\" | awk '$1 >= 40 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/azure/guides/azure-data-fundamentals-free-practice-questions.md, has YAML frontmatter, at least 40 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "DP-900",
+      "exam_slug": "azure-data-fundamentals",
+      "content_type": "practice-questions",
+      "min_questions": 40
+    },
+    {
+      "id": "DD-DP203",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Azure Data Engineer (DP-203)",
+      "deps": [],
+      "scope": [
+        "content/azure/guides/azure-data-engineer-deep-dive.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-data-engineer-deep-dive.md\" && head -1 \"content/azure/guides/azure-data-engineer-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/azure/guides/azure-data-engineer-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/azure/guides/azure-data-engineer-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/azure/guides/azure-data-engineer-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/azure/guides/azure-data-engineer-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "DP-203",
+      "exam_slug": "azure-data-engineer",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-DP203",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Azure Data Engineer (DP-203)",
+      "deps": [
+        "DD-DP203"
+      ],
+      "scope": [
+        "content/azure/guides/azure-data-engineer-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-data-engineer-free-practice-questions.md\" && head -1 \"content/azure/guides/azure-data-engineer-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/azure/guides/azure-data-engineer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/azure/guides/azure-data-engineer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/azure/guides/azure-data-engineer-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "DP-203",
+      "exam_slug": "azure-data-engineer",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-DP300",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Azure Database Administrator (DP-300)",
+      "deps": [],
+      "scope": [
+        "content/azure/guides/azure-database-administrator-deep-dive.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-database-administrator-deep-dive.md\" && head -1 \"content/azure/guides/azure-database-administrator-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/azure/guides/azure-database-administrator-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/azure/guides/azure-database-administrator-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/azure/guides/azure-database-administrator-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/azure/guides/azure-database-administrator-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "DP-300",
+      "exam_slug": "azure-database-administrator",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-DP300",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Azure Database Administrator (DP-300)",
+      "deps": [
+        "DD-DP300"
+      ],
+      "scope": [
+        "content/azure/guides/azure-database-administrator-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-database-administrator-free-practice-questions.md\" && head -1 \"content/azure/guides/azure-database-administrator-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/azure/guides/azure-database-administrator-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/azure/guides/azure-database-administrator-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/azure/guides/azure-database-administrator-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "DP-300",
+      "exam_slug": "azure-database-administrator",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-DP600",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Fabric Analytics Engineer (DP-600)",
+      "deps": [],
+      "scope": [
+        "content/azure/guides/fabric-analytics-engineer-deep-dive.md"
+      ],
+      "accept": "test -f \"content/azure/guides/fabric-analytics-engineer-deep-dive.md\" && head -1 \"content/azure/guides/fabric-analytics-engineer-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/azure/guides/fabric-analytics-engineer-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/azure/guides/fabric-analytics-engineer-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/azure/guides/fabric-analytics-engineer-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/azure/guides/fabric-analytics-engineer-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "DP-600",
+      "exam_slug": "fabric-analytics-engineer",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-DP600",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Fabric Analytics Engineer (DP-600)",
+      "deps": [
+        "DD-DP600"
+      ],
+      "scope": [
+        "content/azure/guides/fabric-analytics-engineer-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/azure/guides/fabric-analytics-engineer-free-practice-questions.md\" && head -1 \"content/azure/guides/fabric-analytics-engineer-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/azure/guides/fabric-analytics-engineer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/azure/guides/fabric-analytics-engineer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/azure/guides/fabric-analytics-engineer-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "DP-600",
+      "exam_slug": "fabric-analytics-engineer",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-MS900",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Microsoft 365 Fundamentals (MS-900)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/m365/microsoft-365-fundamentals-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/m365/microsoft-365-fundamentals-deep-dive.md\" && head -1 \"content/microsoft/m365/microsoft-365-fundamentals-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/m365/microsoft-365-fundamentals-deep-dive.md\"); [ \"$LINES\" -ge 400 ] && grep -cF '```' \"content/microsoft/m365/microsoft-365-fundamentals-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/m365/microsoft-365-fundamentals-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/m365/microsoft-365-fundamentals-deep-dive.md, has YAML frontmatter, at least 400 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "MS-900",
+      "exam_slug": "microsoft-365-fundamentals",
+      "content_type": "deep-dive",
+      "min_lines": 400
+    },
+    {
+      "id": "PQ-MS900",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Microsoft 365 Fundamentals (MS-900)",
+      "deps": [
+        "DD-MS900"
+      ],
+      "scope": [
+        "content/microsoft/m365/microsoft-365-fundamentals-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/m365/microsoft-365-fundamentals-free-practice-questions.md\" && head -1 \"content/microsoft/m365/microsoft-365-fundamentals-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/m365/microsoft-365-fundamentals-free-practice-questions.md\" | awk '$1 >= 40 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/m365/microsoft-365-fundamentals-free-practice-questions.md\" | awk '$1 >= 40 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/m365/microsoft-365-fundamentals-free-practice-questions.md, has YAML frontmatter, at least 40 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "MS-900",
+      "exam_slug": "microsoft-365-fundamentals",
+      "content_type": "practice-questions",
+      "min_questions": 40
+    },
+    {
+      "id": "DD-MS102",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Microsoft 365 Administrator (MS-102)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/m365/microsoft-365-administrator-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/m365/microsoft-365-administrator-deep-dive.md\" && head -1 \"content/microsoft/m365/microsoft-365-administrator-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/m365/microsoft-365-administrator-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/microsoft/m365/microsoft-365-administrator-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/m365/microsoft-365-administrator-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/m365/microsoft-365-administrator-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "MS-102",
+      "exam_slug": "microsoft-365-administrator",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-MS102",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Microsoft 365 Administrator (MS-102)",
+      "deps": [
+        "DD-MS102"
+      ],
+      "scope": [
+        "content/microsoft/m365/microsoft-365-administrator-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/m365/microsoft-365-administrator-free-practice-questions.md\" && head -1 \"content/microsoft/m365/microsoft-365-administrator-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/m365/microsoft-365-administrator-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/m365/microsoft-365-administrator-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/m365/microsoft-365-administrator-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "MS-102",
+      "exam_slug": "microsoft-365-administrator",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-MS700",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Managing Microsoft Teams (MS-700)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/m365/managing-microsoft-teams-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/m365/managing-microsoft-teams-deep-dive.md\" && head -1 \"content/microsoft/m365/managing-microsoft-teams-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/m365/managing-microsoft-teams-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/microsoft/m365/managing-microsoft-teams-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/m365/managing-microsoft-teams-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/m365/managing-microsoft-teams-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "MS-700",
+      "exam_slug": "managing-microsoft-teams",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-MS700",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Managing Microsoft Teams (MS-700)",
+      "deps": [
+        "DD-MS700"
+      ],
+      "scope": [
+        "content/microsoft/m365/managing-microsoft-teams-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/m365/managing-microsoft-teams-free-practice-questions.md\" && head -1 \"content/microsoft/m365/managing-microsoft-teams-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/m365/managing-microsoft-teams-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/m365/managing-microsoft-teams-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/m365/managing-microsoft-teams-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "MS-700",
+      "exam_slug": "managing-microsoft-teams",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-PL900",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Power Platform Fundamentals (PL-900)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/power-platform/power-platform-fundamentals-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/power-platform/power-platform-fundamentals-deep-dive.md\" && head -1 \"content/microsoft/power-platform/power-platform-fundamentals-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/power-platform/power-platform-fundamentals-deep-dive.md\"); [ \"$LINES\" -ge 400 ] && grep -cF '```' \"content/microsoft/power-platform/power-platform-fundamentals-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/power-platform/power-platform-fundamentals-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/power-platform/power-platform-fundamentals-deep-dive.md, has YAML frontmatter, at least 400 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "PL-900",
+      "exam_slug": "power-platform-fundamentals",
+      "content_type": "deep-dive",
+      "min_lines": 400
+    },
+    {
+      "id": "PQ-PL900",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Power Platform Fundamentals (PL-900)",
+      "deps": [
+        "DD-PL900"
+      ],
+      "scope": [
+        "content/microsoft/power-platform/power-platform-fundamentals-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/power-platform/power-platform-fundamentals-free-practice-questions.md\" && head -1 \"content/microsoft/power-platform/power-platform-fundamentals-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/power-platform/power-platform-fundamentals-free-practice-questions.md\" | awk '$1 >= 40 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/power-platform/power-platform-fundamentals-free-practice-questions.md\" | awk '$1 >= 40 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/power-platform/power-platform-fundamentals-free-practice-questions.md, has YAML frontmatter, at least 40 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "PL-900",
+      "exam_slug": "power-platform-fundamentals",
+      "content_type": "practice-questions",
+      "min_questions": 40
+    },
+    {
+      "id": "DD-PL200",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Power Platform Functional Consultant (PL-200)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/power-platform/power-platform-functional-consultant-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/power-platform/power-platform-functional-consultant-deep-dive.md\" && head -1 \"content/microsoft/power-platform/power-platform-functional-consultant-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/power-platform/power-platform-functional-consultant-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/microsoft/power-platform/power-platform-functional-consultant-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/power-platform/power-platform-functional-consultant-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/power-platform/power-platform-functional-consultant-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "PL-200",
+      "exam_slug": "power-platform-functional-consultant",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-PL200",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Power Platform Functional Consultant (PL-200)",
+      "deps": [
+        "DD-PL200"
+      ],
+      "scope": [
+        "content/microsoft/power-platform/power-platform-functional-consultant-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/power-platform/power-platform-functional-consultant-free-practice-questions.md\" && head -1 \"content/microsoft/power-platform/power-platform-functional-consultant-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/power-platform/power-platform-functional-consultant-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/power-platform/power-platform-functional-consultant-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/power-platform/power-platform-functional-consultant-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "PL-200",
+      "exam_slug": "power-platform-functional-consultant",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-PL400",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Power Platform Developer (PL-400)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/power-platform/power-platform-developer-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/power-platform/power-platform-developer-deep-dive.md\" && head -1 \"content/microsoft/power-platform/power-platform-developer-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/power-platform/power-platform-developer-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/microsoft/power-platform/power-platform-developer-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/power-platform/power-platform-developer-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/power-platform/power-platform-developer-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "PL-400",
+      "exam_slug": "power-platform-developer",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-PL400",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Power Platform Developer (PL-400)",
+      "deps": [
+        "DD-PL400"
+      ],
+      "scope": [
+        "content/microsoft/power-platform/power-platform-developer-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/power-platform/power-platform-developer-free-practice-questions.md\" && head -1 \"content/microsoft/power-platform/power-platform-developer-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/power-platform/power-platform-developer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/power-platform/power-platform-developer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/power-platform/power-platform-developer-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "PL-400",
+      "exam_slug": "power-platform-developer",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-PL600",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Power Platform Solution Architect (PL-600)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/power-platform/power-platform-solution-architect-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/power-platform/power-platform-solution-architect-deep-dive.md\" && head -1 \"content/microsoft/power-platform/power-platform-solution-architect-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/power-platform/power-platform-solution-architect-deep-dive.md\"); [ \"$LINES\" -ge 800 ] && grep -cF '```' \"content/microsoft/power-platform/power-platform-solution-architect-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/power-platform/power-platform-solution-architect-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/power-platform/power-platform-solution-architect-deep-dive.md, has YAML frontmatter, at least 800 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "PL-600",
+      "exam_slug": "power-platform-solution-architect",
+      "content_type": "deep-dive",
+      "min_lines": 800
+    },
+    {
+      "id": "PQ-PL600",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Power Platform Solution Architect (PL-600)",
+      "deps": [
+        "DD-PL600"
+      ],
+      "scope": [
+        "content/microsoft/power-platform/power-platform-solution-architect-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/power-platform/power-platform-solution-architect-free-practice-questions.md\" && head -1 \"content/microsoft/power-platform/power-platform-solution-architect-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/power-platform/power-platform-solution-architect-free-practice-questions.md\" | awk '$1 >= 60 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/power-platform/power-platform-solution-architect-free-practice-questions.md\" | awk '$1 >= 60 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/power-platform/power-platform-solution-architect-free-practice-questions.md, has YAML frontmatter, at least 60 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "PL-600",
+      "exam_slug": "power-platform-solution-architect",
+      "content_type": "practice-questions",
+      "min_questions": 60
+    },
+    {
+      "id": "DD-SC900",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Security, Compliance & Identity Fundamentals (SC-900)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/security/security-compliance-identity-fundamentals-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/security/security-compliance-identity-fundamentals-deep-dive.md\" && head -1 \"content/microsoft/security/security-compliance-identity-fundamentals-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/security/security-compliance-identity-fundamentals-deep-dive.md\"); [ \"$LINES\" -ge 400 ] && grep -cF '```' \"content/microsoft/security/security-compliance-identity-fundamentals-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/security/security-compliance-identity-fundamentals-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/security/security-compliance-identity-fundamentals-deep-dive.md, has YAML frontmatter, at least 400 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "SC-900",
+      "exam_slug": "security-compliance-identity-fundamentals",
+      "content_type": "deep-dive",
+      "min_lines": 400
+    },
+    {
+      "id": "PQ-SC900",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Security, Compliance & Identity Fundamentals (SC-900)",
+      "deps": [
+        "DD-SC900"
+      ],
+      "scope": [
+        "content/microsoft/security/security-compliance-identity-fundamentals-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/security/security-compliance-identity-fundamentals-free-practice-questions.md\" && head -1 \"content/microsoft/security/security-compliance-identity-fundamentals-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/security/security-compliance-identity-fundamentals-free-practice-questions.md\" | awk '$1 >= 40 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/security/security-compliance-identity-fundamentals-free-practice-questions.md\" | awk '$1 >= 40 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/security/security-compliance-identity-fundamentals-free-practice-questions.md, has YAML frontmatter, at least 40 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "SC-900",
+      "exam_slug": "security-compliance-identity-fundamentals",
+      "content_type": "practice-questions",
+      "min_questions": 40
+    },
+    {
+      "id": "DD-SC300",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Microsoft Identity & Access Administrator (SC-300)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/security/microsoft-identity-access-administrator-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/security/microsoft-identity-access-administrator-deep-dive.md\" && head -1 \"content/microsoft/security/microsoft-identity-access-administrator-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/security/microsoft-identity-access-administrator-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/microsoft/security/microsoft-identity-access-administrator-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/security/microsoft-identity-access-administrator-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/security/microsoft-identity-access-administrator-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "SC-300",
+      "exam_slug": "microsoft-identity-access-administrator",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-SC300",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Microsoft Identity & Access Administrator (SC-300)",
+      "deps": [
+        "DD-SC300"
+      ],
+      "scope": [
+        "content/microsoft/security/microsoft-identity-access-administrator-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/security/microsoft-identity-access-administrator-free-practice-questions.md\" && head -1 \"content/microsoft/security/microsoft-identity-access-administrator-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/security/microsoft-identity-access-administrator-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/security/microsoft-identity-access-administrator-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/security/microsoft-identity-access-administrator-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "SC-300",
+      "exam_slug": "microsoft-identity-access-administrator",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-SC400",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Information Protection & Compliance Admin (SC-400)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/security/information-protection-compliance-admin-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/security/information-protection-compliance-admin-deep-dive.md\" && head -1 \"content/microsoft/security/information-protection-compliance-admin-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/security/information-protection-compliance-admin-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/microsoft/security/information-protection-compliance-admin-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/security/information-protection-compliance-admin-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/security/information-protection-compliance-admin-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "SC-400",
+      "exam_slug": "information-protection-compliance-admin",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-SC400",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Information Protection & Compliance Admin (SC-400)",
+      "deps": [
+        "DD-SC400"
+      ],
+      "scope": [
+        "content/microsoft/security/information-protection-compliance-admin-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/security/information-protection-compliance-admin-free-practice-questions.md\" && head -1 \"content/microsoft/security/information-protection-compliance-admin-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/security/information-protection-compliance-admin-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/security/information-protection-compliance-admin-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/security/information-protection-compliance-admin-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "SC-400",
+      "exam_slug": "information-protection-compliance-admin",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-MB210",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Dynamics 365 Sales (MB-210)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/dynamics/dynamics-365-sales-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/dynamics/dynamics-365-sales-deep-dive.md\" && head -1 \"content/microsoft/dynamics/dynamics-365-sales-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/dynamics/dynamics-365-sales-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/microsoft/dynamics/dynamics-365-sales-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/dynamics/dynamics-365-sales-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/dynamics/dynamics-365-sales-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "MB-210",
+      "exam_slug": "dynamics-365-sales",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-MB210",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Dynamics 365 Sales (MB-210)",
+      "deps": [
+        "DD-MB210"
+      ],
+      "scope": [
+        "content/microsoft/dynamics/dynamics-365-sales-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/dynamics/dynamics-365-sales-free-practice-questions.md\" && head -1 \"content/microsoft/dynamics/dynamics-365-sales-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/dynamics/dynamics-365-sales-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/dynamics/dynamics-365-sales-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/dynamics/dynamics-365-sales-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "MB-210",
+      "exam_slug": "dynamics-365-sales",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-MB230",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Dynamics 365 Customer Service (MB-230)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/dynamics/dynamics-365-customer-service-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/dynamics/dynamics-365-customer-service-deep-dive.md\" && head -1 \"content/microsoft/dynamics/dynamics-365-customer-service-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/dynamics/dynamics-365-customer-service-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/microsoft/dynamics/dynamics-365-customer-service-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/dynamics/dynamics-365-customer-service-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/dynamics/dynamics-365-customer-service-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "MB-230",
+      "exam_slug": "dynamics-365-customer-service",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-MB230",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Dynamics 365 Customer Service (MB-230)",
+      "deps": [
+        "DD-MB230"
+      ],
+      "scope": [
+        "content/microsoft/dynamics/dynamics-365-customer-service-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/dynamics/dynamics-365-customer-service-free-practice-questions.md\" && head -1 \"content/microsoft/dynamics/dynamics-365-customer-service-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/dynamics/dynamics-365-customer-service-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/dynamics/dynamics-365-customer-service-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/dynamics/dynamics-365-customer-service-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "MB-230",
+      "exam_slug": "dynamics-365-customer-service",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-MB335",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Dynamics 365 Supply Chain Management (MB-335)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/dynamics/dynamics-365-supply-chain-management-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/dynamics/dynamics-365-supply-chain-management-deep-dive.md\" && head -1 \"content/microsoft/dynamics/dynamics-365-supply-chain-management-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/dynamics/dynamics-365-supply-chain-management-deep-dive.md\"); [ \"$LINES\" -ge 800 ] && grep -cF '```' \"content/microsoft/dynamics/dynamics-365-supply-chain-management-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/dynamics/dynamics-365-supply-chain-management-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/dynamics/dynamics-365-supply-chain-management-deep-dive.md, has YAML frontmatter, at least 800 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "MB-335",
+      "exam_slug": "dynamics-365-supply-chain-management",
+      "content_type": "deep-dive",
+      "min_lines": 800
+    },
+    {
+      "id": "PQ-MB335",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Dynamics 365 Supply Chain Management (MB-335)",
+      "deps": [
+        "DD-MB335"
+      ],
+      "scope": [
+        "content/microsoft/dynamics/dynamics-365-supply-chain-management-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/dynamics/dynamics-365-supply-chain-management-free-practice-questions.md\" && head -1 \"content/microsoft/dynamics/dynamics-365-supply-chain-management-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/dynamics/dynamics-365-supply-chain-management-free-practice-questions.md\" | awk '$1 >= 60 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/dynamics/dynamics-365-supply-chain-management-free-practice-questions.md\" | awk '$1 >= 60 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/dynamics/dynamics-365-supply-chain-management-free-practice-questions.md, has YAML frontmatter, at least 60 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "MB-335",
+      "exam_slug": "dynamics-365-supply-chain-management",
+      "content_type": "practice-questions",
+      "min_questions": 60
+    },
+    {
+      "id": "DD-MB500",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Dynamics 365 Finance & Operations Developer (MB-500)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/dynamics/dynamics-365-developer-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/dynamics/dynamics-365-developer-deep-dive.md\" && head -1 \"content/microsoft/dynamics/dynamics-365-developer-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/dynamics/dynamics-365-developer-deep-dive.md\"); [ \"$LINES\" -ge 600 ] && grep -cF '```' \"content/microsoft/dynamics/dynamics-365-developer-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/dynamics/dynamics-365-developer-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/dynamics/dynamics-365-developer-deep-dive.md, has YAML frontmatter, at least 600 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "MB-500",
+      "exam_slug": "dynamics-365-developer",
+      "content_type": "deep-dive",
+      "min_lines": 600
+    },
+    {
+      "id": "PQ-MB500",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Dynamics 365 Finance & Operations Developer (MB-500)",
+      "deps": [
+        "DD-MB500"
+      ],
+      "scope": [
+        "content/microsoft/dynamics/dynamics-365-developer-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/dynamics/dynamics-365-developer-free-practice-questions.md\" && head -1 \"content/microsoft/dynamics/dynamics-365-developer-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/dynamics/dynamics-365-developer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/dynamics/dynamics-365-developer-free-practice-questions.md\" | awk '$1 >= 50 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/dynamics/dynamics-365-developer-free-practice-questions.md, has YAML frontmatter, at least 50 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "MB-500",
+      "exam_slug": "dynamics-365-developer",
+      "content_type": "practice-questions",
+      "min_questions": 50
+    },
+    {
+      "id": "DD-MB910",
+      "engine": "content-deep-dive",
+      "title": "Deep dive: Dynamics 365 Fundamentals (CRM) (MB-910)",
+      "deps": [],
+      "scope": [
+        "content/microsoft/dynamics/dynamics-365-fundamentals-crm-deep-dive.md"
+      ],
+      "accept": "test -f \"content/microsoft/dynamics/dynamics-365-fundamentals-crm-deep-dive.md\" && head -1 \"content/microsoft/dynamics/dynamics-365-fundamentals-crm-deep-dive.md\" | grep -q \"^---\" && LINES=$(wc -l < \"content/microsoft/dynamics/dynamics-365-fundamentals-crm-deep-dive.md\"); [ \"$LINES\" -ge 400 ] && grep -cF '```' \"content/microsoft/dynamics/dynamics-365-fundamentals-crm-deep-dive.md\" | awk '$1 >= 15 {exit 0} {exit 1}' && grep -c \"^## \" \"content/microsoft/dynamics/dynamics-365-fundamentals-crm-deep-dive.md\" | awk '$1 >= 5 {exit 0} {exit 1}'",
+      "acceptance_prose": "Deep dive file exists at content/microsoft/dynamics/dynamics-365-fundamentals-crm-deep-dive.md, has YAML frontmatter, at least 400 lines, 15+ code/example blocks, 5+ H2 sections",
+      "manual": false,
+      "exam_code": "MB-910",
+      "exam_slug": "dynamics-365-fundamentals-crm",
+      "content_type": "deep-dive",
+      "min_lines": 400
+    },
+    {
+      "id": "PQ-MB910",
+      "engine": "content-practice-questions",
+      "title": "Practice questions: Dynamics 365 Fundamentals (CRM) (MB-910)",
+      "deps": [
+        "DD-MB910"
+      ],
+      "scope": [
+        "content/microsoft/dynamics/dynamics-365-fundamentals-crm-free-practice-questions.md"
+      ],
+      "accept": "test -f \"content/microsoft/dynamics/dynamics-365-fundamentals-crm-free-practice-questions.md\" && head -1 \"content/microsoft/dynamics/dynamics-365-fundamentals-crm-free-practice-questions.md\" | grep -q \"^---\" && grep -c \"### Question\" \"content/microsoft/dynamics/dynamics-365-fundamentals-crm-free-practice-questions.md\" | awk '$1 >= 40 {exit 0} {exit 1}' && grep -c \"<details>\" \"content/microsoft/dynamics/dynamics-365-fundamentals-crm-free-practice-questions.md\" | awk '$1 >= 40 {exit 0} {exit 1}'",
+      "acceptance_prose": "Practice questions file exists at content/microsoft/dynamics/dynamics-365-fundamentals-crm-free-practice-questions.md, has YAML frontmatter, at least 40 questions with <details> answer toggles",
+      "manual": false,
+      "exam_code": "MB-910",
+      "exam_slug": "dynamics-365-fundamentals-crm",
+      "content_type": "practice-questions",
+      "min_questions": 40
+    }
+  ]
+}

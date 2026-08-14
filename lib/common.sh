@@ -9,6 +9,7 @@ set -uo pipefail
 # ---------------------------------------------------------------------------
 TF_DIR="${TF_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 TF_CONFIG_DIR="${TF_CONFIG_DIR:-$TF_DIR/config}"
+TF_LIB_DIR="${TF_LIB_DIR:-$TF_DIR/lib}"
 TF_STATE_DIR="${TF_STATE_DIR:-$TF_DIR/state}"
 TF_LOG_DIR="${TF_LOG_DIR:-$TF_STATE_DIR/logs}"
 TF_PROMPT_DIR="${TF_PROMPT_DIR:-$TF_DIR/prompts}"
@@ -22,10 +23,11 @@ TF_REPO_DIR="${TF_REPO_DIR:-$(cd "$TF_DIR/../.." && pwd)}"
 TF_WORKTREE_ROOT="${TF_WORKTREE_ROOT:-$TF_REPO_DIR/.tf-worktrees}"
 
 # Config files
-WORKERS_JSON="$TF_CONFIG_DIR/workers.json"
-TASKS_JSON="$TF_CONFIG_DIR/tasks.json"
+WORKERS_JSON="${TF_WORKERS_JSON:-$TF_CONFIG_DIR/workers.json}"
+TASKS_JSON="${TF_TASKS_JSON:-$TF_CONFIG_DIR/tasks.json}"
 STATUS_JSON="${STATUS_JSON:-$TF_STATE_DIR/task-status.json}"
 RUNSTATE_JSON="$TF_STATE_DIR/run-state.json"   # pid/workers-in-use, transient
+REPOS_JSON="${TF_REPOS_JSON:-$TF_CONFIG_DIR/repos.json}"
 
 # Branch prefix for agent work
 TF_BRANCH_PREFIX="${TF_BRANCH_PREFIX:-tf}"
@@ -105,6 +107,72 @@ tf_worker_names() {
   jq -r '.workers[] | select(.enabled==true) | .name' "$WORKERS_JSON"
 }
 wo_worker_names() { tf_worker_names "$@"; }
+
+# Task model tier (booster|fast|standard|deep), default "standard"
+tf_task_tier() {
+  local t
+  t="$(tf_task_field "$1" .model_tier 2>/dev/null || echo '')"
+  [[ "$t" == "null" || -z "$t" ]] && echo "standard" || echo "$t"
+}
+
+# Worker tier capability. If worker has no "tiers" array, it handles ALL tiers.
+# tf_worker_tiers <name> → prints space-separated tier list (default "booster fast standard deep")
+tf_worker_tiers() {
+  local tiers
+  tiers="$(tf_worker_field "$1" '.tiers // [] | .[]' 2>/dev/null)"
+  if [[ -n "$tiers" ]]; then
+    echo "$tiers"
+  else
+    echo "booster fast standard deep"
+  fi
+}
+
+# tf_worker_can_tier <name> <tier> → 0 if capable, 1 otherwise
+tf_worker_can_tier() {
+  tf_worker_tiers "$1" | grep -qw -- "$2"
+}
+
+# ---------------------------------------------------------------------------
+# Multi-repo support helpers
+# ---------------------------------------------------------------------------
+
+# tf_task_repo <task_id> → prints repo name for task (from 'repo' field,
+# default "" for main repo). Empty string means use TF_REPO_DIR.
+tf_task_repo() {
+  tf_task_field "$1" '.repo // ""' 2>/dev/null | tr -d '"'
+}
+
+# tf_repo_dir <repo_name> → prints the absolute path for a named repo.
+# repo_name="" returns TF_REPO_DIR (default/main repo). Uses REPOS_JSON config:
+#   {"repos": {"main": "/path/to/main", "docs": "/path/to/docs"}}
+tf_repo_dir() {
+  local repo_name="$1"
+  if [[ -z "$repo_name" ]]; then
+    echo "$TF_REPO_DIR"
+    return
+  fi
+  if [[ -f "$REPOS_JSON" ]]; then
+    local dir
+    dir="$(jq -r --arg rn "$repo_name" '.repos[$rn] // empty' "$REPOS_JSON" 2>/dev/null)"
+    if [[ -n "$dir" && -d "$dir" ]]; then
+      echo "$dir"
+      return
+    fi
+  fi
+  # Fallback: repo name is interpreted as a relative path from TF_DIR
+  if [[ -d "$TF_DIR/$repo_name" ]]; then
+    echo "$(cd "$TF_DIR/$repo_name" && pwd)"
+    return
+  fi
+  # Last fallback: repo name is an absolute path
+  if [[ -d "$repo_name" ]]; then
+    echo "$(cd "$repo_name" && pwd)"
+    return
+  fi
+  # Not found
+  tf_error "repo '$repo_name' not found in repos.json and not a valid path"
+  echo "$TF_REPO_DIR"
+}
 
 # Default config value
 tf_default() {

@@ -3,3 +3,9 @@ state/
 
 # Git worktrees (isolated agent checkouts)
 .tf-worktrees/
+
+# Python venv and bytecode
+research/.venv/
+research/**/__pycache__/
+research/data/seen.json
+research/data/run.log

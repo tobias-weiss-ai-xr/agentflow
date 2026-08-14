@@ -1,0 +1,310 @@
+{
+  "tasks": [
+    {
+      "id": "SC-AZ900",
+      "title": "Scenario challenges: Azure Fundamentals (AZ-900)",
+      "category": "azure",
+      "content_type": "scenario-challenges",
+      "exam_code": "AZ-900",
+      "exam_slug": "azure-fundamentals",
+      "min_lines": 400,
+      "min_challenges": 15,
+      "output": "content/azure/guides/azure-fundamentals-scenario-challenges.md",
+      "scope": [
+        "content/azure/guides/azure-fundamentals-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-fundamentals-scenario-challenges.md\" && head -1 \"content/azure/guides/azure-fundamentals-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/azure/guides/azure-fundamentals-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-AZ104",
+      "title": "Scenario challenges: Azure Administrator (AZ-104)",
+      "category": "azure",
+      "content_type": "scenario-challenges",
+      "exam_code": "AZ-104",
+      "exam_slug": "azure-administrator",
+      "min_lines": 400,
+      "min_challenges": 20,
+      "output": "content/azure/guides/azure-administrator-scenario-challenges.md",
+      "scope": [
+        "content/azure/guides/azure-administrator-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-administrator-scenario-challenges.md\" && head -1 \"content/azure/guides/azure-administrator-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/azure/guides/azure-administrator-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-AZ305",
+      "title": "Scenario challenges: Azure Solutions Architect (AZ-305)",
+      "category": "azure",
+      "content_type": "scenario-challenges",
+      "exam_code": "AZ-305",
+      "exam_slug": "azure-solutions-architect",
+      "min_lines": 400,
+      "min_challenges": 20,
+      "output": "content/azure/guides/azure-solutions-architect-scenario-challenges.md",
+      "scope": [
+        "content/azure/guides/azure-solutions-architect-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/azure/guides/azure-solutions-architect-scenario-challenges.md\" && head -1 \"content/azure/guides/azure-solutions-architect-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/azure/guides/azure-solutions-architect-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-LPIC1",
+      "title": "Scenario challenges: LPIC-1 Linux Administrator (LPIC-1)",
+      "category": "lpi",
+      "content_type": "scenario-challenges",
+      "exam_code": "LPIC-1",
+      "exam_slug": "lpic-1",
+      "min_lines": 400,
+      "min_challenges": 20,
+      "output": "content/lpi/guides/lpic-1-scenario-challenges.md",
+      "scope": [
+        "content/lpi/guides/lpic-1-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/lpi/guides/lpic-1-scenario-challenges.md\" && head -1 \"content/lpi/guides/lpic-1-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/lpi/guides/lpic-1-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-LPIC2",
+      "title": "Scenario challenges: LPIC-2 Linux Engineer (LPIC-2)",
+      "category": "lpi",
+      "content_type": "scenario-challenges",
+      "exam_code": "LPIC-2",
+      "exam_slug": "lpic-2",
+      "min_lines": 400,
+      "min_challenges": 20,
+      "output": "content/lpi/guides/lpic-2-scenario-challenges.md",
+      "scope": [
+        "content/lpi/guides/lpic-2-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/lpi/guides/lpic-2-scenario-challenges.md\" && head -1 \"content/lpi/guides/lpic-2-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/lpi/guides/lpic-2-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-SECPLUS",
+      "title": "Scenario challenges: Security+ (SY0-701)",
+      "category": "comptia",
+      "content_type": "scenario-challenges",
+      "exam_code": "SY0-701",
+      "exam_slug": "comptia-security-plus",
+      "min_lines": 400,
+      "min_challenges": 20,
+      "output": "content/comptia/guides/comptia-security-plus-scenario-challenges.md",
+      "scope": [
+        "content/comptia/guides/comptia-security-plus-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/comptia/guides/comptia-security-plus-scenario-challenges.md\" && head -1 \"content/comptia/guides/comptia-security-plus-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/comptia/guides/comptia-security-plus-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-NETPLUS",
+      "title": "Scenario challenges: Network+ (N10-009)",
+      "category": "comptia",
+      "content_type": "scenario-challenges",
+      "exam_code": "N10-009",
+      "exam_slug": "comptia-network-plus",
+      "min_lines": 400,
+      "min_challenges": 20,
+      "output": "content/comptia/guides/comptia-network-plus-scenario-challenges.md",
+      "scope": [
+        "content/comptia/guides/comptia-network-plus-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/comptia/guides/comptia-network-plus-scenario-challenges.md\" && head -1 \"content/comptia/guides/comptia-network-plus-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/comptia/guides/comptia-network-plus-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-AWSACP",
+      "title": "Scenario challenges: AWS Cloud Practitioner (CLF-C02)",
+      "category": "aws",
+      "content_type": "scenario-challenges",
+      "exam_code": "CLF-C02",
+      "exam_slug": "aws-cloud-practitioner",
+      "min_lines": 400,
+      "min_challenges": 15,
+      "output": "content/aws/guides/aws-cloud-practitioner-scenario-challenges.md",
+      "scope": [
+        "content/aws/guides/aws-cloud-practitioner-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/aws/guides/aws-cloud-practitioner-scenario-challenges.md\" && head -1 \"content/aws/guides/aws-cloud-practitioner-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/aws/guides/aws-cloud-practitioner-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-AWSSAA",
+      "title": "Scenario challenges: AWS Solutions Architect (SAA-C03)",
+      "category": "aws",
+      "content_type": "scenario-challenges",
+      "exam_code": "SAA-C03",
+      "exam_slug": "aws-solutions-architect",
+      "min_lines": 400,
+      "min_challenges": 20,
+      "output": "content/aws/guides/aws-solutions-architect-scenario-challenges.md",
+      "scope": [
+        "content/aws/guides/aws-solutions-architect-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/aws/guides/aws-solutions-architect-scenario-challenges.md\" && head -1 \"content/aws/guides/aws-solutions-architect-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/aws/guides/aws-solutions-architect-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-CKA",
+      "title": "Scenario challenges: Kubernetes Administrator (CKA)",
+      "category": "kubernetes",
+      "content_type": "scenario-challenges",
+      "exam_code": "CKA",
+      "exam_slug": "cka",
+      "min_lines": 400,
+      "min_challenges": 20,
+      "output": "content/kubernetes/guides/cka-scenario-challenges.md",
+      "scope": [
+        "content/kubernetes/guides/cka-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/kubernetes/guides/cka-scenario-challenges.md\" && head -1 \"content/kubernetes/guides/cka-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/kubernetes/guides/cka-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-CKAD",
+      "title": "Scenario challenges: Kubernetes Developer (CKAD)",
+      "category": "kubernetes",
+      "content_type": "scenario-challenges",
+      "exam_code": "CKAD",
+      "exam_slug": "ckad",
+      "min_lines": 400,
+      "min_challenges": 20,
+      "output": "content/kubernetes/guides/ckad-scenario-challenges.md",
+      "scope": [
+        "content/kubernetes/guides/ckad-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/kubernetes/guides/ckad-scenario-challenges.md\" && head -1 \"content/kubernetes/guides/ckad-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/kubernetes/guides/ckad-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-ACE",
+      "title": "Scenario challenges: Associate Cloud Engineer (ACE)",
+      "category": "gcp",
+      "content_type": "scenario-challenges",
+      "exam_code": "ACE",
+      "exam_slug": "associate-cloud-engineer",
+      "min_lines": 400,
+      "min_challenges": 20,
+      "output": "content/gcp/guides/associate-cloud-engineer-scenario-challenges.md",
+      "scope": [
+        "content/gcp/guides/associate-cloud-engineer-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/gcp/guides/associate-cloud-engineer-scenario-challenges.md\" && head -1 \"content/gcp/guides/associate-cloud-engineer-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/gcp/guides/associate-cloud-engineer-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-PCAP",
+      "title": "Scenario challenges: Python PCAP (PCAP)",
+      "category": "python",
+      "content_type": "scenario-challenges",
+      "exam_code": "PCAP",
+      "exam_slug": "pcap",
+      "min_lines": 400,
+      "min_challenges": 15,
+      "output": "content/python/guides/pcap-scenario-challenges.md",
+      "scope": [
+        "content/python/guides/pcap-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/python/guides/pcap-scenario-challenges.md\" && head -1 \"content/python/guides/pcap-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/python/guides/pcap-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-DCA",
+      "title": "Scenario challenges: Docker Certified Associate (DCA)",
+      "category": "docker",
+      "content_type": "scenario-challenges",
+      "exam_code": "DCA",
+      "exam_slug": "docker-certified-associate",
+      "min_lines": 400,
+      "min_challenges": 15,
+      "output": "content/docker/guides/docker-certified-associate-scenario-challenges.md",
+      "scope": [
+        "content/docker/guides/docker-certified-associate-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/docker/guides/docker-certified-associate-scenario-challenges.md\" && head -1 \"content/docker/guides/docker-certified-associate-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/docker/guides/docker-certified-associate-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-CCNA",
+      "title": "Scenario challenges: CCNA (CCNA)",
+      "category": "cisco",
+      "content_type": "scenario-challenges",
+      "exam_code": "CCNA",
+      "exam_slug": "ccna",
+      "min_lines": 400,
+      "min_challenges": 20,
+      "output": "content/cisco/guides/ccna-scenario-challenges.md",
+      "scope": [
+        "content/cisco/guides/ccna-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/cisco/guides/ccna-scenario-challenges.md\" && head -1 \"content/cisco/guides/ccna-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/cisco/guides/ccna-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-TA",
+      "title": "Scenario challenges: Terraform Associate (TA-002)",
+      "category": "hashicorp",
+      "content_type": "scenario-challenges",
+      "exam_code": "TA-002",
+      "exam_slug": "terraform-associate",
+      "min_lines": 400,
+      "min_challenges": 15,
+      "output": "content/hashicorp/guides/terraform-associate-scenario-challenges.md",
+      "scope": [
+        "content/hashicorp/guides/terraform-associate-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/hashicorp/guides/terraform-associate-scenario-challenges.md\" && head -1 \"content/hashicorp/guides/terraform-associate-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/hashicorp/guides/terraform-associate-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    },
+    {
+      "id": "SC-CISSP",
+      "title": "Scenario challenges: CISSP (CISSP)",
+      "category": "isc2",
+      "content_type": "scenario-challenges",
+      "exam_code": "CISSP",
+      "exam_slug": "cissp",
+      "min_lines": 400,
+      "min_challenges": 20,
+      "output": "content/isc2/guides/cissp-scenario-challenges.md",
+      "scope": [
+        "content/isc2/guides/cissp-scenario-challenges.md"
+      ],
+      "accept": "test -f \"content/isc2/guides/cissp-scenario-challenges.md\" && head -1 \"content/isc2/guides/cissp-scenario-challenges.md\" | grep -q \"^---\" && grep -c \"### Challenge\" \"content/isc2/guides/cissp-scenario-challenges.md\" | awk '$1 >= {s[\"min_challenges\"]} {{exit 0}} {{exit 1}}'",
+      "deps": [],
+      "gate_timeout": 120,
+      "engine": "content-scenario-challenges"
+    }
+  ]
+}
