@@ -157,6 +157,11 @@ tf_dispatch_one() {
   fi
   log="$TF_LOG_DIR/$id.dispatch.log"
 
+  # Acceptance gate command — needed later for the receipt ledger and
+  # cross-vendor verify (dispatch.sh:266). `set -u` crashes if unset.
+  local accept
+  accept="$(tf_task_field "$id" .accept)"
+
   local branch="$TF_BRANCH_PREFIX/$id"
   local tmp
   tmp="$(mktemp)"
