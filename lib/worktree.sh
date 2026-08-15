@@ -40,7 +40,7 @@ tf_worktree_ensure_gitignore() {
 #   of resetting it to the base — used when retrying a merge-conflict failure so
 #   the agent resumes its own work rather than starting from scratch.
 tf_worktree_create() {
-  local id="$1" base="${2:-main}" keep=0
+  local id="$1" base="${2:-${TF_BASE_BRANCH}}" keep=0
   [[ "${3:-}" == "--keep-branch" ]] && keep=1
   local branch="$TF_BRANCH_PREFIX/$id"
   local wt="$TF_WORKTREE_ROOT/$id"
@@ -60,7 +60,7 @@ tf_worktree_create() {
 
   # Update base ref so we branch from the latest merged state.
   (cd "$repo_dir" && git fetch --quiet github 2>/dev/null || true)
-  (cd "$repo_dir" && git rev-parse --verify --quiet "$base" >/dev/null) || base="main"
+  (cd "$repo_dir" && git rev-parse --verify --quiet "$base" >/dev/null) || base="${TF_BASE_BRANCH}"
 
   if ! (cd "$repo_dir" && git rev-parse --verify --quiet "$branch" >/dev/null); then
     (cd "$repo_dir" && git worktree add -b "$branch" "$wt" "$base" >/dev/null 2>&1) || {
@@ -89,6 +89,14 @@ tf_worktree_create() {
       return 1
     }
   fi
+  # Symlink node_modules so acceptance gates (npx jest / npx openspec) work
+  # inside the isolated worktree without a full npm install. The chemie repo
+  # keeps node_modules at the repo root; a symlink is sufficient and cheap.
+  if [[ -d "$repo_dir/node_modules" && ! -e "$wt/node_modules" ]]; then
+    ln -s "$repo_dir/node_modules" "$wt/node_modules" 2>/dev/null \
+      || tf_warn "$id: could not symlink node_modules into worktree"
+  fi
+
   echo "$wt"
 }
 
@@ -152,8 +160,8 @@ tf_worktree_merge() {
         local merge_output
         merge_output=$(
           cd "$repo_dir" || return 1
-          git checkout --quiet main 2>/dev/null || true
-          git reset --hard --quiet main
+          git checkout --quiet "${TF_BASE_BRANCH}" 2>/dev/null || true
+          git reset --hard --quiet "${TF_BASE_BRANCH}"
           git clean --quiet -fd
           local before
           before="$(git rev-parse HEAD)"
@@ -166,7 +174,7 @@ tf_worktree_merge() {
             fi
           else
             local wt="$TF_WORKTREE_ROOT/$id"
-            if [[ -d "$wt" ]] && (cd "$wt" && git rebase --autostash main >/dev/null 2>&1); then
+            if [[ -d "$wt" ]] && (cd "$wt" && git rebase --autostash "${TF_BASE_BRANCH}" >/dev/null 2>&1); then
               cd "$repo_dir"
               if git merge --ff-only "$branch" >/dev/null 2>&1; then
                 if [[ "$before" != "$(git rev-parse HEAD)" ]]; then
@@ -184,8 +192,8 @@ tf_worktree_merge() {
             fi
             if [[ $rc -ne 0 ]]; then
               git merge --abort 2>/dev/null || true
-              git checkout --quiet main 2>/dev/null || true
-              git reset --hard --quiet main
+              git checkout --quiet "${TF_BASE_BRANCH}" 2>/dev/null || true
+              git reset --hard --quiet "${TF_BASE_BRANCH}"
               git clean --quiet -fd
             fi
           fi
@@ -213,8 +221,8 @@ tf_worktree_merge() {
     (
       flock 9
       cd "$repo_dir" || return 1
-      git checkout --quiet main 2>/dev/null || true
-      git reset --hard --quiet main
+      git checkout --quiet "${TF_BASE_BRANCH}" 2>/dev/null || true
+      git reset --hard --quiet "${TF_BASE_BRANCH}"
       git clean --quiet -fd
       local before
       before="$(git rev-parse HEAD)"
@@ -226,7 +234,7 @@ tf_worktree_merge() {
         return 0
       fi
       local wt="$TF_WORKTREE_ROOT/$id"
-      if [[ -d "$wt" ]] && (cd "$wt" && git rebase --autostash main >/dev/null 2>&1); then
+      if [[ -d "$wt" ]] && (cd "$wt" && git rebase --autostash "${TF_BASE_BRANCH}" >/dev/null 2>&1); then
         cd "$repo_dir"
         if git merge --ff-only "$branch" >/dev/null 2>&1; then
           if [[ "$before" != "$(git rev-parse HEAD)" ]]; then
@@ -243,8 +251,8 @@ tf_worktree_merge() {
         fi
       fi
       git merge --abort 2>/dev/null || true
-      git checkout --quiet main 2>/dev/null || true
-      git reset --hard --quiet main
+      git checkout --quiet "${TF_BASE_BRANCH}" 2>/dev/null || true
+      git reset --hard --quiet "${TF_BASE_BRANCH}"
       git clean --quiet -fd
       return 1
     ) 9>"$merge_lock"

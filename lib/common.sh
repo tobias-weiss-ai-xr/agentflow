@@ -32,6 +32,10 @@ REPOS_JSON="${TF_REPOS_JSON:-$TF_CONFIG_DIR/repos.json}"
 # Branch prefix for agent work
 TF_BRANCH_PREFIX="${TF_BRANCH_PREFIX:-tf}"
 
+# Base branch that agent worktrees branch from AND merge back into.
+# Defaults to 'main'; set to 'master' for repos that deploy from master.
+TF_BASE_BRANCH="${TF_BASE_BRANCH:-main}"
+
 # Ensure runtime dirs exist
 mkdir -p "$TF_STATE_DIR" "$TF_LOG_DIR" "$TF_WORKTREE_ROOT"
 

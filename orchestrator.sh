@@ -59,7 +59,7 @@ git -C "$TF_REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
 # worktrees/ and state/ are gitignored, so git clean won't touch them.
 (
   cd "$TF_REPO_DIR"
-  git checkout --quiet main 2>/dev/null || true
+  git checkout --quiet "${TF_BASE_BRANCH}" 2>/dev/null || true
   if [[ -n "$(git status --porcelain)" ]]; then
     tf_warn "main worktree was dirty at startup — cleaning"
     git reset --hard --quiet HEAD

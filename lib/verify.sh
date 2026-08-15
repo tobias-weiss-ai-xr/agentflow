@@ -241,7 +241,7 @@ tf_verify_scope() {
   } > "$log"
 
   local changed
-  changed="$(cd "$wt" && git diff --name-only main...HEAD 2>/dev/null)" || true
+  changed="$(cd "$wt" && git diff --name-only "${TF_BASE_BRANCH}"...HEAD 2>/dev/null)" || true
   [[ -z "$changed" ]] && { echo "none"; return 0; }
 
   local allowed

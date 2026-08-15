@@ -140,6 +140,10 @@ tf_dispatch_one() {
   # (done/failed) must not leave the task stuck in a transient state.
   trap 'tf_dispatch_zombie_guard "$id"' EXIT
   local provider model dispatch_timeout log
+  # accept is defined in tf_render_prompt(); re-derive it here so the
+  # post-gate receipt call (tf_receipt_finish_gate ... "$accept") doesn't hit
+  # an unbound variable under `set -u`.
+  local accept="$(tf_task_field "$id" .accept 2>/dev/null || echo '')"
   provider="$(tf_worker_field "$worker" .provider)"
   model="$(tf_worker_field "$worker" .model)"
   dispatch_timeout="$(tf_default dispatch_timeout_s)"; dispatch_timeout="${dispatch_timeout:-3600}"
@@ -172,7 +176,7 @@ tf_dispatch_one() {
   #    the preserved branch so the agent resolves the conflict instead of
   #    redoing all its work from scratch.
   local wt keep_branch=""
-  local base="main"
+  local base="${TF_BASE_BRANCH}"
   local prev_err attempts
   prev_err="$(tf_status_get "$id" .last_error 2>/dev/null || echo "")"
   attempts="$(tf_status_get "$id" .attempts 2>/dev/null || echo 0)"
@@ -258,7 +262,7 @@ tf_dispatch_one() {
   #     We compare the worktree's HEAD against the base (main) to detect
   #     both uncommitted changes AND committed changes.
   local base_ref
-  base_ref="$(cd "$TF_REPO_DIR" && git rev-parse --verify main 2>/dev/null)"
+  base_ref="$(cd "$TF_REPO_DIR" && git rev-parse --verify "${TF_BASE_BRANCH}" 2>/dev/null)"
   local wt_head
   wt_head="$(cd "$wt" && git rev-parse --verify HEAD 2>/dev/null)"
   local changed_files untracked_files
@@ -387,7 +391,7 @@ tf_cross_vendor_verify() {
 
   # Build the verify prompt: task spec + diff + primary gate output
   local diff_content gate_output verify_prompt
-  diff_content="$(cd "$wt" && git diff main...HEAD 2>/dev/null | head -500)"
+  diff_content="$(cd "$wt" && git diff "${TF_BASE_BRANCH}"...HEAD 2>/dev/null | head -500)"
   gate_output="$(tail -30 "$TF_LOG_DIR/$id.verify.log" 2>/dev/null)"
 
   local task_spec accept_cmd
