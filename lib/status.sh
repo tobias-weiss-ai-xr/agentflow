@@ -140,6 +140,17 @@ tf_is_ready() {
   [[ $all_done -eq 1 ]]
 }
 
+# tf_ready_task_ids → newline-separated list of task IDs that are currently
+# dispatchable (naive: status ready and all deps done). Used for deadlock
+# detection alongside the smart scheduler.
+tf_ready_task_ids() {
+  local id
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    tf_is_ready "$id" && echo "$id"
+  done < <(jq -r 'to_entries[] | select(.value | type=="object" and has("status")) | .key' "$STATUS_JSON")
+}
+
 # Is a task speculatively ready? ready := status==ready AND all deps except
 # exactly ONE are done, that ONE is running, and TF_SPECIAL_DISPATCH_ENABLED=1.
 tf_is_speculatively_ready() {

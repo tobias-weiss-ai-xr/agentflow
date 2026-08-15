@@ -1,0 +1,59 @@
+{
+  "_meta": {
+    "project": "next-mailserver",
+    "plan": "docs/planio-tasks.md (Epic 2) + docs/RESEARCH_DOVECOT_STALWART_2026.md",
+    "date": "2026-08-15"
+  },
+  "tasks": [
+    {
+      "id": "MS-1",
+      "engine": "docs",
+      "title": "Update runbook.md and PLANIO_WIKI.textile with the verified end-to-end mail flow",
+      "deps": [],
+      "scope": ["docs/runbook.md", "docs/PLANIO_WIKI.textile"],
+      "accept": "grep -qi 'dkimpy-milter' docs/runbook.md && grep -qi 'stalwart-cli' docs/runbook.md && grep -qi 'home.opendesk-edu.org' docs/runbook.md && grep -qiE 'DNS|Stalwart' docs/PLANIO_WIKI.textile",
+      "acceptance_prose": "runbook.md documents the working flow Postfix -> LDAP (openldap) -> dkimpy-milter (DKIM s1) -> Stalwart (JMAP), incl. stalwart-cli apply snippets and DNS record locations; PLANIO_WIKI.textile reflects current architecture",
+      "manual": false
+    },
+    {
+      "id": "MS-2",
+      "engine": "adr",
+      "title": "Create ADR-005 documenting the Stalwart LDAP directory decision",
+      "deps": [],
+      "scope": ["docs/technical/adr/ADR-005-stalwart-directory.md"],
+      "accept": "test -f docs/technical/adr/ADR-005-stalwart-directory.md && grep -qi 'Enterprise' docs/technical/adr/ADR-005-stalwart-directory.md && grep -qi 'UniMrAccount' docs/technical/adr/ADR-005-stalwart-directory.md && grep -qi 'decision' docs/technical/adr/ADR-005-stalwart-directory.md",
+      "acceptance_prose": "ADR documents: Domain.directoryId (per-domain LDAP) is Enterprise-gated, global Authentication.directoryId is community, eval uses internal directory with Postfix doing LDAP validation, custom filters needed for UniMrAccount/UniMrEmail schema",
+      "manual": false
+    },
+    {
+      "id": "MS-3",
+      "engine": "k8s",
+      "title": "Create Stalwart backup: CronJob manifest + backup shell script",
+      "deps": [],
+      "scope": ["k8s/scs-k3s/stalwart-backup.yaml", "scripts/backup-stalwart.sh"],
+      "accept": "bash -n scripts/backup-stalwart.sh && python3 -c \"import yaml; yaml.safe_load(open('k8s/scs-k3s/stalwart-backup.yaml'))\" && grep -qi 'stalwart.db' scripts/backup-stalwart.sh",
+      "acceptance_prose": "CronJob backs up /data/stalwart.db (SQLite WAL checkpoint) of the stalwart deployment in namespace opendesk-edu; script is bash-syntax-clean and references the database path",
+      "manual": false
+    },
+    {
+      "id": "MS-4",
+      "engine": "docker",
+      "title": "Create dkimpy-milter Dockerfile with syslog relay + build script for air-gap registry",
+      "deps": [],
+      "scope": ["dockerfiles/dkimpy-milter/Dockerfile", "scripts/build-dkimpy-milter.sh"],
+      "accept": "bash -n scripts/build-dkimpy-milter.sh && test -f dockerfiles/dkimpy-milter/Dockerfile && grep -qiE 'syslog|busybox|rsyslog' dockerfiles/dkimpy-milter/Dockerfile",
+      "acceptance_prose": "Multi-stage Dockerfile installs python + pymilter + dkimpy-milter and a syslog relay (/dev/log -> stdout) so kubectl logs shows signing events; build script pushes to 172.17.209.143:5000 with docker.io/library/dkimpy-milter tag",
+      "manual": false
+    },
+    {
+      "id": "MS-5",
+      "engine": "k8s",
+      "title": "Capture live Stalwart deployment as manifest + write 0.16.16->0.16.18 upgrade runbook",
+      "deps": [],
+      "scope": ["k8s/scs-k3s/stalwart.yaml", "docs/UPGRADE_STALWART_01618.md"],
+      "accept": "python3 -c \"import yaml; yaml.safe_load(open('k8s/scs-k3s/stalwart.yaml'))\" && grep -q 'v0.16' k8s/scs-k3s/stalwart.yaml && grep -qi '0.16.18' docs/UPGRADE_STALWART_01618.md",
+      "acceptance_prose": "stalwart.yaml mirrors the live deployment (image v0.16.16, env STALWART_PORT/STALWART_HOSTNAME, NO recovery admin) incl. service+config; upgrade doc covers air-gap image push (localhost:5001 mirror, docker.io/stalwartlabs/stalwart path) and regression checklist",
+      "manual": false
+    }
+  ]
+}
