@@ -355,6 +355,17 @@ tf_worker_healthy() {
   case "$provider" in
     zai)  return 0 ;;  # needs auth header; probe via real dispatch only
     tud)  return 0 ;;
+    litellm)
+      # LiteLLM gateway requires the API key on /v1/models; without it the
+      # probe 401s forever and the worker looks permanently unhealthy.
+      local key="${TF_LITELLM_API_KEY:-}"
+      if [[ -z "$key" && -f "$HOME/.pi/agent/models.json" ]]; then
+        key="$(jq -r '.providers.litellm.apiKey // empty' "$HOME/.pi/agent/models.json" 2>/dev/null)"
+      fi
+      if [[ -n "$key" ]]; then
+        timeout 5 curl -sf -o /dev/null -H "Authorization: Bearer $key" "$endpoint/models" 2>/dev/null && return 0
+      fi
+      ;;
     *) ;;
   esac
   timeout 5 curl -sf -o /dev/null "$endpoint/models" 2>/dev/null && return 0
