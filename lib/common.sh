@@ -279,6 +279,21 @@ tf_reset_dead_runstate() {
       tf_runstate_clear "$id" 2>/dev/null || true
     fi
   done <<< "$ids"
+
+  # Complement: a reaped dispatch subshell can clear its run-state entry
+  # while the task status stays in a transient state (running/verifying).
+  # Any transient-status task WITHOUT a live run-state pid is a zombie.
+  local transient
+  transient="$(jq -r 'to_entries[] | select(.value.status == "running" or .value.status == "verifying") | .key' "$STATUS_JSON" 2>/dev/null)" || return 0
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    pid="$(jq -r --arg id "$id" '.[$id].pid // empty' "$RUNSTATE_JSON" 2>/dev/null)"
+    if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+      tf_warn "resetting $id: transient status without live dispatch pid (zombie task)"
+      tf_status_set "$id" ready '.last_error="recovered: dispatch pid gone while status was transient"' 2>/dev/null || true
+      tf_runstate_clear "$id" 2>/dev/null || true
+    fi
+  done <<< "$transient"
 }
 
 # ---------------------------------------------------------------------------

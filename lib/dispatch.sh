@@ -110,11 +110,35 @@ the core functionality first and add tests, then iterate if time allows.
   printf '%s' "$tmpl"
 }
 
+# tf_dispatch_zombie_guard <task_id>
+#   EXIT trap for tf_dispatch_one: if the dispatch subshell dies without a
+#   definitive status update (crash between phases), the task would be stuck
+#   in "running"/"verifying" forever — invisible to the scheduler. Reset it
+#   to "ready" (branch preserved) so the orchestrator can re-dispatch.
+#   Idempotent: no-op when the task already reached done/failed.
+tf_dispatch_zombie_guard() {
+  local id="${1:-}"
+  [[ -z "$id" ]] && return 0
+  local st
+  st="$(tf_status_get "$id" .status 2>/dev/null || echo "")"
+  case "$st" in
+    running|verifying)
+      tf_warn "$id: dispatch subshell died in status '$st' — resetting to ready (zombie guard)"
+      tf_status_set "$id" ready '.last_error="dispatch crashed before status update (zombie guard)"' 2>/dev/null || true
+      ;;
+    *) ;; # done/failed/ready — definitive state, leave it
+  esac
+  return 0
+}
+
 # tf_dispatch_one <task_id> <worker_name>
 #   Full lifecycle: worktree → render prompt → run pi → verify → status update.
 #   Returns 0 on success (gate passed), non-zero on failure.
 tf_dispatch_one() {
   local id="$1" worker="$2"
+  # Zombie guard: any crash path that skips the definitive status update
+  # (done/failed) must not leave the task stuck in a transient state.
+  trap 'tf_dispatch_zombie_guard "$id"' EXIT
   local provider model dispatch_timeout log
   provider="$(tf_worker_field "$worker" .provider)"
   model="$(tf_worker_field "$worker" .model)"
