@@ -1,0 +1,163 @@
+{
+  "_meta": {
+    "project": "contextual-intelligence",
+    "plan": "docs/plans/2026-08-15-intelligence-iteration.md"
+  },
+  "tasks": [
+    {
+      "id": "MI-01",
+      "engine": "regbridge",
+      "title": "REGULATORY_IMPACT signal type + scorer weight (28) + scorer tests",
+      "deps": [],
+      "scope": [
+        "packages/server/src/apps/leads/services/graph/ingest/types.ts",
+        "packages/server/src/apps/leads/services/graph/scoring/scorer.ts",
+        "packages/server/src/apps/leads/services/graph/scoring/scorer.test.ts"
+      ],
+      "accept": "npx vitest run packages/server/src/apps/leads/services/graph/scoring/scorer.test.ts",
+      "acceptance_prose": "SignalType union contains REGULATORY_IMPACT; DEFAULT_SIGNAL_WEIGHTS has REGULATORY_IMPACT=28; tests prove the weighted contribution",
+      "manual": false
+    },
+    {
+      "id": "MI-02",
+      "engine": "regbridge",
+      "title": "Recency decay (6mo full → 24mo floor 0.25) in signal scoring + curve tests",
+      "deps": ["MI-01"],
+      "scope": [
+        "packages/server/src/apps/leads/services/graph/scoring/scorer.ts",
+        "packages/server/src/apps/leads/services/graph/scoring/scorer.test.ts"
+      ],
+      "accept": "npx vitest run packages/server/src/apps/leads/services/graph/scoring/scorer.test.ts",
+      "acceptance_prose": "recencyDecay() exported pure function with [0.25,1] range; applied to weighted signal contributions; invalid/future dates → 1.0",
+      "manual": false
+    },
+    {
+      "id": "MI-03",
+      "engine": "regbridge",
+      "title": "Regulatory impact propagator service (ORSD→graph, sector matching, dedup, dryRun)",
+      "deps": ["MI-01"],
+      "scope": [
+        "packages/server/src/apps/leads/services/graph/regbridge/impact-propagator.ts",
+        "packages/server/src/apps/leads/services/graph/regbridge/impact-propagator.test.ts"
+      ],
+      "accept": "npx vitest run packages/server/src/apps/leads/services/graph/regbridge/impact-propagator.test.ts",
+      "acceptance_prose": "propagateRegulatoryImpact writes REGULATORY_IMPACT signals via mocked DgraphRepository.upsertSignal with dedup on [ORSD <id>] prefix; dryRun writes nothing",
+      "manual": false
+    },
+    {
+      "id": "MI-04",
+      "engine": "regbridge",
+      "title": "REST route POST /graph/regulatory-sync (dryRun passthrough, rescore non-fatal) + supertest",
+      "deps": ["MI-03"],
+      "scope": [
+        "packages/server/src/apps/leads/routes/graph.ts",
+        "packages/server/src/apps/leads/routes/__tests__/regulatory-sync.test.ts"
+      ],
+      "accept": "npx vitest run packages/server/src/apps/leads/routes/__tests__/regulatory-sync.test.ts",
+      "acceptance_prose": "Route calls propagator, then scoreAll unless dryRun; 200/500 shapes mirror ingest route; supertest coverage with mocks",
+      "manual": false
+    },
+    {
+      "id": "MI-05",
+      "engine": "regbridge",
+      "title": "ORSD regulatory context block in qualification prompts (never-throw, backward-compatible signature)",
+      "deps": [],
+      "scope": [
+        "packages/server/src/apps/leads/services/qualification/qualification-prompts.ts",
+        "packages/server/src/apps/leads/services/qualification/__tests__/qualification-prompts.test.ts"
+      ],
+      "accept": "npx vitest run packages/server/src/apps/leads/services/qualification/__tests__/qualification-prompts.test.ts",
+      "acceptance_prose": "buildRegulatoryContext returns markdown block from active signals sorted by confidence; empty/error → empty string; buildQualificationPrompt optional context param",
+      "manual": false
+    },
+    {
+      "id": "MI-06",
+      "engine": "regbridge",
+      "title": "MCP tool regulatory-sync (zod schema + definition + handler + registration + handler tests)",
+      "deps": ["MI-03"],
+      "scope": [
+        "packages/server/src/mcp/tools.ts",
+        "packages/server/src/mcp/handlers.ts",
+        "packages/server/src/mcp/index.ts",
+        "packages/server/src/mcp/__tests__/handlers.test.ts"
+      ],
+      "accept": "npx vitest run packages/server/src/mcp/__tests__/handlers.test.ts",
+      "acceptance_prose": "regulatory-sync tool defined with dryRun/limit input, handler lazy-imports propagator, registered in index.ts; existing handler tests still pass",
+      "manual": false
+    },
+    {
+      "id": "MI-07",
+      "engine": "fresh",
+      "title": "Adapter health report (pure computeAdapterHealth + getAdapterHealth + GET /graph/adapters/health)",
+      "deps": ["MI-04"],
+      "scope": [
+        "packages/server/src/apps/leads/services/graph/ingest/adapter-health.ts",
+        "packages/server/src/apps/leads/services/graph/ingest/adapter-health.test.ts",
+        "packages/server/src/apps/leads/routes/graph.ts"
+      ],
+      "accept": "npx vitest run packages/server/src/apps/leads/services/graph/ingest/adapter-health.test.ts",
+      "acceptance_prose": "Per-adapter freshness classification (fresh ≤36h, stale ≤7d, dead) from last 20 ingest_jobs; route serves summary",
+      "manual": false
+    },
+    {
+      "id": "MI-08",
+      "engine": "fresh",
+      "title": "Market signal delta: baseline table (migration + schema.sql) + fingerprint/snapshot/diff service",
+      "deps": [],
+      "scope": [
+        "packages/server/migrations/1730000000011_market_signal_baseline.sql",
+        "packages/server/src/platform/services/postgres/schema.sql",
+        "packages/server/src/apps/leads/services/graph/regbridge/signal-delta.ts",
+        "packages/server/src/apps/leads/services/graph/regbridge/signal-delta.test.ts"
+      ],
+      "accept": "npx vitest run packages/server/src/apps/leads/services/graph/regbridge/signal-delta.test.ts",
+      "acceptance_prose": "sha1 fingerprint normalized; snapshotBaseline replaces per-tenant rows in one transaction; diffAgainstBaseline reports new/disappeared/unchanged",
+      "manual": false
+    },
+    {
+      "id": "MI-09",
+      "engine": "fresh",
+      "title": "Nightly ingest cron script (env-gated INGEST_CRON_ENABLED, --dry-run, SIGTERM-safe, call-order tests)",
+      "deps": [],
+      "scope": [
+        "packages/server/src/scripts/ingest-cron.ts",
+        "packages/server/src/scripts/__tests__/ingest-cron.test.ts"
+      ],
+      "accept": "npx vitest run packages/server/src/scripts/__tests__/ingest-cron.test.ts",
+      "acceptance_prose": "runNightlyIngest wires createJob→runAll→completeJob; disabled env / dry-run no-op; failure → failJob; mocked modules",
+      "manual": false
+    },
+    {
+      "id": "MI-10",
+      "engine": "compete",
+      "title": "Competitor watchlist storage (migration + schema.sql + CompetitorRepo with idempotent add)",
+      "deps": ["MI-08"],
+      "scope": [
+        "packages/server/migrations/1730000000012_competitor_watchlist.sql",
+        "packages/server/src/platform/services/postgres/schema.sql",
+        "packages/server/src/apps/leads/services/competitive/competitor-repo.ts",
+        "packages/server/src/apps/leads/services/competitive/competitor-repo.test.ts"
+      ],
+      "accept": "npx vitest run packages/server/src/apps/leads/services/competitive/competitor-repo.test.ts",
+      "acceptance_prose": "competitor_watchlist table + repo list/add(idempotent via normalizeCompanyName)/remove with mocked pool SQL assertions",
+      "manual": false
+    },
+    {
+      "id": "MI-11",
+      "engine": "compete",
+      "title": "Competitive digest service (per-area own-vs-competitor counts + momentum) + MCP tool competitive-digest",
+      "deps": ["MI-06", "MI-10"],
+      "scope": [
+        "packages/server/src/apps/leads/services/competitive/competitive-digest.ts",
+        "packages/server/src/apps/leads/services/competitive/competitive-digest.test.ts",
+        "packages/server/src/mcp/tools.ts",
+        "packages/server/src/mcp/handlers.ts",
+        "packages/server/src/mcp/index.ts",
+        "packages/server/src/mcp/__tests__/handlers.test.ts"
+      ],
+      "accept": "npx vitest run packages/server/src/apps/leads/services/competitive/competitive-digest.test.ts packages/server/src/mcp/__tests__/handlers.test.ts",
+      "acceptance_prose": "buildCompetitiveDigest buckets signals per application area within months window with momentum delta; MCP tool registered; mocked repos",
+      "manual": false
+    }
+  ]
+}

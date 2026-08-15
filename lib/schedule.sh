@@ -128,6 +128,18 @@ tf_smart_ready_task_ids() {
   fi
 }
 
+# tf_ready_task_ids → naive ready task IDs (all deps done, no
+# contention filtering). Used by the orchestrator's deadlock detection:
+# contention-deferred tasks are still technically ready.
+tf_ready_task_ids() {
+  local id
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    tf_is_ready "$id" || continue
+    echo "$id"
+  done < <(tf_all_task_ids)
+}
+
 # Internal: compute ready task ids of a given type
 # type=regular: normal ready tasks (all deps done)
 # type=speculative: speculatively ready tasks (all deps except one running dep)
