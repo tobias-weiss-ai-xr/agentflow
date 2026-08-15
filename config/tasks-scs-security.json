@@ -1,0 +1,360 @@
+{
+  "_meta": {
+    "project": "SCS K3s Cluster Security Hardening",
+    "description": "Complete security hardening plan for SCS K3s cluster - October 2026",
+    "plan": "docs/SECURITY-HARDENING-PLAN.md",
+    "priority_levels": {
+      "CRITICAL": 1,
+      "HIGH": 2,
+      "MEDIUM": 3,
+      "LOW": 4
+    },
+    "recommended_workers": 1,
+    "notes": "Tasks are organized by priority. Start with P1-CRITICAL tasks first."
+  },
+  "tasks": [
+    {
+      "id": "P1-GRF-001",
+      "title": "Change Grafana admin password to secure random password",
+      "engine": "security",
+      "priority": "CRITICAL",
+      "deps": [],
+      "scope": [
+        "../scs/ansible/roles/grafana/*",
+        "../scs/docs/GRAFANA-*.md"
+      ],
+      "accept": "bash -c 'echo \"Checking Grafana password change...\" && test -f /home/weissto_local/.grafana_password && echo \"Password file exists\" && wc -c /home/weissto_local/.grafana_password | awk \"{print \$1}\"\" | grep -q \"[40-99]\" && echo \"Password appears secure\" || echo \"Password too short\"'",
+      "acceptance_prose": "Grafana admin password changed from 'admin123' to a secure 48+ character random password, stored in .grafana_password file with 600 permissions",
+      "manual": false,
+      "tiers": ["critical"]
+    },
+    {
+      "id": "P1-K3S-001",
+      "title": "Enable K3s RBAC and backup existing configuration",
+      "engine": "security",
+      "priority": "CRITICAL",
+      "deps": [],
+      "scope": [
+        "../scs/ansible/roles/k3s/*",
+        "../scs/ansible/playbooks/system/k3s-rbac.yml"
+      ],
+      "accept": "bash -c 'test -f ../scs/ansible/roles/k3s/tasks/rbac.yml && echo \"RBAC tasks exist\" && grep -q \"enable-admission-plugins.*PodSecurity\" ../scs/ansible/roles/k3s/tasks/rbac.yml && echo \"PodSecurity admission enabled\" || echo \"PodSecurity not found\"'",
+      "acceptance_prose": "K3s RBAC enabled with backup of existing configuration, admission plugins configured for PodSecurity",
+      "manual": false,
+      "tiers": ["critical"]
+    },
+    {
+      "id": "P1-POD-001",
+      "title": "Apply Pod Security Standards baseline to all application namespaces",
+      "engine": "security",
+      "priority": "CRITICAL",
+      "deps": ["P1-K3S-001"],
+      "scope": [
+        "../scs/k8s/networkpolicies/*",
+        "../scs/ansible/roles/network_config/*",
+        "../scs/ansible/playbooks/system/podsecurity.yml"
+      ],
+      "accept": "bash -c 'for ns in opendesk opendesk-edu next-mailserver-test backup nix-builder monitoring argocd scs-infra; do kubectl get ns $ns -L pod-security.kubernetes.io/enforce=baseline 2>/dev/null && echo \"$ns: baseline enabled\" || echo \"$ns: checking...\"; done'",
+      "acceptance_prose": "Pod Security Standards baseline enforced on all application namespaces via labels",
+      "manual": false,
+      "tiers": ["critical"]
+    },
+    {
+      "id": "P1-AUD-001",
+      "title": "Enable K3s audit logging with comprehensive policy",
+      "engine": "security",
+      "priority": "CRITICAL",
+      "deps": [],
+      "scope": [
+        "../scs/ansible/roles/k3s/templates/audit-policy.yaml.j2",
+        "../scs/ansible/roles/k3s/tasks/audit.yml",
+        "../scs/docs/AUDIT-LOGGING.md"
+      ],
+      "accept": "bash -c 'test -f ../scs/ansible/roles/k3s/templates/audit-policy.yaml.j2 && echo \"Audit policy template exists\" && grep -q \"Metadata\|RequestResponse\|Request\" ../scs/ansible/roles/k3s/templates/audit-policy.yaml.j2 && echo \"Policy rules defined\" || echo \"Policy incomplete\"'",
+      "acceptance_prose": "Audit logging enabled with policy covering secrets, configmaps, pods, deployments with appropriate log levels and retention",
+      "manual": false,
+      "tiers": ["critical"]
+    },
+    {
+      "id": "P2-GRF-002",
+      "title": "Enable LDAP authentication for Grafana",
+      "engine": "security",
+      "priority": "HIGH",
+      "deps": ["P1-GRF-001"],
+      "scope": [
+        "../scs/ansible/roles/grafana/templates/grafana.ini.j2",
+        "../scs/docs/GRAFANA-LDAP.md"
+      ],
+      "accept": "bash -c 'grep -q \"auth.ldap\" ../scs/ansible/roles/grafana/templates/grafana.ini.j2 && echo \"LDAP config found\" || echo \"LDAP config missing\"'",
+      "acceptance_prose": "Grafana LDAP authentication configured with HRZ LDAP server settings",
+      "manual": false,
+      "tiers": ["security"]
+    },
+    {
+      "id": "P2-RBAC-001",
+      "title": "Create dedicated ServiceAccount and RBAC for ArgoCD",
+      "engine": "security",
+      "priority": "HIGH",
+      "deps": ["P1-K3S-001"],
+      "scope": [
+        "../scs/k8s/argocd/rbac.yaml",
+        "../scs/argocd/app-argocd.yaml"
+      ],
+      "accept": "bash -c 'test -f ../scs/k8s/argocd/rbac.yaml && echo \"RBAC file exists\" && grep -q \"ServiceAccount\|ClusterRole\|ClusterRoleBinding\" ../scs/k8s/argocd/rbac.yaml && echo \"RBAC resources defined\"'",
+      "acceptance_prose": "ArgoCD ServiceAccount created with least-privilege ClusterRole and ClusterRoleBinding, default service account permissions removed from ArgoCD namespace",
+      "manual": false,
+      "tiers": ["security"]
+    },
+    {
+      "id": "P2-RBAC-002",
+      "title": "Create dedicated ServiceAccounts for all application namespaces",
+      "engine": "security",
+      "priority": "HIGH",
+      "deps": ["P2-RBAC-001"],
+      "scope": [
+        "../scs/k8s/*/serviceaccount.yaml",
+        "../scs/ansible/playbooks/system/serviceaccounts.yml"
+      ],
+      "accept": "bash -c 'for ns in opendesk opendesk-edu next-mailserver-test backup nix-builder monitoring; do test -f ../scs/k8s/$ns/serviceaccount.yaml && echo \"$ns: serviceaccount.yaml exists\" || echo \"$ns: missing\"; done'",
+      "acceptance_prose": "ServiceAccounts created for all application namespaces with appropriate RBAC roles",
+      "manual": false,
+      "tiers": ["security"]
+    },
+    {
+      "id": "P2-NET-001",
+      "title": "Create NetworkPolicies for system namespaces (kube-system, kube-public)",
+      "engine": "security",
+      "priority": "HIGH",
+      "deps": [],
+      "scope": [
+        "../scs/k8s/networkpolicies/kube-system.yaml",
+        "../scs/k8s/networkpolicies/kube-public.yaml",
+        "../scs/ansible/roles/network_config/files/networkpolicies/system.yaml"
+      ],
+      "accept": "bash -c 'test -f ../scs/k8s/networkpolicies/kube-system.yaml && echo \"kube-system NetworkPolicy exists\" && grep -q \"kind: NetworkPolicy\" ../scs/k8s/networkpolicies/kube-system.yaml'",
+      "acceptance_prose": "NetworkPolicies created for kube-system and kube-public namespaces restricting pod-to-pod communication",
+      "manual": false,
+      "tiers": ["security"]
+    },
+    {
+      "id": "P2-SSL-001",
+      "title": "Enable TLS for Prometheus and Alertmanager",
+      "engine": "security",
+      "priority": "HIGH",
+      "deps": [],
+      "scope": [
+        "../scs/k8s/monitoring/prometheus-tls.yaml",
+        "../scs/k8s/monitoring/alertmanager-tls.yaml",
+        "../scs/ansible/roles/monitoring/templates/tls-certs.yaml.j2"
+      ],
+      "accept": "bash -c 'test -f ../scs/k8s/monitoring/prometheus-tls.yaml && echo \"Prometheus TLS config exists\" && grep -q \"tls\.crt\|tls\.key\" ../scs/k8s/monitoring/prometheus-tls.yaml'",
+      "acceptance_prose": "TLS certificates generated and configured for Prometheus and Alertmanager with proper SAN entries",
+      "manual": false,
+      "tiers": ["security"]
+    },
+    {
+      "id": "P2-CON-001",
+      "title": "Harden containerd configuration for security",
+      "engine": "security",
+      "priority": "HIGH",
+      "deps": [],
+      "scope": [
+        "../scs/ansible/roles/containerd/templates/config.toml.j2",
+        "../scs/docs/CONTAINERD-SECURITY.md"
+      ],
+      "accept": "bash -c 'test -f ../scs/ansible/roles/containerd/templates/config.toml.j2 && echo \"Config exists\" && grep -q \"no_pivot\|SystemdCgroup\|NoNewPrivileges\" ../scs/ansible/roles/containerd/templates/config.toml.j2 && echo \"Security options configured\"'",
+      "acceptance_prose": "Containerd configuration hardened with security options: no_pivot, SystemdCgroup, NoNewPrivileges, disable_tcp_service",
+      "manual": false,
+      "tiers": ["security"]
+    },
+    {
+      "id": "P2-SEA-001",
+      "title": "Create dedicated S3 user for backups (non-admin)",
+      "engine": "security",
+      "priority": "HIGH",
+      "deps": [],
+      "scope": [
+        "../scs/k8s/backup/seaweedfs-backup-user-secret.yaml",
+        "../scs/docs/SEAWEEDFS-SECURITY.md"
+      ],
+      "accept": "bash -c 'test -f ../scs/k8s/backup/seaweedfs-backup-user-secret.yaml && echo \"Backup user secret exists\" && grep -q \"k8up-backup-user\" ../scs/k8s/backup/seaweedfs-backup-user-secret.yaml'",
+      "acceptance_prose": "Dedicated S3 user for K8up backups created with restricted permissions (read/write to k8up-backups bucket only)",
+      "manual": true,
+      "tiers": ["security"],
+      "notes": "This requires TrueNAS admin access to create user on clrz12-02"
+    },
+    {
+      "id": "P2-SSH-001",
+      "title": "Harden SSH configuration on all SCS nodes",
+      "engine": "security",
+      "priority": "HIGH",
+      "deps": [],
+      "scope": [
+        "../scs/ansible/roles/ssh_hardening/*",
+        "../scs/docs/SSH-HARDENING.md"
+      ],
+      "accept": "bash -c 'test -f ../scs/ansible/roles/ssh_hardening/tasks/main.yml && echo \"SSH hardening role exists\" && grep -q \"PermitRootLogin no\|PasswordAuthentication no\|MaxAuthTries\" ../scs/ansible/roles/ssh_hardening/tasks/main.yml && echo \"SSH hardening options configured\"'",
+      "acceptance_prose": "SSH configuration hardened: disable root login, disable password auth, limit auth tries, restrict allowed users",
+      "manual": false,
+      "tiers": ["security"]
+    },
+    {
+      "id": "P3-KER-001",
+      "title": "Apply CIS benchmark kernel parameters to all nodes",
+      "engine": "security",
+      "priority": "MEDIUM",
+      "deps": [],
+      "scope": [
+        "../scs/ansible/roles/kernel_hardening/templates/99-k3s-security.conf.j2",
+        "../scs/docs/KERNEL-HARDENING.md"
+      ],
+      "accept": "bash -c 'test -f ../scs/ansible/roles/kernel_hardening/templates/99-k3s-security.conf.j2 && echo \"Config exists\" && grep -q \"net.ipv4\|kernel.kptr_restrict\|kernel.randomize_va_space\" ../scs/ansible/roles/kernel_hardening/templates/99-k3s-security.conf.j2 && echo \"Kernel parameters configured\"'",
+      "acceptance_prose": "CIS benchmark kernel parameters configured for network security, memory protection, and process isolation",
+      "manual": false,
+      "tiers": ["security"]
+    },
+    {
+      "id": "P3-ARG-001",
+      "title": "Review and harden ArgoCD security configuration",
+      "engine": "security",
+      "priority": "MEDIUM",
+      "deps": ["P2-RBAC-001"],
+      "scope": [
+        "../scs/argocd/*.yaml",
+        "../scs/k8s/argocd/security.yaml",
+        "../scs/docs/ARGOCD-SECURITY.md"
+      ],
+      "accept": "bash -c 'grep -q \"rbac:\|ssos:\|dex\|oidc\" ../scs/argocd/kustomization.yaml 2>/dev/null || grep -q \"rbac:\|ssos\" ../scs/argocd/app-argocd.yaml 2>/dev/null || echo \"SSO/RBAC config needed\"'",
+      "acceptance_prose": "ArgoCD security reviewed: SSO/OAuth2 enabled, RBAC configured, deploy key permissions restricted, image signing enabled",
+      "manual": true,
+      "tiers": ["security"],
+      "notes": "May require external identity provider configuration"
+    },
+    {
+      "id": "P3-NIX-001",
+      "title": "Security review of Nix builder configuration",
+      "engine": "security",
+      "priority": "MEDIUM",
+      "deps": [],
+      "scope": [
+        "../scs/k8s/nix-builder/statefulset.yaml",
+        "../scs/k8s/nix-builder/securitycontext.yaml",
+        "../scs/docs/NIX-BUILDER-SECURITY.md"
+      ],
+      "accept": "bash -c 'test -f ../scs/k8s/nix-builder/securitycontext.yaml && echo \"Security context exists\" && grep -q \"runAsNonRoot\|readOnlyRootFilesystem\|allowPrivilegeEscalation\" ../scs/k8s/nix-builder/securitycontext.yaml || echo \"Security context needs review\"'",
+      "acceptance_prose": "Nix builder security reviewed: runs as non-root, read-only filesystem, privilege escalation prevented, resource limits set",
+      "manual": false,
+      "tiers": ["security"]
+    },
+    {
+      "id": "P3-TLS-001",
+      "title": "Create CA and certificate rotation process for SCS cluster",
+      "engine": "security",
+      "priority": "MEDIUM",
+      "deps": ["P2-SSL-001"],
+      "scope": [
+        "../scs/ansible/roles/certificates/*",
+        "../scs/k8s/certificates/cert-manager.yaml",
+        "../scs/docs/CERTIFICATE-MANAGEMENT.md"
+      ],
+      "accept": "bash -c 'test -f ../scs/ansible/roles/certificates/tasks/main.yml && echo \"Certificate role exists\" && grep -q \"openssl\|cfssl\|cert-manager\" ../scs/ansible/roles/certificates/tasks/main.yml || echo \"Certificate management needed\"'",
+      "acceptance_prose": "Certificate Authority created for SCS cluster, certificate rotation process documented, cert-manager or equivalent deployed",
+      "manual": true,
+      "tiers": ["security"],
+      "notes": "Consider using cert-manager or step-ca for certificate management"
+    },
+    {
+      "id": "P3-NOD-001",
+      "title": "OS hardening for all SCS nodes (fail2ban, rkhunter, AIDE)",
+      "engine": "security",
+      "priority": "MEDIUM",
+      "deps": [],
+      "scope": [
+        "../scs/ansible/roles/os_hardening/*",
+        "../scs/docs/NODE-HARDENING.md"
+      ],
+      "accept": "bash -c 'test -f ../scs/ansible/roles/os_hardening/tasks/main.yml && echo \"OS hardening role exists\" && grep -q \"fail2ban\|rkhunter\|lynis\|aide\" ../scs/ansible/roles/os_hardening/tasks/main.yml && echo \"Security tools configured\"'",
+      "acceptance_prose": "OS hardening applied: fail2ban configured, rkhunter installed, lynis audits scheduled, AIDE file integrity monitoring enabled",
+      "manual": false,
+      "tiers": ["security"]
+    },
+    {
+      "id": "P4-ZTA-001",
+      "title": "Research and plan Zero Trust Networking implementation",
+      "engine": "security",
+      "priority": "LOW",
+      "deps": ["P3-NOD-001", "P2-NET-001"],
+      "scope": [
+        "../scs/docs/ZERO-TRUST-PLAN.md",
+        "../scs/k8s/service-mesh/istio.yaml",
+        "../scs/k8s/service-mesh/linkerd.yaml"
+      ],
+      "accept": "bash -c 'test -f ../scs/docs/ZERO-TRUST-PLAN.md && echo \"Zero Trust plan exists\" && grep -q \"mTLS\|service mesh\|identity-based\|Istio\|Linkerd\" ../scs/docs/ZERO-TRUST-PLAN.md && echo \"Implementation planned\"'",
+      "acceptance_prose": "Zero Trust Networking plan created: service mesh selection (Istio/Linkerd), mTLS implementation, identity-based access control, phased rollout strategy",
+      "manual": true,
+      "tiers": ["deep"]
+    },
+    {
+      "id": "P4-RUN-001",
+      "title": "Deploy Falco or similar runtime security monitoring",
+      "engine": "security",
+      "priority": "LOW",
+      "deps": ["P3-KER-001"],
+      "scope": [
+        "../scs/k8s/security/falco.yaml",
+        "../scs/k8s/security/runtime-monitoring.yaml",
+        "../scs/docs/RUNTIME-SECURITY.md"
+      ],
+      "accept": "bash -c 'test -f ../scs/k8s/security/falco.yaml && echo \"Falco deployment exists\" || echo \"Runtime monitoring needed\"'",
+      "acceptance_prose": "Runtime security monitoring deployed: Falco or equivalent with rules for suspicious activity detection, alerts configured",
+      "manual": true,
+      "tiers": ["deep"]
+    },
+    {
+      "id": "P4-SEC-001",
+      "title": "Deploy external secrets manager (Vault or Sealed Secrets)",
+      "engine": "security",
+      "priority": "LOW",
+      "deps": ["P3-TLS-001"],
+      "scope": [
+        "../scs/k8s/security/sealed-secrets.yaml",
+        "../scs/k8s/security/vault.yaml",
+        "../scs/docs/SECRETS-MANAGEMENT.md"
+      ],
+      "accept": "bash -c 'test -f ../scs/k8s/security/sealed-secrets.yaml && echo \"Sealed Secrets exists\" || test -f ../scs/k8s/security/vault.yaml && echo \"Vault exists\" || echo \"Secrets manager needed\"'",
+      "acceptance_prose": "External secrets manager deployed: Sealed Secrets or Vault with KMS integration, secret encryption at rest, rotation process",
+      "manual": true,
+      "tiers": ["deep"]
+    },
+    {
+      "id": "P4-MFA-001",
+      "title": "Enable MFA for all admin interfaces",
+      "engine": "security",
+      "priority": "LOW",
+      "deps": ["P2-GRF-002", "P3-ARG-001"],
+      "scope": [
+        "../scs/docs/MFA-IMPLEMENTATION.md",
+        "../scs/ansible/roles/mfa/*"
+      ],
+      "accept": "bash -c 'test -f ../scs/docs/MFA-IMPLEMENTATION.md && echo \"MFA plan exists\" && grep -q \"Grafana\|ArgoCD\|SSH\|TOTP\|WebAuthn\" ../scs/docs/MFA-IMPLEMENTATION.md && echo \"MFA configured for key services\"'",
+      "acceptance_prose": "MFA enabled for: SSH access, Grafana, ArgoCD, all admin interfaces with TOTP or WebAuthn",
+      "manual": true,
+      "tiers": ["deep"]
+    },
+    {
+      "id": "DOC-SEC-001",
+      "title": "Create comprehensive Security Hardening documentation",
+      "engine": "security",
+      "priority": "HIGH",
+      "deps": [],
+      "scope": [
+        "../scs/docs/SECURITY-HARDENING.md",
+        "../scs/docs/SECURITY-CHECKLIST.md"
+      ],
+      "accept": "bash -c 'test -f ../scs/docs/SECURITY-HARDENING.md && wc -l ../scs/docs/SECURITY-HARDENING.md | awk \"{print \$1}\" | grep -q \"[100-999]\" && echo \"Documentation comprehensive\"'",
+      "acceptance_prose": "Security Hardening documentation created with: current state assessment, hardening steps, verification commands, rollback procedures, maintenance schedule",
+      "manual": false,
+      "tiers": ["security"]
+    }
+  ]
+}
