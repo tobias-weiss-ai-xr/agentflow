@@ -240,6 +240,13 @@ tf_reap() {
       local rc=$?
       status="$(tf_status_get "$id" .status)"
       tf_info "reaped $id (pid $pid, rc=$rc, status=$status)"
+      # Deterministic zombie guard: a dispatch that exited non-zero WITHOUT
+      # reaching a definitive status (done/failed) must go back to ready —
+      # the EXIT-trap guard can be bypassed by kill -9 and some crash paths.
+      if [[ $rc -ne 0 ]] && { [[ "$status" == "running" ]] || [[ "$status" == "verifying" ]]; }; then
+        tf_warn "$id: dispatch exited rc=$rc in transient status '$status' — resetting to ready (reap guard)"
+        tf_status_set "$id" ready '.last_error="dispatch crashed before definitive status (reap guard)"' 2>/dev/null || true
+      fi
       tf_runstate_clear "$id"
     fi
   done <<< "$ids"
