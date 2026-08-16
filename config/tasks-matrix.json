@@ -1,0 +1,46 @@
+{
+  "_meta": {
+    "project": "opendesk-nix-matrix-appservice",
+    "plan": "plan/2026-08-16-matrix-appservice-plan.md",
+    "date": "2026-08-16",
+    "tdd": "gates-first: every accept command FAILS against current main (verified RED before dispatch)"
+  },
+  "tasks": [
+    {
+      "id": "MA-1",
+      "engine": "nix",
+      "title": "Synapse appservice registration: app_service_config_files + templated intercom.yaml + init-config render + sealed synapse-appservice Secret",
+      "deps": [],
+      "scope": [
+        "platform/kubernetes/services/synapse.nix"
+      ],
+      "accept": "nix build .#scs-manifests 2>&1 | tail -3 && ls result/30-synapse.yaml && grep -q 'app_service_config_files' result/30-synapse.yaml && grep -q 'intercom.yaml' result/30-synapse.yaml && grep -q '__MATRIX_AS_TOKEN__' result/30-synapse.yaml && grep -q '__MATRIX_HS_TOKEN__' result/30-synapse.yaml && grep -q 'sender_localpart' result/30-synapse.yaml && grep -q 'synapse-appservice' result/30-synapse.yaml && grep -q 'matrix-hs-token' result/30-synapse.yaml && ! grep -n 'tag = \"latest\"' platform/kubernetes/services/synapse.nix",
+      "acceptance_prose": "per plan/2026-08-16-matrix-appservice-plan.md MA-1: homeserverConfig gains app_service_config_files ['/config/appservice/intercom.yaml']; synapse-config ConfigMap gains key appservice/intercom.yaml (id intercom, hs_token __MATRIX_HS_TOKEN__, as_token __MATRIX_AS_TOKEN__, sender_localpart intercom, non-exclusive users regex @.*); init-config renders both homeserver.yaml and the registration from mounted secrets; config-src items include the new key; new lib.secret synapse-appservice (opendesk ns, keys matrix-as-token + matrix-hs-token, placeholder values sealed at build); deployment mounts the new secret; no :latest tag",
+      "manual": false
+    },
+    {
+      "id": "MA-2",
+      "engine": "nix",
+      "title": "scripts/e2e-appservice.mjs: committed Matrix appservice login acceptance test (TDD artifact)",
+      "deps": [],
+      "scope": [
+        "scripts/e2e-appservice.mjs"
+      ],
+      "accept": "node --check scripts/e2e-appservice.mjs && grep -q 'm.login.application_service' scripts/e2e-appservice.mjs && grep -q 'app_service_config_files' scripts/e2e-appservice.mjs && grep -q '__MATRIX_AS_TOKEN__' scripts/e2e-appservice.mjs && grep -q 'matrix-as-token' scripts/e2e-appservice.mjs && grep -q 'matrix.home.opendesk-edu.org' scripts/e2e-appservice.mjs && grep -q 'MATRIX_AS_SECRET' scripts/e2e-appservice.mjs",
+      "acceptance_prose": "per plan MA-2: NEW scripts/e2e-appservice.mjs — Node acceptance test: (1) manifest assertions on result/30-synapse.yaml (app_service_config_files, intercom.yaml, __MATRIX_AS_TOKEN__/__MATRIX_HS_TOKEN__ placeholders, synapse-appservice, sender_localpart), (2) live m.login.application_service login to https://matrix.home.opendesk-edu.org/_matrix/client/v3/login with Bearer MATRIX_AS_SECRET + user from E2E_MATRIX_USER (default testuser) asserting 200 + access_token; exit 0 manifest-only when MATRIX_AS_SECRET unset; exit non-zero with clear message otherwise",
+      "manual": false
+    },
+    {
+      "id": "MA-3",
+      "engine": "nix",
+      "title": "verify-ics.sh section 9: Matrix appservice registration checks (manifest + live secret)",
+      "deps": [],
+      "scope": [
+        "scripts/verify-ics.sh"
+      ],
+      "accept": "bash -n scripts/verify-ics.sh && grep -q 'appservice' scripts/verify-ics.sh && grep -q 'matrix-hs-token' scripts/verify-ics.sh && grep -q 'synapse-appservice' scripts/verify-ics.sh && grep -q '30-synapse.yaml' scripts/verify-ics.sh",
+      "acceptance_prose": "per plan MA-3: verify-ics.sh gains section 9 'Matrix appservice registration': checks result/30-synapse.yaml contains app_service_config_files + intercom.yaml, and (cluster reachable) that Secret synapse-appservice exists in the opendesk namespace with keys matrix-as-token + matrix-hs-token; keeps the numbered-section style and set -euo pipefail",
+      "manual": false
+    }
+  ]
+}
