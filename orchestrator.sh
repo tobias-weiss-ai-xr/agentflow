@@ -111,7 +111,12 @@ fi
 # Robustness: kill stale orchestrator/pi processes from interrupted runs
 # BEFORE touching any state, so orphaned dispatch subshells can't pollute
 # this run (duplicate work, phantom run-state, deadlocks).
-tf_kill_stale_processes
+#
+# ONLY dispatch modes (run/once) take ownership of the state — read-only
+# modes (status/dry-run/attach/cost/api/import) must NOT kill a live run.
+if [[ "$TF_MODE" == "run" || "$TF_MODE" == "once" ]]; then
+  tf_kill_stale_processes
+fi
 
 tf_status_init
 tf_schedule_init
