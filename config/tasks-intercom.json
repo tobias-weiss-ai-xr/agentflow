@@ -1,0 +1,107 @@
+{
+  "_meta": {
+    "project": "opendesk-nix-intercom-oidc",
+    "plan": "plan/2026-08-15-intercom-oidc-plan.md",
+    "date": "2026-08-15"
+  },
+  "tasks": [
+    {
+      "id": "IC-1",
+      "engine": "nix",
+      "title": "keycloak-bootstrap Job: realm opendesk + LDAP federation + OIDC clients",
+      "deps": [],
+      "scope": [
+        "platform/kubernetes/services/keycloak-bootstrap.nix",
+        "platform/kubernetes/environments/scs/default.nix",
+        "platform/kubernetes/scs/default.nix"
+      ],
+      "accept": "nix build .#scs-manifests 2>&1 | tail -3 && ls result/21-keycloak-bootstrap.yaml && grep -q '\"kind\":\"Job\"' result/21-keycloak-bootstrap.yaml && grep -q 'opendesk-intercom' result/21-keycloak-bootstrap.yaml && grep -q 'opendesk-opencloud' result/21-keycloak-bootstrap.yaml && grep -q 'keycloak-clients' result/21-keycloak-bootstrap.yaml && grep -q '\"kind\":\"SealedSecret\"' result/21-keycloak-bootstrap.yaml && grep -q 'ou=people,dc=opendesk-edu,dc=org' result/21-keycloak-bootstrap.yaml && ! grep -n 'tag = \"latest\"' platform/kubernetes/services/keycloak-bootstrap.nix",
+      "acceptance_prose": "keycloak-bootstrap.nix defines an idempotent Job (image quay.io/keycloak/keycloak:26.0) that provisions realm opendesk, LDAP user federation to openldap (ou=people,dc=opendesk-edu,dc=org), and confidential clients opendesk-intercom/opendesk-opencloud/opendesk-matrix/opendesk-sogo with the opendesk_username + opendesk_useruuid claim mappers and offline_access scope; client secrets live in a new keycloak-clients sealed Secret; the Job is wired into scs/default.nix (emitted as 21-keycloak-bootstrap.yaml); nix build .#scs-manifests succeeds; no :latest tag",
+      "manual": false
+    },
+    {
+      "id": "IC-2",
+      "engine": "nix",
+      "title": "Redis session store (opendesk-edu, ephemeral, password auth)",
+      "deps": ["IC-1"],
+      "scope": [
+        "platform/kubernetes/services/redis.nix",
+        "platform/kubernetes/scs/default.nix"
+      ],
+      "accept": "nix build .#scs-manifests 2>&1 | tail -3 && ls result/43-redis.yaml && grep -q 'redis:7.4-alpine' result/43-redis.yaml && grep -q '\"kind\":\"SealedSecret\"' result/43-redis.yaml && grep -q 'REDIS_PASSWORD' result/43-redis.yaml && ! grep -n 'tag = \"latest\"' platform/kubernetes/services/redis.nix && ! grep -q 'persistentVolumeClaim' result/43-redis.yaml",
+      "acceptance_prose": "redis.nix reworked from the HRZ-env stub into an SCS Deployment (image docker.io/redis:7.4-alpine pinned, 1 replica, no PVC, port 6379 ClusterIP service in opendesk-edu) with REDIS_PASSWORD from sealed secret redis (key password) via env + --requirepass $(REDIS_PASSWORD) args, non-root security context, tcp probes; wired as 43-redis.yaml; no :latest; no persistent volume",
+      "manual": false
+    },
+    {
+      "id": "IC-3",
+      "engine": "nix",
+      "title": "Intercom-Service: fork image source + deployment (OpenCloud /oc/ proxy)",
+      "deps": ["IC-2"],
+      "scope": [
+        "platform/kubernetes/services/intercom-service.nix",
+        "docker/intercom-service/Dockerfile",
+        "docker/intercom-service/routes/oc.js",
+        "docker/intercom-service/routes/sogo.js",
+        "docker/intercom-service/routes/health.js",
+        "docker/intercom-service/config/config.js",
+        "docker/intercom-service/routes/index.js",
+        "docker/intercom-service/README.md",
+        "platform/kubernetes/environments/scs/default.nix",
+        "platform/kubernetes/scs/default.nix"
+      ],
+      "accept": "nix build .#scs-manifests 2>&1 | tail -3 && ls result/44-intercom-service.yaml && grep -q 'intercom.home.opendesk-edu.org' result/44-intercom-service.yaml && grep -q 'opendesk-intercom' result/44-intercom-service.yaml && grep -q 'ISSUER_BASE_URL' result/44-intercom-service.yaml && grep -q 'OC_URL' result/44-intercom-service.yaml && grep -q '\"kind\":\"SealedSecret\"' result/44-intercom-service.yaml && grep -q 'intercom:2.23.11' result/44-intercom-service.yaml && ! grep -n 'tag = \"latest\"' platform/kubernetes/services/intercom-service.nix && test -f docker/intercom-service/Dockerfile && test -f docker/intercom-service/routes/oc.js && test -f docker/intercom-service/routes/sogo.js && test -f docker/intercom-service/routes/health.js && grep -q 'oc_access_token' docker/intercom-service/routes/oc.js && grep -q '/health' docker/intercom-service/routes/health.js && grep -q 'node:20-alpine' docker/intercom-service/Dockerfile",
+      "acceptance_prose": "intercom-service.nix replaces the stub with the full ICS deployment (fork image ghcr.io/opendesk-edu/intercom-service:2.23.11, env per plan §3 incl. ISSUER_BASE_URL/ORIGIN_REGEX/USER_UNIQUE_MAPPER=opendesk_useruuid/USERNAME_CLAIM=opendesk_username/CLIENT_ID=opendesk-intercom/OC_ENABLED=true/OC_URL=cloud.../OC_AUDIENCE=opendesk-opencloud/MATRIX_* /REDIS_*, secrets SECRET/CLIENT_SECRET/MATRIX_AS_SECRET/REDIS_PASSWORD from sealed secrets intercom + keycloak-clients + redis, ingress intercom.home.opendesk-edu.org, /health probes, chart security context, wired as 44-intercom-service.yaml); docker/intercom-service/ contains the fork overlay (Node 20 Alpine Dockerfile, /oc/ + /sogo/ + /health routes, patched config) as specified in plan §3; no :latest",
+      "manual": false
+    },
+    {
+      "id": "IC-4",
+      "engine": "nix",
+      "title": "Element banner: ICS silent login + navigation URLs",
+      "deps": ["IC-3"],
+      "scope": [
+        "platform/kubernetes/services/element.nix"
+      ],
+      "accept": "nix build .#scs-manifests 2>&1 | tail -3 && grep -q 'ics_silent_url' result/31-element.yaml && grep -q 'intercom.home.opendesk-edu.org/silent' result/31-element.yaml && grep -q 'ics_navigation_json_url' result/31-element.yaml",
+      "acceptance_prose": "elementConfig gains a banner object with ics_navigation_json_url + ics_silent_url pointing at https://intercom.home.opendesk-edu.org (using env.hosts.intercom); all other config unchanged",
+      "manual": false
+    },
+    {
+      "id": "IC-5",
+      "engine": "nix",
+      "title": "Synapse OIDC login via Keycloak (opendesk-matrix client)",
+      "deps": ["IC-1"],
+      "scope": [
+        "platform/kubernetes/services/synapse.nix"
+      ],
+      "accept": "nix build .#scs-manifests 2>&1 | tail -3 && grep -q 'oidc_config' result/30-synapse.yaml && grep -q 'opendesk-matrix' result/30-synapse.yaml && grep -q '__SYNAPSE_OIDC_CLIENT_SECRET__' result/30-synapse.yaml && grep -q 'synapse-config-v3' result/30-synapse.yaml && grep -q '\"kind\":\"SealedSecret\"' result/30-synapse.yaml && ! grep -n 'tag = \"latest\"' platform/kubernetes/services/synapse.nix",
+      "acceptance_prose": "homeserver.yaml gains oidc_config (discovery_method oidc, issuer https://id.home.opendesk-edu.org/realms/opendesk, client_id opendesk-matrix, client_secret placeholder __SYNAPSE_OIDC_CLIENT_SECRET__, preferred_username mapping); new sealed secret synapse-oidc (key oidc-client-secret) mounted at /mnt/secrets-oidc; init-config sed extended to render the placeholder; checksum/config bumped to synapse-config-v3",
+      "manual": false
+    },
+    {
+      "id": "IC-6",
+      "engine": "docs",
+      "title": "Architecture documentation: docs/intercom-oidc.md",
+      "deps": ["IC-1", "IC-2", "IC-3", "IC-4", "IC-5"],
+      "scope": [
+        "docs/intercom-oidc.md",
+        "README.md"
+      ],
+      "accept": "test -f docs/intercom-oidc.md && grep -qi 'intercom' docs/intercom-oidc.md && grep -qi 'opendesk' docs/intercom-oidc.md && grep -qi 'realm' docs/intercom-oidc.md && grep -qi '/oc/' docs/intercom-oidc.md && grep -qi 'sealed' docs/intercom-oidc.md",
+      "acceptance_prose": "docs/intercom-oidc.md documents the ICS broker (silent login, backchannel logout, /oc/ file-picker proxy to OpenCloud), the OIDC foundation (realm opendesk, LDAP federation, client table), the sealed-secrets flow, the attachment data flow, operational notes and NetworkPolicy requirements; README links to it",
+      "manual": false
+    },
+    {
+      "id": "IC-7",
+      "engine": "ci",
+      "title": "CI lint: remove intercom/intercom-service/redis from :latest baseline",
+      "deps": ["IC-2", "IC-3"],
+      "scope": [
+        "scripts/ci/latest-tag-baseline.txt",
+        "scripts/ci/check-no-latest-tag.sh"
+      ],
+      "accept": "bash scripts/ci/check-no-latest-tag.sh . > /tmp/ics-lint.out 2>&1 && grep -q 'OK: no NEW image tag' /tmp/ics-lint.out && ! grep -qE '^(intercom|intercom-service|redis)\\.nix$' scripts/ci/latest-tag-baseline.txt && nix build .#scs-manifests 2>&1 | tail -2",
+      "acceptance_prose": "check-no-latest-tag.sh passes with zero NEW :latest tags and the baseline no longer lists intercom.nix, intercom-service.nix, redis.nix (they are now pinned); nix build still succeeds",
+      "manual": false
+    }
+  ]
+}
