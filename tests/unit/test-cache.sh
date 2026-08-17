@@ -139,14 +139,21 @@ tf_group_end
 
 # ---- Performance: cache is faster than jq ----
 tf_group_begin; tf_test "cache lookups are faster than jq"
-# Time 100 cache lookups vs 100 jq lookups
-cache_ns=$( { time (for i in $(seq 1 100); do tf_cache_task_field A 2 >/dev/null; done) ; } 2>&1 )
-cache_ns=$(echo "$cache_ns" | grep real | sed 's/.*m\([0-9.]*\)s.*/\1/' | tr ',' '.')
-jq_ns=$( { time (for i in $(seq 1 100); do tf_task_field A .engine >/dev/null; done) ; } 2>&1 )
-jq_ns=$(echo "$jq_ns" | grep real | sed 's/.*m\([0-9.]*\)s.*/\1/' | tr ',' '.')
-tf_info "100 cache lookups: ${cache_ns}s, 100 jq lookups: ${jq_ns}s"
-# Cache should be significantly faster (at least 2x)
-tf_assert "cache faster than jq" awk "BEGIN{exit !(${cache_ns} < ${jq_ns})}"
+# Warmup (populate page cache)
+for i in $(seq 1 10); do tf_cache_task_field A 2 >/dev/null; done
+for i in $(seq 1 10); do tf_task_field A .engine >/dev/null; done
+# Time 200 cache lookups vs 200 jq lookups (date +%s%N is more reliable than time builtin)
+t0=$(date +%s%N)
+for i in $(seq 1 200); do tf_cache_task_field A 2 >/dev/null; done
+t1=$(date +%s%N)
+cache_ms=$(( (t1 - t0) / 1000000 ))
+t0=$(date +%s%N)
+for i in $(seq 1 200); do tf_task_field A .engine >/dev/null; done
+t1=$(date +%s%N)
+jq_ms=$(( (t1 - t0) / 1000000 ))
+tf_info "200 cache lookups: ${cache_ms}ms, 200 jq lookups: ${jq_ms}ms"
+# Cache should be faster (awk on TSV vs jq parsing JSON)
+tf_assert "cache faster than jq" test "$cache_ms" -lt "$jq_ms"
 tf_group_end
 
 tf_test_summary

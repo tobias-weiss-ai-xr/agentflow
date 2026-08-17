@@ -15,7 +15,7 @@
 # shellcheck source=common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-TF_CORRECTIONS_DIR="${TF_STATE_DIR}/corrections}"
+TF_CORRECTIONS_DIR="${TF_STATE_DIR}/corrections"
 mkdir -p "$TF_CORRECTIONS_DIR"
 
 # tf_corrections_record <error_category> <engine> <correction> <task_id>

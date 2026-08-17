@@ -88,8 +88,21 @@ TF_WORKER_FILTER=""
 TF_TASK_FILTER=""
 TF_MAX_ROUNDS=0          # 0 = unlimited
 TF_MAX_PARALLEL="${TF_MAX_PARALLEL:-$(tf_worker_names | wc -l)}"
-TF_AFFINITY="${TF_AFFINITY:-1}"  # 1 = win-rate routing on; 0 = config-order fallback
-TF_ROUTING="${TF_ROUTING:-1}"     # 1 = cross-model tier routing on; 0 = ignore worker tiers
+# --- moe-sovereign-inspired features (all default ON) ---
+# Complexity auto-tier: gzip compressibility + scope → booster/standard/deep
+TF_AUTO_TIER="${TF_AUTO_TIER:-1}"
+# Affinity mode: 2 = UCB1 (exploration/exploitation), 1 = win-rate, 0 = config-order
+TF_AFFINITY="${TF_AFFINITY:-2}"
+# Cross-model tier routing: 1 = respect worker tier limits, 0 = ignore
+TF_ROUTING="${TF_ROUTING:-1}"
+# Egress guard: block workers with external API endpoints (TF_LOCAL_ONLY=1)
+TF_LOCAL_ONLY="${TF_LOCAL_ONLY:-0}"
+# Constitution checks: pre-merge deterministic checks (secrets, out-of-scope, debug)
+TF_CONSTITUTION="${TF_CONSTITUTION:-1}"
+# Episodic memory: record/recall past task outcomes for few-shot learning
+TF_EPISODES_MAX="${TF_EPISODES_MAX:-500}"
+# Transparency log: per-dispatch and per-decision TSV logs
+TF_TRANSPARENCY_LOG="${TF_TRANSPARENCY_LOG:-$TF_LOG_DIR}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
