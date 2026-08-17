@@ -17,6 +17,8 @@
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 # shellcheck source=status.sh
 . "$(dirname "${BASH_SOURCE[0]}")/status.sh"
+# shellcheck source=cache.sh
+. "$(dirname "${BASH_SOURCE[0]}")/cache.sh"
 
 # ---------------------------------------------------------------------------
 # Scope contention detection
@@ -143,18 +145,33 @@ tf_ready_task_ids() {
 # Internal: compute ready task ids of a given type
 # type=regular: normal ready tasks (all deps done)
 # type=speculative: speculatively ready tasks (all deps except one running dep)
+#
+# Uses TSV cache (tf_cache_*) when available for O(1) lookups per task.
+# Falls back to jq-based lookups when cache is not built (off-hot-path).
 tf_smart_ready_task_ids_impl() {
   local ready_type="$1"
   local policy="${TF_CONTENTION_POLICY:-defer}"
   local id depth ready_ids=""
   local conflicts conflicter
 
+  # Use cache-aware task iteration when available (avoids 1 jq per task)
+  local task_ids
+  if tf_cache_valid 2>/dev/null; then
+    task_ids="$(tf_cache_all_task_ids)"
+  else
+    task_ids="$(tf_all_task_ids)"
+  fi
+
   while IFS= read -r id; do
     [[ -z "$id" ]] && continue
     
     local is_ready=0
     if [[ "$ready_type" == "regular" ]]; then
-      tf_is_ready "$id" || continue
+      if tf_cache_valid 2>/dev/null; then
+        tf_cache_is_ready "$id" || continue
+      else
+        tf_is_ready "$id" || continue
+      fi
       is_ready=1
     elif [[ "$ready_type" == "speculative" ]]; then
       tf_is_speculatively_ready "$id" || continue
@@ -163,7 +180,11 @@ tf_smart_ready_task_ids_impl() {
 
     # Check contention (unless policy allows it)
     if [[ "$policy" == "defer" ]]; then
-      conflicts="$(tf_scope_conflicts "$id")"
+      if tf_cache_valid 2>/dev/null; then
+        conflicts="$(tf_cache_scope_conflicts "$id")"
+      else
+        conflicts="$(tf_scope_conflicts "$id")"
+      fi
       if [[ -n "$conflicts" ]]; then
         conflicter="$(echo "$conflicts" | head -1)"
         tf_info "schedule: $id deferred (scope contention with running task $conflicter)"
@@ -172,12 +193,12 @@ tf_smart_ready_task_ids_impl() {
     fi
 
     ready_ids+=" $id"
-  done < <(tf_all_task_ids)
+  done <<< "$task_ids"
 
   # Sort by depth (deepest = highest critical path priority first)
   if [[ -f "$TF_STATE_DIR/task-depths.json" ]]; then
     for id in $ready_ids; do
-      depth="$(tf_get_task_depth "$id")"
+      depth="$(tf_cache_task_depth "$id")"
       echo "$depth $id"
     done | sort -rn | awk '{print $2}'
   else

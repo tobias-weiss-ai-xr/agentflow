@@ -17,6 +17,20 @@
 . "$(dirname "${BASH_SOURCE[0]}")/receipt.sh"
 # shellcheck source=schedule.sh
 . "$(dirname "${BASH_SOURCE[0]}")/schedule.sh"
+# shellcheck source=cache.sh
+. "$(dirname "${BASH_SOURCE[0]}")/cache.sh"
+# shellcheck source=episodic.sh
+. "$(dirname "${BASH_SOURCE[0]}")/episodic.sh"
+# shellcheck source=complexity.sh
+. "$(dirname "${BASH_SOURCE[0]}")/complexity.sh"
+# shellcheck source=trust.sh
+. "$(dirname "${BASH_SOURCE[0]}")/trust.sh"
+# shellcheck source=transparency.sh
+. "$(dirname "${BASH_SOURCE[0]}")/transparency.sh"
+# shellcheck source=constitution.sh
+. "$(dirname "${BASH_SOURCE[0]}")/constitution.sh"
+# shellcheck source=corrections.sh
+. "$(dirname "${BASH_SOURCE[0]}")/corrections.sh"
 
 # tf_render_prompt <task_id>  → prints filled prompt to stdout.
 # Uses bash parameter expansion (NOT envsubst) so only our explicit {{VAR}}
@@ -65,7 +79,7 @@ $(tf_error_snippet "$TF_LOG_DIR/$id.verify.log" 2>/dev/null | head -40)
 
 "
 
-    # Category-specific retry blocks
+    # Category-specific retry blocks (gap-aware retry with self-correction few-shot)
     case "$category" in
       no_op)
         # The agent produced no changes last time. Be very explicit.
@@ -98,7 +112,53 @@ the core functionality first and add tests, then iterate if time allows.
 "
         fi
         ;;
+      compile_error|test_failure)
+        # Self-correction few-shot: inject past corrections for this error category
+        local corrections
+        corrections="$(tf_corrections_recall "$category" "$engine" 2>/dev/null)"
+        if [[ -n "$corrections" ]]; then
+          error_block+="
+## ⚠️ Self-Correction: past fixes for $category
+
+Previous similar failures were resolved by:
+$corrections
+
+"
+        fi
+        ;;
+      merge_conflict)
+        error_block+="
+## ⚠️ Previous attempt had a merge conflict
+
+The branch is preserved. Resolve the conflict in the files that conflicted.
+The acceptance gate passed last time, so your changes were correct — you just
+need to rebase them onto the latest main.
+
+"
+        ;;
     esac
+  fi
+
+  # Episodic memory: recall similar past episodes (grep-based, ~1ms)
+  local episode_block=""
+  episode_block="$(tf_episode_recall "$id" 2>/dev/null)"
+  if [[ -n "$episode_block" ]]; then
+    episode_block="
+
+$episode_block
+
+"
+  fi
+
+  # Mission context: project-level context (loaded once at startup, 0 jq per dispatch)
+  local mission_block=""
+  if [[ -n "${TF_MISSION_CONTEXT:-}" ]]; then
+    mission_block="
+
+## Project Context
+$TF_MISSION_CONTEXT
+
+"
   fi
 
   # Select prompt template: use openspec-aware template if OpenSpec metadata present
@@ -126,6 +186,8 @@ the core functionality first and add tests, then iterate if time allows.
   accept_esc="$(printf '%s' "$accept" | sed 's/[&\/]/\\&/g')"
   tmpl="$(printf '%s' "$tmpl" | sed "s/{{ACCEPT_COMMAND}}/$accept_esc/g")"
   tmpl="${tmpl//\{\{PREVIOUS_ERROR\}\}/$error_block}"
+  tmpl="${tmpl//\{\{EPISODES\}\}/$episode_block}"
+  tmpl="${tmpl//\{\{MISSION\}\}/$mission_block}"
   printf '%s' "$tmpl"
 }
 
@@ -350,9 +412,46 @@ tf_dispatch_one() {
 
   # 7. Status update + merge
   if [[ "$verdict" == PASS* ]]; then
+    # Constitution check (deterministic pre-merge checks, if enabled)
+    if [[ "${TF_CONSTITUTION:-0}" == "1" ]]; then
+      if ! tf_constitution_check "$id" "$wt"; then
+        tf_warn "$id: constitution check failed — merging anyway (advisory)"
+        tf_log_decision "$id" "CONSTITUTION" "constitution check failed (advisory)"
+      fi
+    fi
+
+    # Trust score evaluation (pure arithmetic, ~0ms)
+    local scope_violations=0
+    local scope_log="$TF_LOG_DIR/$id.scope.log"
+    if [[ -f "$scope_log" ]]; then
+      scope_violations="$(grep -c 'OUT-OF-SCOPE' "$scope_log" 2>/dev/null || echo 0)"
+    fi
+    local gate_passed=1
+    [[ "$verdict" != PASS* ]] && gate_passed=0
+    local trust_score trust_bucket
+    trust_score="$(tf_trust_score "$id" "$gate_passed" "$([[ $scope_violations -eq 0 ]] && echo 1 || echo 0)" "$attempts" "$worker" "$engine")"
+    trust_bucket="$(tf_trust_bucket "$trust_score")"
+    tf_log_dispatch "$id" "trust" "score=$trust_score bucket=$trust_bucket"
+    tf_log_decision "$id" "TRUST" "score=$trust_score bucket=$trust_bucket" "gate=$gate_passed scope_ok=$([[ $scope_violations -eq 0 ]] && echo 1 || echo 0) retries=$attempts"
+
     if tf_worktree_merge "$id"; then
       tf_done_task "$id"
       tf_receipt_close "$id" "done"
+      # Episodic memory: record successful completion
+      local wall_clock
+      wall_clock="$(tf_receipt_total "$id" .tokens_in 2>/dev/null || echo 0)"  # rough proxy
+      tf_episode_record "$id" "$worker" 1 "$wall_clock" ""
+      # Self-correction: if this was a successful retry, record the correction
+      if [[ "$attempts" -gt 0 ]]; then
+        local prev_cat
+        prev_cat="$(tf_status_get "$id" .error_category 2>/dev/null || echo "")"
+        if [[ -n "$prev_cat" && "$prev_cat" != "none" ]]; then
+          local correction
+          correction="$(tf_corrections_extract "$id" "$wt" "$prev_cat")"
+          tf_corrections_record "$prev_cat" "$engine" "$correction" "$id"
+        fi
+      fi
+      tf_log_dispatch "$id" "merge" "trust=$trust_score"
       tf_worktree_remove "$id"
       tf_worktree_delete_branch "$id"
       return 0
@@ -367,12 +466,19 @@ tf_dispatch_one() {
         tf_fail_task "$id" "merge failed (gate passed but main diverged; branch kept for retry)"
       fi
       tf_receipt_close "$id" "failed" "merge_conflict"
+      tf_log_dispatch "$id" "merge_fail" "conflicts: $conflicts"
       tf_info "$id: preserved worktree + branch for retry or manual resolution"
       return 1
     fi
   else
     tf_fail_task "$id" "acceptance gate: $verdict"
     tf_receipt_close "$id" "failed" "gate_failed"
+    # Episodic memory: record failed attempt
+    local err_cat
+    err_cat="$(tf_get_error_category "$id" 2>/dev/null || echo "unknown")"
+    tf_episode_record "$id" "$worker" 0 0 "$err_cat"
+    tf_log_dispatch "$id" "gate_fail" "verdict=$verdict category=$err_cat"
+    tf_log_decision "$id" "GATE_FAIL" "verdict=$verdict" "category=$err_cat worker=$worker"
     tf_worktree_remove "$id" --force
     tf_worktree_delete_branch "$id"
     return 1

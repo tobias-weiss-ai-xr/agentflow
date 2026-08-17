@@ -190,3 +190,5 @@ checks `git diff` against the base commit before running the gate.
 Do not push; the orchestrator merges and pushes.
 
 {{PREVIOUS_ERROR}}
+{{EPISODES}}
+{{MISSION}}

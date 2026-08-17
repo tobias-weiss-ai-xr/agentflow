@@ -40,7 +40,7 @@ SECURITY-SCS.md               # This file
 ### 1. Navigate to Taskfleet
 
 ```bash
-cd /home/weissto_local/git/taskfleet
+cd /home/weissto_local/git/agentflow
 ```
 
 ### 2. Point to SCS Repository

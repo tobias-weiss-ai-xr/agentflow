@@ -36,6 +36,18 @@ TF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$TF_DIR/lib/status.sh"
 # shellcheck source=lib/worktree.sh
 . "$TF_DIR/lib/worktree.sh"
+# shellcheck source=lib/cache.sh
+. "$TF_DIR/lib/cache.sh"
+# shellcheck source=lib/episodic.sh
+. "$TF_DIR/lib/episodic.sh"
+# shellcheck source=lib/complexity.sh
+. "$TF_DIR/lib/complexity.sh"
+# shellcheck source=lib/trust.sh
+. "$TF_DIR/lib/trust.sh"
+# shellcheck source=lib/transparency.sh
+. "$TF_DIR/lib/transparency.sh"
+# shellcheck source=lib/constitution.sh
+. "$TF_DIR/lib/constitution.sh"
 # shellcheck source=lib/dispatch.sh
 . "$TF_DIR/lib/dispatch.sh"
 # shellcheck source=lib/schedule.sh
@@ -173,6 +185,41 @@ tf_validate_tasks || true
 TF_MERGE_LOCK="${TF_MERGE_LOCK:-$TF_STATE_DIR/merge.lock}"
 mkdir -p "$TF_STATE_DIR"
 
+# Egress guard: validate worker endpoints at startup (TF_LOCAL_ONLY=1).
+# Blocks workers with external api_base to prevent data exfiltration.
+declare -gA TF_LOCAL_WORKERS
+tf_validate_workers() {
+  TF_LOCAL_WORKERS=()
+  while IFS= read -r worker; do
+    [[ -z "$worker" ]] && continue
+    if [[ "${TF_LOCAL_ONLY:-0}" == "1" ]]; then
+      local api_base
+      api_base="$(tf_worker_field "$worker" .endpoint 2>/dev/null || echo "")"
+      if [[ -n "$api_base" ]] && [[ ! "$api_base" =~ ^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.|localhost|::1) ]]; then
+        tf_warn "worker $worker has external endpoint ($api_base) — blocked in TF_LOCAL_ONLY mode"
+        continue
+      fi
+    fi
+    TF_LOCAL_WORKERS["$worker"]=1
+  done < <(tf_worker_names)
+}
+
+# Mission context: load once at startup into env var (0 jq per dispatch).
+# Injected into worker prompts as a "Project Context" preamble.
+TF_MISSION_CONTEXT=""
+tf_load_mission() {
+  local mission_file="$TF_STATE_DIR/mission.json"
+  if [[ -f "$mission_file" ]]; then
+    TF_MISSION_CONTEXT="$(jq -r '.description // empty' "$mission_file" 2>/dev/null)"
+    if [[ -n "$TF_MISSION_CONTEXT" ]]; then
+      tf_info "mission context loaded: ${TF_MISSION_CONTEXT:0:80}..."
+    fi
+  fi
+}
+
+tf_validate_workers
+tf_load_mission
+
 tf_info "taskfleet starting — mode=$TF_MODE poll=${TF_POLL}s parallel=$TF_MAX_PARALLEL"
 
 # ---------------------------------------------------------------------------
@@ -266,12 +313,24 @@ tf_run() {
     round=$((round + 1))
     tf_reap
 
-    # termination check
+    # Build TSV caches for the scheduling round (3 jq calls instead of 100+).
+    # This is the single biggest performance optimization: replaces per-field
+    # jq calls (251ms each) with grep/awk lookups (1-15ms each).
+    tf_cache_build
+
+    # termination check (use cache when available)
     local done_n failed_n running_n ready_n total_n
-    done_n="$(tf_count_status done)"
-    failed_n="$(tf_count_status failed)"
-    running_n="$(tf_count_status running)"
-    total_n="$(jq '[to_entries[] | select(.value | type=="object" and has("status"))] | length' "$STATUS_JSON")"
+    if tf_cache_valid 2>/dev/null; then
+      done_n="$(tf_cache_count_status done)"
+      failed_n="$(tf_cache_count_status failed)"
+      running_n="$(tf_cache_count_status running)"
+      total_n="$(awk -F'\t' 'END{print NR}' "$TF_CACHE_DIR/status.tsv")"
+    else
+      done_n="$(tf_count_status done)"
+      failed_n="$(tf_count_status failed)"
+      running_n="$(tf_count_status running)"
+      total_n="$(jq '[to_entries[] | select(.value | type=="object" and has("status"))] | length' "$STATUS_JSON")"
+    fi
 
     tf_info "round $round — done=$done_n failed=$failed_n running=$running_n total=$total_n"
 
@@ -396,15 +455,31 @@ tf_run() {
         # no history.
         local tier
         tier="$(tf_task_tier "$tid")"
+        # Auto-tier: if TF_AUTO_TIER=1, compute complexity-based tier
+        if [[ "${TF_AUTO_TIER:-0}" == "1" ]]; then
+          local auto_tier
+          auto_tier="$(tf_auto_tier "$tid")"
+          if [[ -n "$auto_tier" ]]; then
+            tier="$auto_tier"
+            tf_log_decision "$tid" "TIER_OVERRIDE" "auto-tier=$auto_tier (complexity-based)"
+          fi
+        fi
         local healthy_cands=()
         while IFS= read -r cand; do
           [[ -z "$cand" ]] && continue
+          # Egress guard: skip workers blocked by TF_LOCAL_ONLY
+          if [[ "${TF_LOCAL_ONLY:-0}" == "1" ]] && [[ -z "${TF_LOCAL_WORKERS[$cand]:-}" ]]; then
+            tf_log_decision "$tid" "WORKER_SKIP" "worker=$cand blocked by egress guard (external endpoint)"
+            continue
+          fi
           if ! tf_worker_healthy "$cand"; then
             tf_warn "worker $cand endpoint unhealthy — skipping this round"
+            tf_log_decision "$tid" "WORKER_SKIP" "worker=$cand unhealthy"
             continue
           fi
           if [[ -n "$TF_ROUTING" ]] && ! tf_worker_can_tier "$cand" "$tier"; then
             tf_info "worker $cand cannot handle $tier tasks — skipping (tiers: $(tf_worker_tiers "$cand" | tr '\n' ' '))"
+            tf_log_decision "$tid" "WORKER_SKIP" "worker=$cand cannot handle tier=$tier"
             continue
           fi
           healthy_cands+=("$cand")
@@ -418,6 +493,8 @@ tf_run() {
       [[ -z "$fw" ]] && { tf_info "no free healthy workers, waiting"; break; }
       # dispatch in background. Fine-grained locks (status + merge) protect
       # the shared state; the long pi run is fully parallel across worktrees.
+      tf_log_dispatch "$tid" "dispatch" "worker=$fw tier=$tier"
+      tf_log_decision "$tid" "DISPATCH" "worker=$fw tier=$tier" "affinity=$(tf_affinity_score "$fw" "$tid" 2>/dev/null || echo 0.5)"
       tf_dispatch_one "$tid" "$fw" &
       local bg_pid=$!
       tf_runstate_set "$tid" "$bg_pid" "$fw"

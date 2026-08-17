@@ -3,12 +3,12 @@
 # Restarts the orchestrator if it dies (observed: process vanishes without
 # error after ~2 min in this sandbox). Each restart recovers dead runstate.
 set -u
-cd /home/weissto_local/git/taskfleet
+cd /home/weissto_local/git/agentflow
 export TF_REPO_DIR=/home/weissto_local/git/next-mailserver
-export TF_TASKS_JSON=/home/weissto_local/git/taskfleet/config/tasks-mailserver.json
-export TF_PROMPT_DIR=/home/weissto_local/git/taskfleet/prompts-mail
+export TF_TASKS_JSON=/home/weissto_local/git/agentflow/config/tasks-mailserver.json
+export TF_PROMPT_DIR=/home/weissto_local/git/agentflow/prompts-mail
 # Isolated state dir so concurrent runs (e.g. opencode tasks) don't clash
-export TF_STATE_DIR=/home/weissto_local/git/taskfleet/state-mail
+export TF_STATE_DIR=/home/weissto_local/git/agentflow/state-mail
 
 MAX_RESTARTS=30
 restarts=0

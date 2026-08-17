@@ -83,6 +83,8 @@ re-run. **Never commit code that fails the acceptance gate.**
 - RBAC follows least-privilege principle
 
 {{PREVIOUS_ERROR}}
+{{EPISODES}}
+{{MISSION}}
 
 ## If you are a merge-conflict retry
 

@@ -64,6 +64,8 @@ See plan §13. In summary your change must:
 - Not break any existing workspace `--lib` test
 
 {{PREVIOUS_ERROR}}
+{{EPISODES}}
+{{MISSION}}
 
 ## If you are a merge-conflict retry
 
