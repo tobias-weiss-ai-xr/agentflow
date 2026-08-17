@@ -174,6 +174,11 @@ $TF_MISSION_CONTEXT
   tmpl="${tmpl//\{\{ENGINE\}\}/$engine}"
   tmpl="${tmpl//\{\{PLAN_SECTION\}\}/$plan_section}"
   tmpl="${tmpl//\{\{SCOPE_BLOCK\}\}/$scope_block}"
+  # Task description (acceptance_prose gives the worker context)
+  local task_desc
+  task_desc="$(tf_task_field "$id" .acceptance_prose 2>/dev/null || echo '')"
+  [[ -z "$task_desc" || "$task_desc" == "null" ]] && task_desc="No additional description. Follow the scope and acceptance gate."
+  tmpl="${tmpl//\{\{TASK_DESCRIPTION\}\}/$task_desc}"
   # OpenSpec-specific placeholders
   tmpl="${tmpl//\{\{GROUP\}\}/$task_group}"
   local os_project os_change
@@ -220,13 +225,14 @@ tf_dispatch_one() {
   # Zombie guard: any crash path that skips the definitive status update
   # (done/failed) must not leave the task stuck in a transient state.
   trap 'tf_dispatch_zombie_guard "$id"' EXIT
-  local provider model dispatch_timeout log
+  local provider model engine dispatch_timeout log
   # accept is defined in tf_render_prompt(); re-derive it here so the
   # post-gate receipt call (tf_receipt_finish_gate ... "$accept") doesn't hit
   # an unbound variable under `set -u`.
   local accept="$(tf_task_field "$id" .accept 2>/dev/null || echo '')"
   provider="$(tf_worker_field "$worker" .provider)"
   model="$(tf_worker_field "$worker" .model)"
+  engine="$(tf_task_field "$id" .engine 2>/dev/null || echo '')"
   dispatch_timeout="$(tf_default dispatch_timeout_s)"; dispatch_timeout="${dispatch_timeout:-3600}"
   # Apply timeout multiplier from category-aware retry (timeout failures)
   local timeout_mult
@@ -424,7 +430,8 @@ tf_dispatch_one() {
     local scope_violations=0
     local scope_log="$TF_LOG_DIR/$id.scope.log"
     if [[ -f "$scope_log" ]]; then
-      scope_violations="$(grep -c 'OUT-OF-SCOPE' "$scope_log" 2>/dev/null || echo 0)"
+      scope_violations="$(grep -c 'OUT-OF-SCOPE' "$scope_log" 2>/dev/null)"
+      [[ -z "$scope_violations" ]] && scope_violations=0
     fi
     local gate_passed=1
     [[ "$verdict" != PASS* ]] && gate_passed=0
