@@ -332,7 +332,7 @@ tf_run() {
     tf_cache_build
 
     # termination check (use cache when available)
-    local done_n failed_n running_n ready_n total_n
+    local done_n failed_n running_n total_n
     if tf_cache_valid 2>/dev/null; then
       done_n="$(tf_cache_count_status done)"
       failed_n="$(tf_cache_count_status failed)"
@@ -371,7 +371,7 @@ tf_run() {
       # Nothing dispatchable and nothing in flight.
       # Check whether this is a true deadlock (failed tasks blocking ready)
       # or just permanent failures (no tasks can ever become ready).
-      local blocked_by_failed blocked_n perm_failed_n
+      local perm_failed_n
       perm_failed_n="$(tf_count_status failed)"
 
       if [[ $perm_failed_n -gt 0 ]]; then
@@ -382,9 +382,8 @@ tf_run() {
         local auto_retry=0
         while IFS= read -r fid; do
           [[ -z "$fid" ]] && continue
-          local cat2 att2
+          local cat2
           cat2="$(tf_status_get "$fid" .error_category)"
-          att2="$(tf_status_get "$fid" .attempts)"
           # Reset anything that is NOT a definitive model failure. Merge
           # conflicts (branch preserved), unknown, empty, infra/provider
           # categories are transient and deserve a graceful retry.

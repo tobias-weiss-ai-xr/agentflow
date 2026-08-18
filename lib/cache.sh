@@ -23,6 +23,9 @@
 TF_CACHE_DIR="${TF_STATE_DIR:-$TF_DIR/state}/cache"
 mkdir -p "$TF_CACHE_DIR"
 
+# Ensure TF_RECEIPT_DIR is set (receipt.sh may not be sourced in all contexts).
+TF_RECEIPT_DIR="${TF_RECEIPT_DIR:-${TF_STATE_DIR:-$TF_DIR/state}/receipts}"
+
 # ---------------------------------------------------------------------------
 # Cache builders (call once per scheduling round)
 # ---------------------------------------------------------------------------

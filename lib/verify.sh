@@ -158,22 +158,24 @@ tf_verify() {
 
   local rc=0
   local gate_script="$TF_STATE_DIR/.gate-$id.sh"
+  [[ "$gate_script" != /* ]] && gate_script="$TF_DIR/$gate_script"
   { echo '#!/bin/bash'; echo "export PATH=\$HOME/.cargo/bin:\$PATH"; [[ -n "${TF_GATE_ENV:-}" ]] && echo "export $TF_GATE_ENV"; echo "$accept"; } > "$gate_script"
   chmod +x "$gate_script"
-  {
+  (
     echo "=== $id acceptance gate: $accept ==="
     echo "=== worktree: $wt ==="
     echo "=== started: $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
     cd "$wt" || exit 127
     timeout "$timeout_s" bash -l "$gate_script"
-    rc=$?
-  } >> "$log" 2>&1
+  ) >> "$log" 2>&1
+  rc=$?
   rm -f "$gate_script"
 
   if [[ $rc -eq 0 ]]; then
     tf_info "$id: gate PASS"
     # Remove any previous error classification
     rm -f "$TF_LOG_DIR/$id.error.json"
+    [[ "$TF_LOG_DIR" != /* ]] && rm -f "$TF_DIR/$TF_LOG_DIR/$id.error.json"
     echo "PASS"
     return 0
   elif [[ $rc -eq 124 ]]; then
@@ -198,6 +200,8 @@ tf_verify() {
 tf_write_error_json() {
   local id="$1" category="$2" summary="$3"
   local errfile="$TF_LOG_DIR/$id.error.json"
+  [[ "$errfile" != /* ]] && errfile="$TF_DIR/$errfile"
+  mkdir -p "$(dirname "$errfile")"
   jq -n --arg cat "$category" --arg sum "$summary" \
     --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{category: $cat, summary: $sum, classified_at: $now}' \
@@ -207,6 +211,7 @@ tf_write_error_json() {
 # tf_get_error_category <task_id> → prints category or "none"
 tf_get_error_category() {
   local errfile="$TF_LOG_DIR/$1.error.json"
+  [[ "$errfile" != /* ]] && errfile="$TF_DIR/$errfile"
   if [[ -f "$errfile" ]]; then
     jq -r '.category // "none"' "$errfile"
   else
@@ -217,6 +222,7 @@ tf_get_error_category() {
 # tf_get_error_summary <task_id> → prints summary or ""
 tf_get_error_summary() {
   local errfile="$TF_LOG_DIR/$1.error.json"
+  [[ "$errfile" != /* ]] && errfile="$TF_DIR/$errfile"
   if [[ -f "$errfile" ]]; then
     jq -r '.summary // ""' "$errfile"
   else

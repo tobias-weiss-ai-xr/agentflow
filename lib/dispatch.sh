@@ -39,7 +39,7 @@
 # classified error + relevant log excerpt.
 tf_render_prompt() {
   local id="$1" title engine section accept scope_block tmpl
-  local task_group task_project task_change openspec_prompt
+  local task_group task_project task_change
   title="$(tf_task_field "$id" .title)"
   engine="$(tf_task_field "$id" .engine)"
   section="$(tf_task_field "$id" .section)"
