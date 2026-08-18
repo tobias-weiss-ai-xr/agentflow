@@ -187,7 +187,7 @@ fi
 # branches (kill -9 leftovers break fresh worktree creation) and run-state
 # entries whose dispatch process is dead (phantom "running" tasks).
 # Preserve branches flagged for conflict-retry (keep-branch).
-local_preserved="$(jq -r 'to_entries[] | select(.value.last_error != null and (.value.last_error | contains("merge"))) | .value.branch' "$STATUS_JSON" 2>/dev/null | grep -v '^null$' | tr '\n' ' ')"
+local_preserved="$(jq -r 'to_entries[] | select(.value | type=="object" and has("status")) | select(.value.last_error != null and (.value.last_error | contains("merge"))) | .value.branch' "$STATUS_JSON" 2>/dev/null | grep -v '^null$' | tr '\n' ' ')"
 tf_recover_stale_worktrees "$local_preserved"
 tf_reset_dead_runstate
 
@@ -288,6 +288,19 @@ tf_free_workers() {
   done < <(tf_worker_names)
 }
 
+# tf_worker_is_free <worker> — true if the worker costs nothing per token.
+# Primary signal is the explicit "free" flag in workers.json; as a fallback we
+# treat loopback / private-range endpoints as self-hosted (no per-token cost).
+# Used by the cost-aware scheduler to prefer free workers over paid clouds.
+tf_worker_is_free() {
+  local f; f="$(tf_worker_field "$1" .free 2>/dev/null || echo "")"
+  [[ "$f" == "true" ]] && return 0
+  local ep; ep="$(tf_worker_field "$1" .endpoint 2>/dev/null || echo "")"
+  [[ -z "$ep" ]] && return 1
+  [[ "$ep" =~ ^https?://(127\.|localhost|::1|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.) ]] && return 0
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # Reap finished background dispatches.
 # ---------------------------------------------------------------------------
@@ -309,8 +322,18 @@ tf_reap() {
       # reaching a definitive status (done/failed) must go back to ready —
       # the EXIT-trap guard can be bypassed by kill -9 and some crash paths.
       if [[ $rc -ne 0 ]] && { [[ "$status" == "running" ]] || [[ "$status" == "verifying" ]]; }; then
-        tf_warn "$id: dispatch exited rc=$rc in transient status '$status' — resetting to ready (reap guard)"
-        tf_status_set "$id" ready '.last_error="dispatch crashed before definitive status (reap guard)"' 2>/dev/null || true
+        # RAILGUARD against endless LLM burn: a crashed dispatch (kill -9 /
+        # crash before definitive status) must count as an attempt AND respect
+        # the max-attempts cap. Otherwise a task that crash-loops (e.g. worktree
+        # creation fails on every launch) would be reset to ready forever and
+        # keep relaunching the paid worker. All writes scoped to .[$id] so we
+        # never create stray top-level keys that crash later status queries.
+        local _a _max _st
+        _a="$(tf_status_get "$id" .attempts)"; _a="${_a:-0}"; _a=$((_a + 1))
+        _max="$(tf_default max_attempts)"; _max="${_max:-2}"
+        _st="$([[ $_a -ge $_max ]] && echo failed || echo ready)"
+        tf_status_set "$id" "$_st" '.[$id].attempts=((.[$id].attempts // 0)+1) | .[$id].last_error="dispatch crashed before definitive status (reap guard)" | .[$id].error_category="unknown" | .[$id].next_retry_at=null' 2>/dev/null || true
+        tf_warn "$id: dispatch crashed (rc=$rc) in status '$status' — $([[ $_a -ge $_max ]] && echo 'PERMANENTLY FAILED' || echo "reset to ready (attempt $_a/$_max)") (reap guard)"
       fi
       tf_runstate_clear "$id"
     fi
@@ -380,23 +403,33 @@ tf_run() {
         # these are transient and shouldn't permanently block the pipeline.
         # Only model-failure categories (compile/test/no_op) stay failed.
         local auto_retry=0
+        local max_retries; max_retries="$(tf_default max_attempts)"; max_retries="${max_retries:-2}"
         while IFS= read -r fid; do
           [[ -z "$fid" ]] && continue
-          local cat2
+          local cat2 attempts2
           cat2="$(tf_status_get "$fid" .error_category)"
-          # Reset anything that is NOT a definitive model failure. Merge
-          # conflicts (branch preserved), unknown, empty, infra/provider
-          # categories are transient and deserve a graceful retry.
+          attempts2="$(tf_status_get "$fid" .attempts)"; attempts2="${attempts2:-0}"
+          # Definitive model failures stay failed — do not auto-reset.
           case "$cat2" in
             compile_error|test_failure|no_op|missing_package)
-              ;;  # definitive model failure — stays failed
-            *)
-              tf_warn "$fid: transient failure category [$cat2] — auto-resetting for graceful retry"
-              tf_status_set "$fid" ready '.attempts=0 | .last_error=null | .next_retry_at=null | .error_category=null | .error_summary=null' 2>/dev/null || true
-              auto_retry=1
-              ;;
+              continue ;;
           esac
-        done < <(jq -r 'to_entries[] | select(.value.status=="failed") | .key' "$STATUS_JSON")
+          # RAILGUARD against endless LLM burn: never auto-reset past the
+          # max-attempts cap, and respect the cooldown so retries are paced.
+          # Writes are scoped to .[$id] so we never create stray top-level
+          # keys that would later crash the status queries.
+          if [[ "$attempts2" -ge "$max_retries" ]]; then
+            tf_warn "$fid: attempts ($attempts2) hit cap ($max_retries) — NOT auto-resetting (would loop forever)"
+            continue
+          fi
+          local nr2; nr2="$(tf_status_get "$fid" .next_retry_at)"
+          if [[ -n "$nr2" ]] && [[ "$nr2" > "$(date -u +%Y-%m-%dT%H:%M:%SZ)" ]]; then
+            continue  # cooldown not elapsed — normal ready-flip will retry it
+          fi
+          tf_warn "$fid: transient failure category [$cat2] — auto-resetting for graceful retry (attempt $((attempts2+1))/$max_retries)"
+          tf_status_set "$fid" ready '.[$id].attempts=((.[$id].attempts // 0)+1) | .[$id].last_error=null | .[$id].error_category=null | .[$id].error_summary=null | .[$id].next_retry_at=null' 2>/dev/null || true
+          auto_retry=1
+        done < <(jq -r 'to_entries[] | select(.value | type=="object" and has("status")) | select(.value.status=="failed") | .key' "$STATUS_JSON")
         if [[ "$auto_retry" -eq 1 ]]; then
           tf_info "auto-reset infra-failed tasks; continuing (round $round)"
           continue
@@ -420,7 +453,7 @@ tf_run() {
             deps2="$(tf_task_field "$tid2" '.deps[]')"
             grep -qxF "$fid" <<< "$deps2" && tf_info "  └─ blocks $tid2"
           done < <(tf_all_task_ids)
-        done < <(jq -r 'to_entries[] | select(.value.status=="failed") | .key' "$STATUS_JSON")
+        done < <(jq -r 'to_entries[] | select(.value | type=="object" and has("status")) | select(.value.status=="failed") | .key' "$STATUS_JSON")
         tf_info "=== End diagnosis ==="
         return 1
       else
@@ -437,7 +470,14 @@ tf_run() {
       while IFS= read -r tid; do
         [[ -z "$tid" ]] && continue
         local fw_dry
-        fw_dry="$(tf_free_workers | head -1)"
+        # Prefer free/local workers in the preview too, so the dry-run report
+        # matches what the cost-aware scheduler will actually pick (honors
+        # TF_COST_AWARE; defaults to ON). Lists free workers first, then all.
+        if [[ "${TF_COST_AWARE:-1}" == "1" ]]; then
+          fw_dry="$( { while IFS= read -r w; do tf_worker_is_free "$w" && echo "$w"; done < <(tf_free_workers); tf_free_workers; } | head -1 )"
+        else
+          fw_dry="$(tf_free_workers | head -1)"
+        fi
         tf_dispatch_one_dryrun "$tid" "${fw_dry:-<any>}"
         printed=$((printed + 1))
       done <<< "$ready_ids_smart"
@@ -496,6 +536,20 @@ tf_run() {
           fi
           healthy_cands+=("$cand")
         done < <(tf_free_workers)
+        # Cost-aware preference (default ON): if any FREE/LOCAL worker is
+        # capable, restrict the candidate pool to free workers so we don't
+        # spend paid tokens when a local model can do the job. Disable with
+        # TF_COST_AWARE=0 to always consider paid workers too.
+        if [[ "${TF_COST_AWARE:-1}" == "1" && ${#healthy_cands[@]} -gt 1 ]]; then
+          local free_cands=() c
+          for c in "${healthy_cands[@]}"; do
+            if tf_worker_is_free "$c"; then free_cands+=("$c"); fi
+          done
+          if [[ ${#free_cands[@]} -gt 0 ]]; then
+            tf_log_decision "$tid" "WORKER_COST" "preferring free workers: ${free_cands[*]}"
+            healthy_cands=("${free_cands[@]}")
+          fi
+        fi
         if [[ $TF_AFFINITY -ge 1 && ${#healthy_cands[@]} -gt 0 ]]; then
           fw="$(tf_best_worker_for "$tid" "${healthy_cands[@]}")"
         else
