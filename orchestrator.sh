@@ -140,7 +140,7 @@ fi
 # ONLY dispatch modes (run/once) take ownership of the state — read-only
 # modes (status/dry-run/attach/cost/api/import) must NOT kill a live run.
 if [[ "$TF_MODE" == "run" || "$TF_MODE" == "once" ]]; then
-  tf_kill_stale_processes
+  [[ "${TF_SKIP_KILL:-0}" != "1" ]] && tf_kill_stale_processes
 fi
 
 tf_status_init
@@ -497,7 +497,7 @@ tf_run() {
           fi
           healthy_cands+=("$cand")
         done < <(tf_free_workers)
-        if [[ $TF_AFFINITY -eq 1 && ${#healthy_cands[@]} -gt 0 ]]; then
+        if [[ $TF_AFFINITY -ge 1 && ${#healthy_cands[@]} -gt 0 ]]; then
           fw="$(tf_best_worker_for "$tid" "${healthy_cands[@]}")"
         else
           fw="${healthy_cands[0]:-}"

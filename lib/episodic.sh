@@ -31,11 +31,13 @@ tf_episode_record() {
   if tf_cache_valid 2>/dev/null; then
     engine="$(tf_cache_task_field "$id" 2)"
     tier="$(tf_cache_task_field "$id" 3)"
-    scope="$(tf_cache_task_field "$id" 5)"
+    # Cache stores scope as comma-separated; normalise to newline-separated
+    # so the scope_hash matches the non-cache (jq) path.
+    scope="$(tf_cache_task_field "$id" 5 | tr ',' '\n')"
   else
     engine="$(tf_task_field "$id" .engine 2>/dev/null || echo "t")"
     tier="$(tf_task_field "$id" .model_tier 2>/dev/null || echo "standard")"
-    scope="$(tf_task_field "$id" '.scope[]' 2>/dev/null | tr ',' '\n' | head -5)"
+    scope="$(tf_task_field "$id" '.scope[]' 2>/dev/null | head -5)"
   fi
   [[ -z "$engine" ]] && engine="t"
   [[ -z "$tier" ]] && tier="standard"
@@ -69,10 +71,12 @@ tf_episode_recall() {
   local engine scope scope_hash
   if tf_cache_valid 2>/dev/null; then
     engine="$(tf_cache_task_field "$id" 2)"
-    scope="$(tf_cache_task_field "$id" 5)"
+    # Cache stores scope as comma-separated; normalise to newline-separated
+    # so the scope_hash matches tf_episode_record (which uses the same normalisation).
+    scope="$(tf_cache_task_field "$id" 5 | tr ',' '\n')"
   else
     engine="$(tf_task_field "$id" .engine 2>/dev/null || echo "t")"
-    scope="$(tf_task_field "$id" '.scope[]' 2>/dev/null | tr ',' '\n' | head -5)"
+    scope="$(tf_task_field "$id" '.scope[]' 2>/dev/null | head -5)"
   fi
   [[ -z "$engine" ]] && engine="t"
   scope_hash="$(echo "$scope" | md5sum | cut -c1-8)"

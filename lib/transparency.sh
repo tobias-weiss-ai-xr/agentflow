@@ -27,14 +27,18 @@ mkdir -p "$TF_TRANSPARENCY_LOG"
 tf_log_dispatch() {
   local id="$1" event="$2"; shift 2
   local details="$*"
-  local worker tier attempt
-  # Read from cache if available (hot path), otherwise from status
+  local worker="" tier="" attempt="0"
+  # Read worker, tier, attempt from cache (fast) or status (jq).
+  # All three are non-critical metadata for the log; skip if files missing.
   if tf_cache_valid 2>/dev/null; then
     worker="$(tf_cache_status_get "$id" .worker 2>/dev/null || echo "")"
-  else
+    tier="$(tf_cache_task_field "$id" 3 2>/dev/null || echo "")"
+    attempt="$(tf_cache_status_get "$id" .attempts 2>/dev/null || echo 0)"
+  elif [[ -f "$STATUS_JSON" ]]; then
     worker="$(tf_status_get "$id" .worker 2>/dev/null || echo "")"
+    attempt="$(tf_status_get "$id" .attempts 2>/dev/null || echo 0)"
+    [[ -f "$TASKS_JSON" ]] && tier="$(tf_task_field "$id" .model_tier 2>/dev/null || echo "")"
   fi
-  attempt="$(tf_status_get "$id" .attempts 2>/dev/null || echo 0)"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$id" "$event" "${worker:-}" "${tier:-}" "${attempt:-0}" "$details" \
     >> "$TF_TRANSPARENCY_LOG/dispatch.tsv"

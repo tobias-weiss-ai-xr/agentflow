@@ -115,7 +115,12 @@ wo_worker_names() { tf_worker_names "$@"; }
 # Task model tier (booster|fast|standard|deep), default "standard"
 tf_task_tier() {
   local t
-  t="$(tf_task_field "$1" .model_tier 2>/dev/null || echo '')"
+  # Use cache when available (hot path — avoids jq per call)
+  if tf_cache_valid 2>/dev/null; then
+    t="$(tf_cache_task_field "$1" 3 2>/dev/null || echo '')"
+  else
+    t="$(tf_task_field "$1" .model_tier 2>/dev/null || echo '')"
+  fi
   [[ "$t" == "null" || -z "$t" ]] && echo "standard" || echo "$t"
 }
 
