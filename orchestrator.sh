@@ -23,9 +23,23 @@
 #   orchestrator.sh attach TASK_ID  # stream live output for running task
 #
 # Env:
-#   TF_MAX_PARALLEL  (default = number of enabled workers)
+#   TF_MAX_PARALLEL  (default 2 — caps concurrent workers to bound peak energy)
 #   TF_MAX_ROUNDS    (default unlimited)
 #   TF_MERGE_LOCK    (default state/merge.lock)
+#   TF_COST_AWARE    (default 1 — prefer FREE/local workers over paid clouds)
+#   TF_BAYES_COST    (default 1 — Bayesian expected-cost worker routing)
+#   TF_MAX_ATTEMPTS  (default 2 — caps retries/task to bound paid spend)
+#   TF_BUDGET_MINUTES(default 0=off — wall-clock runaway backstop)
+#   TF_AFFINITY      (default 2 — UCB1 exploration/exploitation bandit)
+#
+# Efficiency model (predictably worthwhile, all default-on):
+#   * Graph:      critical-path (longest-path) DAG scheduling prioritises tasks
+#                that unblock the most work, minimising makespan/compute.
+#   * Bayesian:   per-(worker,engine) Beta(wins+1,fails+1) posterior drives a
+#                cheapest-sufficient worker pick (expected cost-to-done).
+#   * Markov:     dispatch rounds are an absorbing chain (done|permanent-fail);
+#                TF_MAX_ATTEMPTS is the guaranteed-termination absorber and
+#                TF_BUDGET_MINUTES the wall-clock backstop against runaways.
 
 set -uo pipefail
 
@@ -56,6 +70,8 @@ TF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$TF_DIR/lib/receipt.sh"
 # shellcheck source=lib/affinity.sh
 . "$TF_DIR/lib/affinity.sh"
+# shellcheck source=lib/bayes.sh
+. "$TF_DIR/lib/bayes.sh"
 # shellcheck source=lib/sources.sh
 . "$TF_DIR/lib/sources.sh"
 
@@ -87,7 +103,7 @@ TF_POLL=15
 TF_WORKER_FILTER=""
 TF_TASK_FILTER=""
 TF_MAX_ROUNDS=0          # 0 = unlimited
-TF_MAX_PARALLEL="${TF_MAX_PARALLEL:-$(tf_worker_names | wc -l)}"
+TF_MAX_PARALLEL="${TF_MAX_PARALLEL:-2}"
 # --- moe-sovereign-inspired features (all default ON) ---
 # Complexity auto-tier: gzip compressibility + scope → booster/standard/deep
 TF_AUTO_TIER="${TF_AUTO_TIER:-1}"
@@ -103,6 +119,16 @@ TF_CONSTITUTION="${TF_CONSTITUTION:-1}"
 TF_EPISODES_MAX="${TF_EPISODES_MAX:-500}"
 # Transparency log: per-dispatch and per-decision TSV logs
 TF_TRANSPARENCY_LOG="${TF_TRANSPARENCY_LOG:-$TF_LOG_DIR}"
+
+# --- cost / energy efficiency (all default ON unless noted) ---
+# Prefer FREE/local workers over paid clouds (loopback/private endpoint or .free flag)
+TF_COST_AWARE="${TF_COST_AWARE:-1}"
+# Bayesian expected-cost routing: pick the cheapest-sufficient worker (free dominates)
+TF_BAYES_COST="${TF_BAYES_COST:-1}"
+# Max retries per task (bounds worst-case paid spend / energy). Override with TF_MAX_ATTEMPTS.
+TF_MAX_ATTEMPTS="${TF_MAX_ATTEMPTS:-2}"
+# Wall-clock budget backstop (minutes). 0 = off. Set (e.g. 240) to hard-stop runaways.
+TF_BUDGET_MINUTES="${TF_BUDGET_MINUTES:-0}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -330,7 +356,7 @@ tf_reap() {
         # never create stray top-level keys that crash later status queries.
         local _a _max _st
         _a="$(tf_status_get "$id" .attempts)"; _a="${_a:-0}"; _a=$((_a + 1))
-        _max="$(tf_default max_attempts)"; _max="${_max:-2}"
+        _max="${TF_MAX_ATTEMPTS:-$(tf_default max_attempts)}"; _max="${_max:-2}"
         _st="$([[ $_a -ge $_max ]] && echo failed || echo ready)"
         tf_status_set "$id" "$_st" '.[$id].attempts=((.[$id].attempts // 0)+1) | .[$id].last_error="dispatch crashed before definitive status (reap guard)" | .[$id].error_category="unknown" | .[$id].next_retry_at=null' 2>/dev/null || true
         tf_warn "$id: dispatch crashed (rc=$rc) in status '$status' — $([[ $_a -ge $_max ]] && echo 'PERMANENTLY FAILED' || echo "reset to ready (attempt $_a/$_max)") (reap guard)"
@@ -345,8 +371,21 @@ tf_reap() {
 # ---------------------------------------------------------------------------
 tf_run() {
   local round=0
+  local TF_RUN_START
+  TF_RUN_START="$(date +%s)"
   while true; do
     round=$((round + 1))
+    # Wall-clock budget guard (TF_BUDGET_MINUTES, opt-in). Hard-stop runaway
+    # runs that would otherwise burn unbounded energy/$. The absorbing-state
+    # backstop for the Markov chain of dispatch rounds.
+    if [[ "${TF_BUDGET_MINUTES:-0}" -gt 0 ]]; then
+      local _elapsed=$(( ( $(date +%s) - TF_RUN_START ) / 60 ))
+      if [[ "$_elapsed" -ge "${TF_BUDGET_MINUTES:-0}" ]]; then
+        tf_error "BUDGET EXCEEDED: run exceeded TF_BUDGET_MINUTES=${TF_BUDGET_MINUTES} (elapsed ${_elapsed}m) — stopping to bound energy/cost"
+        tf_status_board
+        return 1
+      fi
+    fi
     tf_reap
 
     # Build TSV caches for the scheduling round (3 jq calls instead of 100+).
@@ -403,7 +442,7 @@ tf_run() {
         # these are transient and shouldn't permanently block the pipeline.
         # Only model-failure categories (compile/test/no_op) stay failed.
         local auto_retry=0
-        local max_retries; max_retries="$(tf_default max_attempts)"; max_retries="${max_retries:-2}"
+        local max_retries; max_retries="${TF_MAX_ATTEMPTS:-$(tf_default max_attempts)}"; max_retries="${max_retries:-2}"
         while IFS= read -r fid; do
           [[ -z "$fid" ]] && continue
           local cat2 attempts2
@@ -550,7 +589,23 @@ tf_run() {
             healthy_cands=("${free_cands[@]}")
           fi
         fi
-        if [[ $TF_AFFINITY -ge 1 && ${#healthy_cands[@]} -gt 0 ]]; then
+        # Bayesian expected-cost routing (principled cost/energy-optimal pick):
+        # rank candidates by expected relative cost-to-done = cost_weight * (1/P_success),
+        # where P_success is the mean of the Beta(wins+1, fails+1) posterior over past
+        # outcomes and cost_weight is 0 for free/local workers. The cheapest-sufficient
+        # worker wins; free workers dominate unless a paid worker is dramatically more
+        # reliable. This is the absorbing-Markov expected-cost minimization. Override
+        # with TF_BAYES_COST=0 (falls back to affinity win-rate / UCB1 routing).
+        if [[ "${TF_BAYES_COST:-1}" == "1" && ${#healthy_cands[@]} -gt 0 ]]; then
+          local ranked
+          ranked="$(for c in "${healthy_cands[@]}"; do
+            printf '%s\t%s\n' "$(tf_worker_expected_cost_to_done "$c" "$tier")" "$c"
+          done | LC_ALL=C sort -n | awk -F'\t' '{print $2}')"
+          healthy_cands=()
+          while IFS= read -r c; do [[ -n "$c" ]] && healthy_cands+=("$c"); done <<< "$ranked"
+          tf_log_decision "$tid" "BAYES_COST" "ranked by expected cost: $(IFS=' '; echo "${healthy_cands[*]}")"
+          fw="${healthy_cands[0]:-}"
+        elif [[ $TF_AFFINITY -ge 1 && ${#healthy_cands[@]} -gt 0 ]]; then
           fw="$(tf_best_worker_for "$tid" "${healthy_cands[@]}")"
         else
           fw="${healthy_cands[0]:-}"
