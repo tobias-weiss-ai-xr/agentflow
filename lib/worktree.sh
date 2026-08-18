@@ -135,6 +135,7 @@ tf_worktree_remove() {
 #   Returns 0 on successful merge, 1 on failure.
 #   In per-file mode with lock contention, retry up to 3 times (1s intervals).
 tf_worktree_merge() {
+  local id="$1"
   local branch="$TF_BRANCH_PREFIX/$id"
   
   # Multi-repo: resolve repo directory for this task
@@ -142,9 +143,6 @@ tf_worktree_merge() {
   task_repo="$(tf_task_repo "$id")"
   local repo_dir
   repo_dir="$(tf_repo_dir "$task_repo")"
-  
-  local id="$1"
-  local branch="$TF_BRANCH_PREFIX/$id"
 
   if [[ "$TF_MERGE_LOCK_MODE" == "per-file" ]]; then
     # Per-file locking: tasks sharing a scope file serialize; disjoint tasks
