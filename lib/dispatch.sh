@@ -443,7 +443,7 @@ tf_dispatch_one() {
       tf_receipt_close "$id" "done"
       # Episodic memory: record successful completion
       local wall_clock
-      wall_clock="$(tf_receipt_total "$id" .tokens_in 2>/dev/null || echo 0)"  # rough proxy
+      wall_clock="$(tf_receipt_wall_clock "$id" 2>/dev/null || echo 0)"
       tf_episode_record "$id" "$worker" 1 "$wall_clock" ""
       # Self-correction: if this was a successful retry, record the correction
       if [[ "$attempts" -gt 0 ]]; then

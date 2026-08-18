@@ -218,6 +218,26 @@ tf_receipt_total() {
     "$receipt_file" 2>/dev/null || echo "0"
 }
 
+# tf_receipt_wall_clock <task_id> → wall-clock seconds from dispatch to gate finish
+# Computes the duration from the first dispatch_started_at to the last finished_at.
+# Off-hot-path (called once after task completion). Returns 0 if timestamps missing.
+tf_receipt_wall_clock() {
+  local id="$1"
+  local receipt_file
+  receipt_file="$(tf_receipt_file)"
+  [[ -f "$receipt_file" ]] || { echo "0"; return; }
+  [[ -s "$receipt_file" ]] || { echo "0"; return; }
+  jq -r --arg id "$id" '
+    [.[] | select(.task_id == $id)] as $recs
+    | ($recs[0].dispatch_started_at // empty) as $start
+    | ($recs[-1].finished_at // $recs[-1].gate_finished_at // empty) as $end
+    | if ($start // null) == null or ($end // null) == null then 0
+      else
+        ($end | fromdateiso8601) - ($start | fromdateiso8601)
+      end
+  ' "$receipt_file" 2>/dev/null || echo "0"
+}
+
 # tf_receipt_last <task_id> → latest receipt object for a task
 tf_receipt_last() {
   local id="$1"
