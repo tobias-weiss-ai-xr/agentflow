@@ -377,4 +377,58 @@ mod tests {
         assert!(!ctx.contains("other task"), "other tasks excluded");
         assert!(!ctx.contains("merged"), "merged attempts excluded");
     }
+
+    #[test]
+    fn render_prompt_uses_custom_template_when_configured() {
+        let dir = std::env::temp_dir().join(format!("af-prompt-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let tpl = dir.join("tpl.md");
+        std::fs::write(&tpl, "# {{TASK_ID}}: {{TASK_TITLE}}
+scope: {{SCOPE}}
+accept: {{ACCEPTANCE}}
+model {{MODEL}}/{{PROVIDER}}
+").unwrap();
+        let st = crate::config::Settings {
+            repo_dir: dir.clone(),
+            state_dir: dir.clone(),
+            worktree_root: dir.clone(),
+            max_parallel: 1,
+            branch_prefix: "tf".into(),
+            poll_secs: 1,
+            gate_env: vec![],
+            tasks_file: dir.join("t.json"),
+            workers_file: dir.join("w.json"),
+            prompt_file: tpl.clone(),
+            agent_timeout_s: 60,
+            sandbox_cmd: vec![],
+        };
+        let task = crate::config::Task {
+            id: "X1".into(),
+            title: "do things".into(),
+            scope: vec!["a.md".into(), "b.md".into()],
+            acceptance_prose: Some("test -f done".into()),
+            ..Default::default()
+        };
+        let worker = crate::config::Worker {
+            name: "w".into(),
+            provider: "openai".into(),
+            model: "gpt-x".into(),
+            enabled: true,
+            cli: "c".into(),
+            ..Default::default()
+        };
+        let out = render_prompt(&st, &task, &worker, Some("
+
+## Previous attempts on this task
+- attempt 1: boom
+"));
+        assert!(out.contains("# X1: do things"));
+        assert!(out.contains("a.md
+b.md"), "scope list joined");
+        assert!(out.contains("test -f done"));
+        assert!(out.contains("gpt-x/openai"));
+        assert!(out.contains("attempt 1: boom"), "context appended");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
+

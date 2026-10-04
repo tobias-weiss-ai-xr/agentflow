@@ -30,7 +30,7 @@ providers directly.
 - **Retry** — `max_attempts` per task, fresh branch + worktree on every attempt
 - **Self-healing** — atomic JSON state; crash-safe resume; orphan worktree cleanup at startup
 - **Observable** — status board (`--json`), live `attach`, per-task logs, wall-clock cost receipts
-- **Sound by construction** — spec → contract → test pyramid (54 tests, incl. E2E against a stub agent + scratch git repos; no network in CI)
+- **Sound by construction** — spec → contract → test pyramid (71 tests, incl. E2E against a stub agent + scratch git repos; no network in CI)
 
 ## Quick start
 
@@ -113,7 +113,7 @@ is a stub agent (writes a file + commits) used by the test suite and CI.
 ## Testing
 
 ```sh
-cargo test        # 54 tests: unit (scheduler DAG, contention, deadlock, state,
+cargo test        # 71 tests: unit (scheduler DAG, contention, deadlock, state,
                   # receipts, config validation, sandbox policy, multi-repo,
                   # UCB1 router, retry context, subprocess contracts) + E2E
                   # (fake agent + scratch git repos — no network)

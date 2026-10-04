@@ -129,3 +129,128 @@ pub fn heal(
 pub fn clean_all(wt_root: &Path) {
     let _ = std::fs::remove_dir_all(wt_root);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    fn scratch_repo() -> PathBuf {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "af-wt-{}-{n}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git_cmd(&dir, &["init", "-b", "main"]);
+        std::fs::write(dir.join("f.txt"), "base
+").unwrap();
+        git_cmd(&dir, &["add", "."]);
+        git_cmd(&dir, &["commit", "-m", "init"]);
+        dir
+    }
+
+    fn git_cmd(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
+    fn create_rejects_non_repo() {
+        let dir = std::env::temp_dir().join(format!("af-wt-norepo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let err = create(&dir, &dir.join("wt"), "T1", "tf").unwrap_err();
+        assert!(err.contains("not a git repository"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_merge_roundtrip_writes_into_repo() {
+        let repo = scratch_repo();
+        let locks = MergeLocks::new();
+        let wt = create(&repo, &repo.parent().unwrap().join("wt"), "T1", "tf").unwrap();
+        std::fs::write(wt.path.join("f.txt"), "changed
+").unwrap();
+        git_cmd(&wt.path, &["add", "."]);
+        git_cmd(&wt.path, &["commit", "-m", "task work"]);
+        merge(&repo, &wt.branch, &locks, "merge T1").unwrap();
+        assert_eq!(std::fs::read_to_string(repo.join("f.txt")).unwrap(), "changed
+");
+        assert_eq!(current_branch(&repo).unwrap(), "main");
+        remove(&repo, &wt);
+        assert!(!wt.path.exists());
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    #[test]
+    fn merge_conflict_aborts_cleanly() {
+        let repo = scratch_repo();
+        let locks = MergeLocks::new();
+        let wt = create(&repo, &repo.parent().unwrap().join("wt"), "T2", "tf").unwrap();
+        // Both sides change the same line differently.
+        std::fs::write(repo.join("f.txt"), "main version
+").unwrap();
+        git_cmd(&repo, &["commit", "-am", "main change"]);
+        std::fs::write(wt.path.join("f.txt"), "branch version
+").unwrap();
+        git_cmd(&wt.path, &["commit", "-am", "branch change"]);
+        let err = merge(&repo, &wt.branch, &locks, "merge T2").unwrap_err();
+        assert!(err.contains("merge of tf/T2 failed"));
+        // Abort left the working tree clean (no conflicted files staged).
+        let out = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty());
+        remove(&repo, &wt);
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    #[test]
+    fn create_replaces_stale_worktree_and_branch() {
+        let repo = scratch_repo();
+        let wt_root = repo.parent().unwrap().join("wt");
+        let stale = wt_root.join("T3");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("junk.txt"), "leftover
+").unwrap();
+        let wt = create(&repo, &wt_root, "T3", "tf").unwrap();
+        assert!(wt.path.join(".git").exists(), "stale dir cleared, fresh worktree in place");
+        remove(&repo, &wt);
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    #[test]
+    fn heal_removes_stale_worktrees_but_keeps_running_ones() {
+        let repo = scratch_repo();
+        let wt_root = repo.parent().unwrap().join("wt");
+        let repos = vec![("main".to_string(), repo.clone())];
+        let w1 = create(&repo, &wt_root, "T4", "tf").unwrap();
+        let w2 = create(&repo, &wt_root, "T5", "tf").unwrap();
+        heal(&repos, &wt_root, "tf", &["T5".to_string()]);
+        assert!(!w1.path.exists(), "stale worktree removed");
+        assert!(w2.path.exists(), "running worktree kept");
+        let gone = git(
+            &repo,
+            &["rev-parse", "--verify", "--quiet", "refs/heads/tf/T4"],
+        );
+        assert!(!gone.passed(), "stale branch deleted");
+        heal(&repos, &wt_root, "tf", &[] as &[String]);
+        assert!(!w2.path.exists());
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+}

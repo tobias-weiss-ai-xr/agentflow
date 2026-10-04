@@ -476,3 +476,39 @@ fn unknown_repo_warns_and_falls_back() {
     assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
     assert!(f.repo.join("DONE.txt").exists(), "fell back to default repo");
 }
+
+/// Task on a repo that exists on disk but is not a git repo: the attempt
+/// fails cleanly (worktree error arm), task goes Failed with the reason.
+#[test]
+fn task_on_broken_repo_fails_cleanly() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"x","repo":"broken","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+    // "broken" exists but was never git-inited.
+    std::fs::create_dir_all(f.dir.join("broken")).unwrap();
+    let config_dir = f.dir.join("config");
+    let bp = f.dir.join("broken").to_string_lossy().replace('\\', "/");
+    std::fs::write(
+        config_dir.join("repos.json"),
+        format!(r#"{{"repos": {{"broken": "{}"}}}}"#, bp),
+    )
+    .unwrap();
+    let cfg = config::load(&config_dir.join("tasks.json"), &config_dir.join("workers.json")).unwrap();
+    let cfg = config::Config {
+        repos: agentflow::config::load_repos(&config_dir.join("repos.json")).unwrap(),
+        ..cfg
+    };
+    assert_eq!(run::run_loop(&cfg, &f.st, &RunOptions::default()), 2);
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Failed);
+    let err = st["A"].last_error.as_deref().unwrap_or("");
+    assert!(err.contains("not a git repository"), "reason surfaced: {err}");
+}
+
