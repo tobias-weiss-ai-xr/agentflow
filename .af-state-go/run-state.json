@@ -1,5 +1,5 @@
 {
-  "GOPORT": {
+  "GOWORKER": {
     "state": "done",
     "attempts": 1,
     "last_error": null
