@@ -1,0 +1,5 @@
+# `go build ./...` on a single main package writes the binary into this dir.
+af
+af.exe
+go
+go.exe
