@@ -137,7 +137,7 @@ fn happy_path_dependency_and_merge() {
     assert!(receipts.len() >= 2, "one receipt per merged task");
     assert!(receipts.iter().all(|r| r.outcome == "merged"));
     // First-attempt prompts carry no retry history (ADR-13).
-    let prompt = std::fs::read_to_string(f.st.state_dir.join("prompt").join("B.md"))
+    let prompt = std::fs::read_to_string(f.st.state_dir.join("prompts").join("B.md"))
         .expect("prompt file exists");
     assert!(!prompt.contains("Previous attempts"));
 }
@@ -153,7 +153,7 @@ fn failed_attempts_get_failed_receipts() {
             r#"{{ "tasks": [ {{"id":"A","title":"x","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
             g = gate_cmd("DONE.txt")
         ),
-        &worker_json(1),
+        &worker_json(3),
     );
     assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 2);
     let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
@@ -161,7 +161,7 @@ fn failed_attempts_get_failed_receipts() {
     assert!(receipts.iter().all(|r| r.outcome == "failed" && r.worker == "w1"));
     // Retry memory (ADR-13): the final (attempt-3) prompt render lists the
     // earlier failures.
-    let prompt = std::fs::read_to_string(f.st.state_dir.join("prompt").join("A.md"))
+    let prompt = std::fs::read_to_string(f.st.state_dir.join("prompts").join("A.md"))
         .expect("prompt file exists");
     assert!(prompt.contains("Previous attempts on this task"));
     assert!(prompt.contains("attempt 1:"));
