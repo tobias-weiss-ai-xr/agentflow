@@ -1,0 +1,3 @@
+- [ ] 1.1 Compare-contract: e2e scenario fixed (fake agent port of tests/e2e.rs)
+- [ ] 2.1 GOPORT — go/ module passes build+vet+test gate
+- [ ] 3.1 Comparison report docs/compare-rust-go.md
