@@ -57,12 +57,20 @@ func writeFile(t *testing.T, path, content string, perm os.FileMode) {
 // agentScript returns the fake agent for the platform: it writes out.txt
 // and commits (like a real agent), tolerating nothing-to-commit.
 // kind "fail7" makes it exit 7 instead.
+// kind "capture" additionally records its first argument (the prompt
+// path passed by a command template) to prompt-arg.txt.
 func agentScript(kind string) string {
+	captureWin := "echo \"%~1\">prompt-arg.txt\r\n"
+	captureUnix := "echo \"$1\" > prompt-arg.txt\n"
 	if runtime.GOOS == "windows" {
 		if kind == "fail7" {
 			return "@echo off\r\necho fake-agent failing 1>&2\r\nexit /b 7\r\n"
 		}
-		return "@echo off\r\n" +
+		capture := ""
+		if kind == "capture" {
+			capture = captureWin
+		}
+		return "@echo off\r\n" + capture +
 			"echo fake-agent: task work > out.txt\r\n" +
 			"git add -A\r\n" +
 			"git commit -m \"fake agent: task work\"\r\n" +
@@ -71,7 +79,11 @@ func agentScript(kind string) string {
 	if kind == "fail7" {
 		return "#!/bin/sh\necho fake-agent failing >&2\nexit 7\n"
 	}
-	return "#!/bin/sh\necho 'fake-agent: task work' > out.txt\ngit add -A\ngit commit -m 'fake agent: task work' || true\nexit 0\n"
+	capture := ""
+	if kind == "capture" {
+		capture = captureUnix
+	}
+	return "#!/bin/sh\n" + capture + "echo 'fake-agent: task work' > out.txt\ngit add -A\ngit commit -m 'fake agent: task work' || true\nexit 0\n"
 }
 
 // gateCmd: exit 0 iff the named file exists in the worktree.
@@ -228,6 +240,50 @@ func TestFailingGateIncrementsAttemptsAndFails(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.repo, "out.txt")); !os.IsNotExist(err) {
 		t.Fatalf("nothing should have been merged")
+	}
+}
+
+// / Command template: the worker's command field replaces the default
+// / pi-shaped dispatch — {prompt} is substituted with the absolute prompt
+// / path and the string runs through the platform shell in the worktree.
+// / The fake agent records the argument it received; the campaign must
+// / still complete (done, gate ran, merged) and the recorded argument is
+// / the real rendered prompt file.
+func TestCommandTemplateDispatchesViaShell(t *testing.T) {
+	gate := gateCmd("out.txt")
+	f := newFixture(t, fmt.Sprintf(
+		`[{"id":"A","title":"templated","scope":["out.txt"],"accept":%q}]`, gate), "capture", 1)
+
+	agent := filepath.Join(f.dir, "fake-agent.cmd")
+	if runtime.GOOS != "windows" {
+		agent = filepath.Join(f.dir, "fake-agent.sh")
+	}
+	workersJSON := fmt.Sprintf(
+		`{"workers":[{"name":"w1","provider":"test","model":"fake","cli":%q,"command":%q,"max_attempts":1}]}`,
+		agent, agent+" {prompt}")
+	writeFile(t, filepath.Join(f.dir, "config", "workers.json"), workersJSON, 0o644)
+
+	out, code := f.run(t, "run")
+	if code != 0 {
+		t.Fatalf("run exit=%d, want 0\n%s", code, out)
+	}
+	st := f.readState(t)
+	if st["A"].State != "done" || st["A"].Attempts != 1 {
+		t.Fatalf("want A done in 1 attempt, got %+v", st)
+	}
+	if _, err := os.Stat(filepath.Join(f.repo, "out.txt")); err != nil {
+		t.Fatalf("out.txt not merged into main repo (gate/merge did not run): %v", err)
+	}
+	wantPrompt, err := filepath.Abs(filepath.Join(f.state, "prompts", "A.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	argRaw, err := os.ReadFile(filepath.Join(f.repo, "prompt-arg.txt"))
+	if err != nil {
+		t.Fatalf("agent did not record its argument: %v", err)
+	}
+	if got := strings.Trim(strings.TrimSpace(string(argRaw)), `"`); got != wantPrompt {
+		t.Fatalf("agent got prompt arg %q, want %q", got, wantPrompt)
 	}
 }
 

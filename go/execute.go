@@ -85,6 +85,21 @@ func agentCmd(cli string, args []string) (string, []string) {
 	return cli, args
 }
 
+// agentInvocation builds the agent dispatch for one attempt. With
+// w.Command set, {prompt} is substituted with the absolute prompt file
+// path and the string runs through the platform shell in the task
+// worktree; otherwise the default pi-shaped CLI line is built.
+func agentInvocation(w *Worker, promptPath string) (string, []string) {
+	if w.Command != "" {
+		shell, flag := "sh", "-c"
+		if runtime.GOOS == "windows" {
+			shell, flag = "cmd", "/C"
+		}
+		return shell, []string{flag, strings.ReplaceAll(w.Command, "{prompt}", promptPath)}
+	}
+	return agentCmd(w.CLI, []string{"--provider", w.Provider, "--model", w.Model, "-p", "@" + promptPath})
+}
+
 const defaultPrompt = `You are an autonomous coding agent working in a git worktree.
 
 TASK: {{TASK}}
@@ -155,9 +170,10 @@ func runAttempt(st *Settings, cfg *Config, t *Task, w *Worker, attempt int, logP
 		return fmt.Errorf("cannot write prompt: %w", err)
 	}
 
-	// 2) Agent CLI: <cli> --provider P --model M -p @<promptPath>
+	// 2) Agent dispatch: w.Command shell template, or the default
+	// <cli> --provider P --model M -p @<promptPath>.
 	agentTimeout := time.Duration(firstPositive(st.AgentTimeoutS, cfg.Defaults.AgentTimeoutS, 3600)) * time.Second
-	cli, cliArgs := agentCmd(w.CLI, []string{"--provider", w.Provider, "--model", w.Model, "-p", "@" + promptPath})
+	cli, cliArgs := agentInvocation(w, promptPath)
 	ctx, cancel := context.WithTimeout(context.Background(), agentTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, cli, cliArgs...)

@@ -25,6 +25,10 @@ type Worker struct {
 	APIKeyEnv   string `json:"api_key_env"`
 	MaxAttempts int    `json:"max_attempts"` // 0 = defaults.max_attempts
 	Enabled     *bool  `json:"enabled"`      // nil = enabled
+	// Command is an optional shell template ({prompt} = absolute prompt
+	// file path) run via the platform shell in the task worktree. Empty =
+	// default pi-shaped dispatch.
+	Command string `json:"command"`
 }
 
 func (w *Worker) IsEnabled() bool { return w.Enabled == nil || *w.Enabled }
