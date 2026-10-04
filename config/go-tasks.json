@@ -1,0 +1,21 @@
+{
+  "tasks": [
+    {
+      "id": "GOPORT",
+      "title": "Port af core to Go (stdlib only) in go/, prove with e2e test",
+      "scope": ["go/"],
+      "accept": "cd go && go build ./... && go vet ./... && go test ./... ",
+      "acceptance_prose": "Read FIRST, port faithfully: src/main.rs, src/run.rs, src/config.rs, src/state.rs, src/scheduler.rs, src/execute.rs, src/worktree.rs, src/gate.rs, src/subprocess.rs, src/router.rs, and the e2e scenario in tests/e2e.rs. Build a stdlib-only Go module in go/ (module agentflow/go) implementing the same campaign subset: (1) config load: tasks.json [{id,title,scope,accept,acceptance_prose,deps}] + workers.json {workers:[{name,provider,model,cli,api_key_env,max_attempts,max_parallel?}]}, TF_TASKS_JSON/TF_WORKERS_JSON env overrides; (2) per-task git worktree at .af-state/worktrees/<ID> (prune stale registrations first, branch tf/<ID>, remove after merge); (3) state: .af-state/run-state.json, atomic write (tmp+rename), per task: Ready/Running/Done/Failed + attempts + last_error; (4) dispatch: write prompt to .af-state/prompts/<ID>.md (template prompts/worker.md, {{TASK}} {{SCOPE}} {{ACCEPTANCE}} {{WORKER}} {{ATTEMPT}} substitution), spawn `pi --provider <p> --model <m> -p @<PROMPT_PATH>` with env API key + GIT_AUTHOR/COMMITTER af identity, working dir = the task worktree, absolute prompt path (agent cwd is the worktree); (5) acceptance gate: cmd /C <accept> in the worktree, nonzero exit = failed attempt; (6) retry up to worker max_attempts, then task Failed, whole run exits 2 with a board print (deadlock detection: no Ready task with unmet deps and no Running -> exit 2); (7) success: ff-merge worktree branch into the orchestrator's current branch, remove worktree; (8) CLI subcommands: run (poll loop, TF_POLL seconds), status (board print), attach <ID> (tail last 20 lines of .af-state/logs/<ID>.log each dispatch), --once (single poll tick); (9) logging: .af-state/logs/<ID>.log appended per attempt (agent stdout+stderr).\n\nProve it with go/e2e/e2e_test.go mirroring tests/e2e.rs: a fake agent (a cmd script on Windows / shell script otherwise, selected by worker cli field pointing to the script path) that creates/commits a file, a gate like `cmd /C if exist out.txt exit 0` equivalent, run the built binary as subprocess against a temp git repo fixture, assert: run completes, state Done, file merged into main repo branch, second run is a no-op; and a failing-gate case asserting attempts increment and final state Failed with exit 2. Stdlib only: os/exec, encoding/json, flag, fmt, os, path/filepath, strings, time, testing. Windows must pass (gates run there) and unix must compile (build tags only where exec details differ). gofmt-clean, go vet clean."
+    }
+  ],
+  "workers": [
+    {
+      "name": "glm",
+      "provider": "zai",
+      "model": "glm-4.6",
+      "cli": "pi",
+      "api_key_env": "ZHIPUAI_API_KEY",
+      "max_attempts": 3
+    }
+  ]
+}
