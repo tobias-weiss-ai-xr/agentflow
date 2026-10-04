@@ -9,7 +9,7 @@ use crate::{gate, worktree};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
@@ -73,7 +73,27 @@ pub fn agent_env(
 }
 
 pub fn execute_task(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_path: &Path) -> Outcome {
-    let start = Instant::now();
+    let start = std::time::Instant::now();
+    let outcome = execute_attempt(ctx, worker, id, attempt, log_path);
+    // Receipt for EVERY attempt (merged + failed) — routing/cost substrate.
+    let outcome_name = match outcome {
+        Outcome::Merged => "merged",
+        Outcome::Failed(_) => "failed",
+    };
+    let _ = ctx.store.append_receipt(&Receipt {
+        task: id.to_string(),
+        attempt,
+        worker: worker.name.clone(),
+        model: worker.model.clone(),
+        wall_clock_s: start.elapsed().as_secs_f64(),
+        tokens: None,
+        ts: now_ts(),
+        outcome: outcome_name.to_string(),
+    });
+    outcome
+}
+
+fn execute_attempt(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_path: &Path) -> Outcome {
     let task = match ctx.cfg.by_id.get(id) {
         Some(t) => t.clone(),
         None => return Outcome::Failed(format!("unknown task {id}")),
@@ -174,18 +194,6 @@ pub fn execute_task(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_
         return Outcome::Failed(e);
     }
     append("-- merged --");
-    let wall = start.elapsed().as_secs_f64();
-
-    let _ = ctx.store.append_receipt(&Receipt {
-        task: id.to_string(),
-        attempt,
-        worker: worker.name.clone(),
-        model: worker.model.clone(),
-        wall_clock_s: wall,
-        tokens: None,
-        ts: now_ts(),
-    });
-
     cleanup(&repo, &wt, &ctx.st);
     Outcome::Merged
 }

@@ -9,6 +9,7 @@
 pub mod config;
 pub mod execute;
 pub mod gate;
+pub mod router;
 pub mod run;
 pub mod scheduler;
 pub mod state;

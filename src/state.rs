@@ -28,6 +28,12 @@ impl Default for TaskStatus {
     }
 }
 
+/// Outcome recorded on a receipt. Pre-routing receipts (only ever written
+/// on success) deserialize as "merged".
+fn default_outcome() -> String {
+    "merged".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Receipt {
     pub task: String,
@@ -37,6 +43,8 @@ pub struct Receipt {
     pub wall_clock_s: f64,
     pub tokens: Option<u64>,
     pub ts: u64,
+    #[serde(default = "default_outcome")]
+    pub outcome: String,
 }
 
 #[derive(Debug, Clone)]
@@ -186,6 +194,18 @@ mod tests {
     }
 
     #[test]
+    fn legacy_receipt_without_outcome_is_merged() {
+        let d = tmpdir();
+        let body = r#"{"task":"A","attempt":1,"worker":"w1","model":"m","wall_clock_s":1.0,"tokens":null,"ts":0}"#;
+        let dir = d.join("receipts");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("A-1-0.json"), body).unwrap();
+        let rs = Store::new(d).load_receipts();
+        assert_eq!(rs.len(), 1);
+        assert_eq!(rs[0].outcome, "merged", "pre-routing receipts were success-only");
+    }
+
+    #[test]
     fn receipts_append_and_aggregate() {
         let store = Store::new(tmpdir());
         store
@@ -197,6 +217,7 @@ mod tests {
                 wall_clock_s: 12.5,
                 tokens: Some(100),
                 ts: 1,
+                outcome: "merged".into(),
             })
             .unwrap();
         store
@@ -208,6 +229,7 @@ mod tests {
                 wall_clock_s: 7.0,
                 tokens: None,
                 ts: 2,
+                outcome: "failed".into(),
             })
             .unwrap();
         let rs = store.load_receipts();

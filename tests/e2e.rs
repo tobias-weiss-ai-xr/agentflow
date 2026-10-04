@@ -132,9 +132,29 @@ fn happy_path_dependency_and_merge() {
     assert!(f.repo.join("DONE.txt").exists(), "DONE.txt merged to main");
     // No leftover worktree.
     assert!(!f.st.worktree_root.join("A").exists());
-    // Receipts were appended (one per merged task).
+    // Receipts were appended (one per merged task), outcome "merged".
     let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
     assert!(receipts.len() >= 2, "one receipt per merged task");
+    assert!(receipts.iter().all(|r| r.outcome == "merged"));
+}
+
+/// Failed attempts get receipts too — the routing substrate (ADR-12).
+#[test]
+fn failed_attempts_get_failed_receipts() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::set_var("FAKE_AGENT_EXIT", "7");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"x","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 2);
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    assert_eq!(receipts.len(), 3, "one receipt per failed attempt");
+    assert!(receipts.iter().all(|r| r.outcome == "failed" && r.worker == "w1"));
 }
 
 /// Agent exits non-zero → task fails after max_attempts, nothing merged.

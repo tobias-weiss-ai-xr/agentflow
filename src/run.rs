@@ -3,6 +3,7 @@
 
 use crate::config::{Config, Settings, TaskState};
 use crate::execute::{self, ExecCtx, Outcome};
+use crate::router::Router;
 use crate::scheduler;
 use crate::state::{Store, TaskStatus};
 use crate::worktree;
@@ -25,26 +26,25 @@ enum Msg {
     Done(String, String, Outcome), // (task id, worker name, outcome)
 }
 
-fn pick_worker(
-    cfg: &Config,
+/// UCB1 selection among the free, enabled, filter-matching workers.
+fn pick_worker<'a>(
+    cfg: &'a Config,
     busy: &Mutex<HashMap<String, bool>>,
+    router: &Router,
     filter: Option<&str>,
-) -> Option<crate::config::Worker> {
+) -> Option<&'a crate::config::Worker> {
     let busy = busy.lock().unwrap();
-    for w in &cfg.workers {
-        if !w.enabled {
-            continue;
-        }
-        if let Some(f) = filter {
-            if &w.name != f {
-                continue;
-            }
-        }
-        if !busy.get(&w.name).copied().unwrap_or(false) {
-            return Some(w.clone());
-        }
-    }
-    None
+    let eligible: Vec<&crate::config::Worker> = cfg
+        .workers
+        .iter()
+        .filter(|w| w.enabled)
+        .filter(|w| match filter {
+            Some(f) => &w.name == f,
+            None => true,
+        })
+        .filter(|w| !busy.get(&w.name).copied().unwrap_or(false))
+        .collect();
+    router.pick(eligible)
 }
 
 /// `af run`: execute tasks until all done or deadlock. Returns process exit code.
@@ -132,13 +132,16 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     }
 
     // --- dispatch loop ---
+    // Measured routing (ADR-12): replay receipts into per-worker stats.
+    let mut router = Router::from_receipts(&store.load_receipts());
     loop {
         // Reap finished tasks.
         while let Ok(m) = rx.try_recv() {
             match m {
                 Msg::Done(id, worker_name, outcome) => {
                     running.lock().unwrap().remove(&id);
-                    worker_busy.lock().unwrap().insert(worker_name, false);
+                    worker_busy.lock().unwrap().insert(worker_name.clone(), false);
+                    router.record(&worker_name, matches!(outcome, Outcome::Merged));
                     let s = status.entry(id.clone()).or_default();
                     s.attempts += 1;
                     match outcome {
@@ -210,8 +213,8 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                 if running.lock().unwrap().len() >= max_parallel {
                     break;
                 }
-                let worker = match pick_worker(cfg, &worker_busy, opts.worker_filter.as_deref()) {
-                    Some(w) => w,
+                let worker = match pick_worker(cfg, &worker_busy, &router, opts.worker_filter.as_deref()) {
+                    Some(w) => w.clone(),
                     None => break, // no free worker this round
                 };
                 // Mark Running + persist BEFORE spawning (crash-safety).
@@ -378,6 +381,28 @@ pub fn cost(cfg: &Config, st: &Settings, task_filter: Option<&str>) -> String {
         total,
         receipts.len()
     ));
+    // Per-worker trust (ADR-12): measured win rate from receipt outcomes.
+    let mut by_worker: Vec<(String, u64, u64)> = Vec::new();
+    for r in &receipts {
+        let e = by_worker.iter_mut().find(|(n, _, _)| n == &r.worker);
+        let won = r.outcome == "merged";
+        match e {
+            Some((_, w, n)) => {
+                *n += 1;
+                if won {
+                    *w += 1;
+                }
+            }
+            None => by_worker.push((r.worker.clone(), u64::from(won), 1)),
+        }
+    }
+    if !by_worker.is_empty() {
+        by_worker.sort();
+        lines.push_str(&format!("\n\n{:<14} {:<11} {}", "WORKER", "WINS/TOTAL", "TRUST"));
+        for (name, w, n) in by_worker {
+            lines.push_str(&format!("\n{:<14} {:<11} {:.2}", name, format!("{w}/{n}"), w as f64 / n as f64));
+        }
+    }
     lines
 }
 
