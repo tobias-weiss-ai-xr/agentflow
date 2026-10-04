@@ -1,0 +1,7 @@
+/target
+/node_modules
+/coverage
+/dist
+/state
+/config/workers.json
+*.log

@@ -1,0 +1,14 @@
+{
+  "_meta": { "project": "my-project" },
+  "tasks": [
+    {
+      "id": "FC-1",
+      "title": "Create path.rs with Path/Range types",
+      "deps": [],
+      "scope": ["core/crates/wo-common/src/path.rs"],
+      "accept": "cargo test -p wo-common path::",
+      "acceptance_prose": "Path and Range types compile and round-trip via serde",
+      "manual": false
+    }
+  ]
+}

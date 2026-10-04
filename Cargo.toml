@@ -1,0 +1,18 @@
+[package]
+name = "agentflow"
+version = "0.1.0"
+edition = "2021"
+description = "Parallel LLM task execution on isolated git worktrees"
+license = "MIT"
+
+[[bin]]
+name = "af"
+path = "src/main.rs"
+
+[[bin]]
+name = "example_agent"
+path = "src/bin/example_agent.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
