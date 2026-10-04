@@ -381,3 +381,67 @@ fn agent_env_is_allowlisted() {
         std::env::remove_var(k);
     }
 }
+
+/// Multi-repo (ADR-11): A on repo `main`, B on repo `auxrepo` (deps: A) — each
+/// task's worktree/branch/merge lands in its own repo.
+#[test]
+fn multi_repo_campaign_merges_into_each_repo() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::set_var("FAKE_AGENT_TOUCH", "DONE.txt");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [
+                {{"id":"A","title":"main repo","repo":"main","scope":["DONE.txt"],"accept":"{g}"}},
+                {{"id":"B","title":"auxrepo change","repo":"auxrepo","deps":["A"],"scope":["DONE.txt"],"accept":"{g}"}}
+            ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &format!(r#"{{ "workers": [{{"name":"w1","provider":"p","model":"m","cli":"{}"}}]}}"#, AGENT.replace('\\', "\\\\")),
+    );
+    // Second scratch repo + repos.json next to tasks.json.
+    let auxrepo = f.dir.join("auxrepo");
+    std::fs::create_dir_all(&auxrepo).unwrap();
+    git(&auxrepo, &["init", "-b", "main"]);
+    // af worktrees branch off HEAD — an unborn repo has none.
+    git(&auxrepo, &["commit", "--allow-empty", "-m", "init"]);
+    let config_dir = f.dir.join("config");
+    std::fs::write(
+        config_dir.join("repos.json"),
+        format!(
+            r#"{{"repos": {{"main": "{}", "auxrepo": "{}"}}}}"#,
+            f.dir.join("repo").to_string_lossy().replace('\\', "\\\\"),
+            auxrepo.to_string_lossy().replace('\\', "\\\\")
+        ),
+    )
+    .unwrap();
+    // Re-load so cfg picks up repos.json (fixture loaded before it existed).
+    let cfg = config::load(&config_dir.join("tasks.json"), &config_dir.join("workers.json")).unwrap();
+    let cfg = config::Config {
+        repos: agentflow::config::load_repos(&config_dir.join("repos.json")).unwrap(),
+        ..cfg
+    };
+    assert_eq!(run::run_loop(&cfg, &f.st, &RunOptions::default()), 0);
+    assert!(f.repo.join("DONE.txt").exists(), "A merged into main repo");
+    assert!(auxrepo.join("DONE.txt").exists(), "B merged into aux repo");
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Done);
+    assert_eq!(st["B"].state, TaskState::Done);
+}
+
+/// Unknown repo name: warn + fall back to the default repo, run completes.
+#[test]
+fn unknown_repo_warns_and_falls_back() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"x","repo":"nowhere","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
+    assert!(f.repo.join("DONE.txt").exists(), "fell back to default repo");
+}

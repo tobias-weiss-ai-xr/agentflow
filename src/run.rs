@@ -7,6 +7,7 @@ use crate::scheduler;
 use crate::state::{Store, TaskStatus};
 use crate::worktree;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::io::Write;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -63,7 +64,14 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
         .filter(|(_, s)| s.state == TaskState::Running)
         .map(|(k, _)| k.clone())
         .collect();
-    worktree::heal(&st.repo_dir, &st.worktree_root, &st.branch_prefix, &stale_running);
+    // Multi-repo (ADR-11): heal tries every configured repo + the default.
+    let mut repo_list: Vec<(String, PathBuf)> = cfg
+        .repos
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    repo_list.push(("(default)".to_string(), st.repo_dir.clone()));
+    worktree::heal(&repo_list, &st.worktree_root, &st.branch_prefix, &stale_running);
     for id in &stale_running {
         if let Some(s) = status.get_mut(id) {
             s.state = TaskState::Ready; // previous owner died mid-run

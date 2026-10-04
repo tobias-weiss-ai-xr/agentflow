@@ -29,6 +29,7 @@ struct Args {
     json: bool,
     tasks_file: Option<PathBuf>,
     workers_file: Option<PathBuf>,
+    repos_file: Option<PathBuf>,
 }
 
 fn parse(argv: &[String]) -> Result<Args, String> {
@@ -42,6 +43,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
         json: false,
         tasks_file: None,
         workers_file: None,
+        repos_file: None,
     };
     let mut it = argv.iter();
     a.cmd = it.next().cloned().unwrap_or_default();
@@ -69,6 +71,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
             "--workers" => {
                 a.workers_file = Some(PathBuf::from(it.next().ok_or("--workers needs a value")?))
             }
+            "--repos" => a.repos_file = Some(PathBuf::from(it.next().ok_or("--repos needs a value")?)),
             other if other.starts_with('-') => return Err(format!("unknown flag: {other}")),
             other => {
                 // bare positional (e.g. `af attach <id>`)
@@ -94,6 +97,22 @@ fn load_cfg(args: &Args) -> Result<(config::Config, Settings), String> {
         .clone()
         .unwrap_or_else(|| st.workers_file.clone());
     let cfg = config::load(&tasks, &workers)?;
+    // Multi-repo (ADR-11): --repos > TF_REPOS_JSON > <tasks dir>/repos.json;
+    // missing file = single-repo mode.
+    let repos_path = args
+        .repos_file
+        .clone()
+        .or_else(|| std::env::var("TF_REPOS_JSON").ok().map(PathBuf::from))
+        .unwrap_or_else(|| {
+            tasks
+                .parent()
+                .map(|p| p.join("repos.json"))
+                .unwrap_or_else(|| PathBuf::from("repos.json"))
+        });
+    let mut cfg = cfg;
+    cfg.repos = config::load_repos(&repos_path)?;
+    let repo_warns = cfg.repo_warnings(&st.repo_dir);
+    cfg.warnings.extend(repo_warns); // printed by the common loop below
     for w in &cfg.warnings {
         eprintln!("warning: {w}");
     }

@@ -86,34 +86,41 @@ Dependencies (`deps`) are task IDs — they work across repos seamlessly:
 
 ## Implementation Summary (Current State)
 
-### Added
+### Implemented in agentflow (Rust, ADR-11) — current truth
+
+- `config/repos.json` (optional, next to tasks.json; `TF_REPOS_JSON` or
+  `--repos FILE` override): `{"repos": {"<name>": "<path>"}}`; relative
+  paths resolve against the repos.json file's directory. Missing file =
+  single-repo mode.
+- `Config::repo_dir_for(task, default)` — `""` → default; `"main"` →
+  `repos["main"]` or default; named → `repos[name]`. Unknown names **warn
+  and fall back** to the default repo (ADR-4: the taskfleet corpus
+  composes across files — never hard-fail planning).
+- `execute_task` resolves the task's repo; worktree dir stays
+  `$TF_WORKTREE_ROOT/<task_id>/`, branch `prefix/<task_id>` lives in the
+  task's repo; merge lands in the task's repo.
+- Merge serialization: one global in-process lock for all repos (correct
+  for any repo count; per-repo keys if throughput ever matters).
+- Self-heal scans all configured repos + the default (best-effort removal
+  of orphan worktrees and stale branches).
+- Deps stay a global task DAG — cross-repo deps need no special handling.
+- Verified by e2e `multi_repo_campaign_merges_into_each_repo` (A on main,
+  B on auxrepo, dep A→B, each merges into its own repo) and
+  `unknown_repo_warns_and_falls_back`.
+
+### Historical: bash fork (taskfleet) plan
+
 - `REPOS_JSON` config path in `lib/common.sh`
-- `tf_task_repo <task_id>` — returns repo name from task’s `repo` field ("" for default/main)
+- `tf_task_repo <task_id>` — returns repo name from task's `repo` field ("" for default/main)
 - `tf_repo_dir <repo_name>` — resolves repo name to absolute path via `repos.json`
-
-### Modified (Planned)
-- `lib/worktree.sh` — `tf_worktree_create` and `tf_worktree_merge` to use task-specific repos
-- `lib/dispatch.sh` — pass task’s repo info through worktree calls
-
-### Worktree.sh Changes Required
-
-In each git operation, use `tf_repo_dir "$(tf_task_repo "$id")"` instead of
-`$TF_REPO_DIR`. Key functions:
-- `tf_worktree_create` — resolve repo dir from task, use for all git ops
-- `tf_worktree_merge` — merge into task’s repo (not always $TF_REPO_DIR)
-- `tf_worktree_remove` — remove worktree from correct repo
-- `tf_worktree_delete_branch` — delete branch from task’s repo
-- `tf_worktree_conflicts` — check conflicts in task’s repo
-
-### Validation Rules
-
-- Every task’s `repo` field must resolve to a valid repo in `repos.json`
-  OR be empty (defaults to `$TF_REPO_DIR`)
-- Circular cross-repo dependencies are allowed (it’s a DAG, not a repo graph)
+- `lib/worktree.sh` — `tf_worktree_create`/`tf_worktree_merge` use task-specific repos
+- `lib/dispatch.sh` — pass task's repo info through worktree calls
 
 ## Backward Compatibility
 
-- single
-- If `repos.json` does not exist or only contains `"main"` key → behavior
-  unchanged from current single-repo mode
-- The default is Truthy
+- No `repos.json` (or no `"main"` key) → single-repo mode, behavior
+  unchanged; `repo: "main"` falls back to the default repo silently, so
+  taskfleet corpora that annotate `repo: "main"` keep planning identically.
+- Unknown repo names warn and fall back to the default repo (same
+  treatment as dangling deps).
+- Cross-repo deps are just DAG deps — already ordered by the scheduler.

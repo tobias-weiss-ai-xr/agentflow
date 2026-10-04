@@ -4,7 +4,7 @@
 //! existing campaign configs work as the integration corpus (ADR-4).
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -145,6 +145,9 @@ pub struct Config {
     pub workers: Vec<Worker>,
     pub defaults: WorkerDefaults,
     pub by_id: HashMap<String, Task>,
+    /// Named repositories (multi-repo mode, optional). Missing/empty map =
+    /// single-repo mode: every task targets `TF_REPO_DIR`.
+    pub repos: BTreeMap<String, PathBuf>,
     /// Non-fatal compatibility notes (dangling deps, gate-less tasks) —
     /// taskfleet's corpus relies on these, so they warn instead of fail.
     pub warnings: Vec<String>,
@@ -197,6 +200,7 @@ pub fn load(tasks_path: &Path, workers_path: &Path) -> Result<Config, String> {
     }
 
     Ok(Config {
+        repos: BTreeMap::new(),
         tasks: tf.tasks,
         workers: wf.workers,
         defaults: wf.defaults,
@@ -356,6 +360,89 @@ impl Settings {
         };
         let _ = repo_dir;
         cfg
+    }
+}
+
+/// Parse `repos.json`: `{"repos": {"<name>": "<path>"}}`. Missing file →
+/// empty map (single-repo mode). Relative paths resolve against the
+/// repos.json file's directory.
+pub fn load_repos(repos_path: &Path) -> Result<BTreeMap<String, PathBuf>, String> {
+    let json = match std::fs::read_to_string(repos_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(e) => return Err(format!("read {}: {e}", repos_path.display())),
+    };
+    #[derive(Deserialize)]
+    struct ReposFile {
+        #[serde(default)]
+        repos: BTreeMap<String, String>,
+    }
+    let rf: ReposFile =
+        serde_json::from_str(&json).map_err(|e| format!("parse {}: {e}", repos_path.display()))?;
+    let base = repos_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    Ok(rf.repos
+        .into_iter()
+        .map(|(name, path)| {
+            let p = PathBuf::from(&path);
+            let joined = if p.is_absolute() { p } else { base.join(p) };
+            (name, normalize_path(joined))
+        })
+        .collect())
+}
+
+/// Lexical normalization (`a/b/../c` → `a/c`) so logs and warnings show clean
+/// paths; no symlink resolution, no existence check.
+fn normalize_path(p: PathBuf) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+impl Config {
+    /// Absolute repo dir for a task (multi-repo, ADR-11):
+    /// `""` → default repo; `"main"` → repos["main"] if present, else default;
+    /// other names → repos[name], falling back to the default repo (unknown
+    /// names are warned about at startup, ADR-4 compat).
+    pub fn repo_dir_for(&self, task: &Task, default_repo: &Path) -> PathBuf {
+        match task.repo.as_str() {
+            "" => default_repo.to_path_buf(),
+            name => self
+                .repos
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| default_repo.to_path_buf()),
+        }
+    }
+
+    /// Warn (not fail) about task repo names that resolve to the fallback.
+    /// `"main"` is the canonical default name — it falls back silently
+    /// (single-repo configs and the taskfleet corpus use it freely).
+    pub fn repo_warnings(&self, default_repo: &Path) -> Vec<String> {
+        let mut w = Vec::new();
+        for t in &self.tasks {
+            if !t.repo.is_empty()
+                && t.repo != "main"
+                && !self.repos.contains_key(&t.repo)
+            {
+                w.push(format!(
+                    "task '{}': repo '{}' not in repos.json — using default repo {}",
+                    t.id,
+                    t.repo,
+                    default_repo.display()
+                ));
+            }
+        }
+        w
     }
 }
 
@@ -541,5 +628,90 @@ mod tests {
                 ("baz".to_string(), "hello".to_string())
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod repo_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn write(dir: &Path, name: &str, content: &str) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join(name);
+        std::fs::write(&p, content).unwrap();
+        p
+    }
+
+    #[test]
+    fn missing_repos_json_is_single_repo_mode() {
+        let d = std::env::temp_dir().join(format!("af-repos-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let map = load_repos(&d.join("config").join("repos.json")).unwrap();
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn relative_repo_paths_resolve_against_the_file() {
+        let base = std::env::temp_dir().join(format!("af-repos-rel-{}", std::process::id()));
+        let p = write(
+            &base.join("config"),
+            "repos.json",
+            r#"{"repos": {"main": "..", "docs": "../docs-site", "abs": "C:/abs/path"}}"#,
+        );
+        let map = load_repos(&p).unwrap();
+        assert_eq!(map["main"], base);
+        assert_eq!(map["docs"], base.join("docs-site"));
+        assert_eq!(map["abs"], PathBuf::from("C:/abs/path"));
+    }
+
+    #[test]
+    fn repo_dir_for_resolution_matrix() {
+        let default = PathBuf::from("/default/repo");
+        let mut cfg = Config {
+            tasks: vec![],
+            workers: vec![],
+            defaults: WorkerDefaults::default(),
+            by_id: HashMap::new(),
+            repos: BTreeMap::new(),
+            warnings: vec![],
+        };
+        let mk = |repo: &str| Task {
+            id: "t".into(),
+            title: "t".into(),
+            repo: repo.into(),
+            ..Default::default()
+        };
+        // No repos.json: "" and "main" → default; unknown → default.
+        assert_eq!(cfg.repo_dir_for(&mk(""), &default), default);
+        assert_eq!(cfg.repo_dir_for(&mk("main"), &default), default);
+        assert_eq!(cfg.repo_dir_for(&mk("docs"), &default), default);
+        // With repos.json: named + "main" resolve; "" stays default.
+        cfg.repos.insert("main".into(), PathBuf::from("/r/main"));
+        cfg.repos.insert("docs".into(), PathBuf::from("/r/docs"));
+        assert_eq!(cfg.repo_dir_for(&mk("main"), &default), PathBuf::from("/r/main"));
+        assert_eq!(cfg.repo_dir_for(&mk("docs"), &default), PathBuf::from("/r/docs"));
+        assert_eq!(cfg.repo_dir_for(&mk(""), &default), default);
+    }
+
+    #[test]
+    fn repo_warnings_flag_unknown_but_not_main_or_empty() {
+        let default = PathBuf::from("/default/repo");
+        let mut cfg = Config {
+            tasks: vec![
+                Task { id: "a".into(), title: "a".into(), repo: "".into(), ..Default::default() },
+                Task { id: "b".into(), title: "b".into(), repo: "main".into(), ..Default::default() },
+                Task { id: "c".into(), title: "c".into(), repo: "docs".into(), ..Default::default() },
+            ],
+            workers: vec![],
+            defaults: WorkerDefaults::default(),
+            by_id: HashMap::new(),
+            repos: BTreeMap::new(),
+            warnings: vec![],
+        };
+        cfg.by_id = cfg.tasks.iter().map(|t| (t.id.clone(), t.clone())).collect();
+        let w = cfg.repo_warnings(&default);
+        assert_eq!(w.len(), 1, "only 'docs' warns: {w:?}");
+        assert!(w[0].contains("task 'c'") && w[0].contains("docs"));
     }
 }

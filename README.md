@@ -21,13 +21,14 @@ providers directly.
 ## Features
 
 - **Parallel dispatch** — one worker per provider+model slot; concurrent tasks in isolated git worktrees
+- **Multi-repo** — one campaign can touch several repositories: `repos.json` maps names to paths, each task's worktree/branch/merge targets its own repo, deps order across repos
 - **Exact acceptance gates** — each task declares a shell command that must exit 0 before merge
 - **Dependency DAG** — `deps` ordering, critical-path priority, deadlock detection
 - **Contention avoidance** — tasks with overlapping `scope` globs are not dispatched concurrently
 - **Retry** — `max_attempts` per task, fresh branch + worktree on every attempt
 - **Self-healing** — atomic JSON state; crash-safe resume; orphan worktree cleanup at startup
 - **Observable** — status board (`--json`), live `attach`, per-task logs, wall-clock cost receipts
-- **Sound by construction** — spec → contract → test pyramid (41 tests, incl. E2E against a stub agent + scratch git repo; no network in CI)
+- **Sound by construction** — spec → contract → test pyramid (47 tests, incl. E2E against a stub agent + scratch git repos; no network in CI)
 
 ## Quick start
 
@@ -76,6 +77,11 @@ plus a `workers` list: `name`, `provider`, `model`, `api_base`, `api_key_env`,
 `enabled`, `cli` (agent CLI binary; default `pi`). Each worker runs at most one
 task at a time.
 
+Tasks accept an optional `repo` field: `""` (default) or `"main"` target the
+main repo (`TF_REPO_DIR`); other names must appear in `repos.json` (next to
+tasks.json or via `--repos`/`TF_REPOS_JSON`) — e.g.
+`{"repos": {"docs": "../docs-site"}}`. Unknown names warn and fall back.
+
 ## Sandboxing
 
 The agent CLI executes LLM-directed tool calls, so `af` treats it as untrusted
@@ -105,9 +111,10 @@ is a stub agent (writes a file + commits) used by the test suite and CI.
 ## Testing
 
 ```sh
-cargo test        # 41 tests: unit (scheduler DAG, contention, deadlock, state,
-                  # receipts, config validation, sandbox policy, subprocess
-                  # contracts) + E2E (fake agent + scratch git repo — no network)
+cargo test        # 47 tests: unit (scheduler DAG, contention, deadlock, state,
+                  # receipts, config validation, sandbox policy, multi-repo,
+                  # subprocess contracts) + E2E (fake agent + scratch git repos
+                  # — no network)
 ```
 
 See `docs/arc42/` for the architecture documentation (12 chapters), and

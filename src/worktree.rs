@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// One in-process lock per repository guards merges (merge serialization).
+/// One in-process lock guards ALL merges (merge serialization).
+/// ponytail: global lock, not per-repo — correct for any repo count; keyed
+/// per-repo locks if cross-repo merge throughput ever matters.
 #[derive(Debug, Clone, Default)]
 pub struct MergeLocks(Arc<Mutex<()>>);
 
@@ -97,9 +99,10 @@ pub fn merge(repo: &Path, branch: &str, locks: &MergeLocks, msg: &str) -> Result
 }
 
 /// Startup self-heal: remove worktrees whose task is not currently running
-/// (dead attempts / prior crashes).
+/// (dead attempts / prior crashes). Tries every repo (multi-repo, ADR-11):
+/// `git worktree remove` fails harmlessly in repos that don't own the dir.
 pub fn heal(
-    repo: &Path,
+    repos: &[(String, PathBuf)],
     wt_root: &Path,
     branch_prefix: &str,
     running_ids: &[String],
@@ -112,11 +115,13 @@ pub fn heal(
         if running_ids.iter().any(|r| r == &id) {
             continue;
         }
-        let _ = git(
-            repo,
-            &["worktree", "remove", "--force", e.path().to_str().unwrap()],
-        );
-        let _ = git(repo, &["branch", "-D", &format!("{branch_prefix}/{id}")]);
+        for (_, repo) in repos {
+            let _ = git(
+                repo,
+                &["worktree", "remove", "--force", e.path().to_str().unwrap()],
+            );
+            let _ = git(repo, &["branch", "-D", &format!("{branch_prefix}/{id}")]);
+        }
     }
 }
 

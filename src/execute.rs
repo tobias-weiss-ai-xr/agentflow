@@ -79,7 +79,8 @@ pub fn execute_task(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_
         None => return Outcome::Failed(format!("unknown task {id}")),
     };
 
-    let repo = ctx.st.repo_dir.clone();
+    // Multi-repo (ADR-11): worktree, branch, and merge target the task's repo.
+    let repo = ctx.cfg.repo_dir_for(&task, &ctx.st.repo_dir);
     let wt = match worktree::create(
         &repo,
         &ctx.st.worktree_root,
