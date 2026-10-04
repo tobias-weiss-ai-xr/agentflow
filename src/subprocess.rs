@@ -99,15 +99,20 @@ pub fn run(
 
     let mut so = child.stdout.take().unwrap();
     let mut se = child.stderr.take().unwrap();
+    use std::sync::{Arc, Mutex};
+    let buf1 = Arc::new(Mutex::new(String::new()));
+    let buf2 = Arc::new(Mutex::new(String::new()));
+    let b1 = buf1.clone();
+    let b2 = buf2.clone();
     let r1 = thread::spawn(move || {
         let mut s = String::new();
         let _ = so.read_to_string(&mut s);
-        s
+        *b1.lock().unwrap() = s;
     });
     let r2 = thread::spawn(move || {
         let mut s = String::new();
         let _ = se.read_to_string(&mut s);
-        s
+        *b2.lock().unwrap() = s;
     });
 
     let start = Instant::now();
@@ -130,6 +135,9 @@ pub fn run(
             let _ = child.kill();
             let _ = child.wait();
             kind = CmdKind::Timeout;
+            // ponytail: post-kill output is best-effort (200ms grace) —
+            // orphaned grandchildren can hold the pipes; kill the process
+            // tree via a wrapper command if that ever matters.
             break;
         }
         thread::sleep(Duration::from_millis(50));
@@ -145,8 +153,23 @@ pub fn run(
         let _ = 0; // keep `code` extracted below too
     }
 
-    let stdout = r1.join().unwrap_or_default();
-    let stderr = r2.join().unwrap_or_default();
+    // On timeout, orphaned grandchildren may hold the pipe write-ends —
+    // joining the readers would block until THEY exit. Snapshot instead.
+    let timed_out = kind == CmdKind::Timeout;
+    let (stdout, stderr) = if timed_out {
+        thread::sleep(Duration::from_millis(200));
+        (
+            buf1.lock().unwrap().clone(),
+            buf2.lock().unwrap().clone(),
+        )
+    } else {
+        let _ = r1.join();
+        let _ = r2.join();
+        (
+            buf1.lock().unwrap().clone(),
+            buf2.lock().unwrap().clone(),
+        )
+    };
     let code = status.as_ref().and_then(|s| s.code());
 
     CmdOut {
