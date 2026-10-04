@@ -1,0 +1,21 @@
+{
+  "tasks": [
+    {
+      "id": "GOWORKER",
+      "title": "Configurable worker command template in go port",
+      "scope": ["go/"],
+      "accept": "cd go && go build ./... && go vet ./... && go test ./... ",
+      "acceptance_prose": "Extend the Go port (go/) so the worker command is configurable. Read go/config.go and go/execute.go first, plus the e2e in go/e2e/ to mirror its fixture style.\n\nRequirement: workers.json entries accept an optional string field `command`. When present, dispatch = substitute the placeholder {prompt} with the ABSOLUTE path of the rendered prompt file, then run the resulting string via the platform shell in the task worktree (go/execute.go already has the platform-shell helper: cmd /C on Windows, sh -c otherwise). When absent, behavior must be EXACTLY as today (pi-shaped: cli --provider <p> --model <m> -p @<abs-prompt-path>) — do not regress the existing e2e cases.\n\nConfig parsing: add `Command string `json:\"command\"`` to the worker struct; no validation beyond non-empty-when-present.\n\nProve with a new e2e case in go/e2e/e2e_test.go (mirror the existing fake-agent fixture): a campaign whose worker has `command` set to invoke the fake agent script directly with {prompt} as its argument (no shell builtins needed, cross-platform), asserting: the fake agent received the real prompt file path, the campaign completed (state Done), gate ran in the worktree, and the result merged — same assertions as the existing success case. Also one assertion that the default (no command) dispatch still builds the pi-shaped command line (unit-test the command builder if one exists, else assert via the fake agent capturing argv).\n\nStdlib only, gofmt-clean, go vet clean. Commit on the current branch."
+    }
+  ],
+  "workers": [
+    {
+      "name": "glm",
+      "provider": "zai",
+      "model": "glm-4.6",
+      "cli": "pi",
+      "api_key_env": "ZHIPUAI_API_KEY",
+      "max_attempts": 3
+    }
+  ]
+}

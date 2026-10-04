@@ -1,13 +1,14 @@
 ## Why
 
-Fair comparison of implementation languages for af's core loop. Rust works; a stdlib-only Go port on a branch makes tradeoffs concrete (build times, LOC, error handling, single-binary story).
+The worker CLI is hardcoded to pi's flag shape (`cli --provider p --model m -p @file`). On hosts where pi is unavailable or broken (e.g. legion uses opencode), af cannot run campaigns. A configurable worker command template fixes this with one field.
 
 ## What Changes
 
-- New `go/` module implementing the af core subset: tasks/workers JSON config, per-task git worktree, subprocess agent dispatch (prompt file), acceptance gate, retry with attempts, atomic run-state JSON, ff-merge on success, logs; CLI `run`/`status`/`attach`
-- E2E Go test mirroring `tests/e2e.rs` (fake agent, git fixture)
-- No third-party Go deps (parity with af's std-only policy)
+- `workers.json` gains optional `command`: a shell template with `{prompt}` replaced by the absolute prompt file path; run via the platform shell (`sh -c` / `cmd /C`) in the task worktree
+- Absent `command` → existing pi-shaped dispatch (backward compatible)
+- Prompt path is absolute (agent cwd is the worktree)
+- E2E: a worker driven purely by `command` completes a full campaign (dispatch → gate → merge)
 
 ## Impact
 
-- New `go/` tree only; Rust implementation untouched
+- `go/config.go` (parse), `go/execute.go` (dispatch); e2e gains a command-template case
