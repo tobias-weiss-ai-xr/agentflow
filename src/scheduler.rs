@@ -114,9 +114,20 @@ pub fn find_deadlock(
     status: &HashMap<String, TaskStatus>,
     running: &[String],
 ) -> Option<Vec<String>> {
-    let remaining: Vec<&Task> = cfg
-        .tasks
+    let all: Vec<&Task> = cfg.tasks.iter().collect();
+    find_deadlock_in(cfg, status, running, &all)
+}
+
+/// Deadlock check restricted to a task subset (e.g. `--task` filter scope).
+pub fn find_deadlock_in(
+    cfg: &Config,
+    status: &HashMap<String, TaskStatus>,
+    running: &[String],
+    scope: &[&Task],
+) -> Option<Vec<String>> {
+    let remaining: Vec<&Task> = scope
         .iter()
+        .copied()
         .filter(|t| {
             let st = status.get(&t.id).cloned().unwrap_or_default();
             st.state != TaskState::Done && !running.contains(&t.id)

@@ -96,6 +96,33 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
         cfg.tasks.len()
     );
 
+    // A --worker filter naming no enabled worker could never dispatch → hang.
+    // Fail fast instead.
+    if let Some(f) = &opts.worker_filter {
+        let ok = cfg.workers.iter().any(|w| w.enabled && &w.name == f);
+        if !ok {
+            eprintln!("config error: --worker '{f}' matches no enabled worker");
+            return 2;
+        }
+    }
+
+    // In-scope tasks: all tasks, or only the --task filter target. Completion
+    // and deadlock are judged on this scope so out-of-scope work never blocks.
+    let in_scope: Vec<&crate::config::Task> = cfg
+        .tasks
+        .iter()
+        .filter(|t| match &opts.task_filter {
+            Some(f) => &t.id == f,
+            None => true,
+        })
+        .collect();
+    if let Some(f) = &opts.task_filter {
+        if in_scope.is_empty() {
+            eprintln!("config error: --task '{f}' matches no task");
+            return 2;
+        }
+    }
+
     // --- dispatch loop ---
     loop {
         // Reap finished tasks.
@@ -131,9 +158,8 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
             }
         }
 
-        // Terminal conditions.
-        let all_done = cfg
-            .tasks
+        // Terminal conditions (judged on the in-scope tasks only).
+        let all_done = in_scope
             .iter()
             .all(|t| matches!(status.get(&t.id).map(|s| &s.state), Some(TaskState::Done)));
         if all_done {
@@ -143,7 +169,16 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
         }
         let running_ids: Vec<String> = running.lock().unwrap().keys().cloned().collect();
         if running_ids.is_empty() {
-            if let Some(blocked) = scheduler::find_deadlock(cfg, &status, &[]) {
+            // Nothing in flight: progress is possible only if something is
+            // ready. Otherwise this is a deadlock (failed/absent deps, or a
+            // --task target waiting on out-of-scope work).
+            let ready_in_scope = scheduler::ready_tasks(cfg, &status, &[], max_attempts)
+                .into_iter()
+                .filter(|t| in_scope.iter().any(|s| s.id == t.id))
+                .count();
+            if ready_in_scope == 0 {
+                let blocked = scheduler::find_deadlock_in(cfg, &status, &[], &in_scope)
+                    .unwrap_or_else(|| in_scope.iter().map(|t| t.id.clone()).collect());
                 eprintln!(
                     "DEADLOCK: no task can make progress. Blocked: {}",
                     blocked.join(", ")

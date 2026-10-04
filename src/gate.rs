@@ -30,8 +30,8 @@ pub fn run_accept(
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)] // run_accept is only referenced by unix-gated tests
     use super::*;
-    use crate::subprocess::CmdKind as _;
 
     #[cfg(unix)]
     #[test]

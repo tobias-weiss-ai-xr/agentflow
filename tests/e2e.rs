@@ -27,6 +27,7 @@ fn git(repo: &Path, args: &[&str]) {
 }
 
 struct Fixture {
+    #[allow(dead_code)] // kept for debugging failed assertions
     dir: PathBuf,
     repo: PathBuf,
     cfg: config::Config,
@@ -204,4 +205,122 @@ fn status_json_after_run() {
     let json = run::status_json(&f.cfg, &f.st);
     let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
     assert_eq!(v["A"]["state"], "done");
+}
+
+/// Retry: agent always fails, max_attempts=2 → exactly 2 attempts, then Failed.
+#[test]
+fn retry_runs_up_to_max_attempts() {
+    let _g = ENV_GUARD.lock().unwrap();
+    std::env::set_var("FAKE_AGENT_EXIT", "7");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"x","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(2),
+    );
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 2);
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Failed);
+    assert_eq!(st["A"].attempts, 2, "must have retried on a fresh attempt");
+}
+
+/// Self-heal: a stale `running` entry from a dead process is reset and run.
+#[test]
+fn self_heals_stale_running_state() {
+    let _g = ENV_GUARD.lock().unwrap();
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"x","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+    // Pre-seed the state file as if a previous process died mid-run.
+    std::fs::create_dir_all(&f.st.state_dir).unwrap();
+    std::fs::write(
+        f.st.state_dir.join("run-state.json"),
+        r#"{ "A": { "state": "running", "attempts": 0, "last_error": null } }"#,
+    )
+    .unwrap();
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Done, "stale running healed + completed");
+    assert!(f.repo.join("DONE.txt").exists());
+}
+
+/// --task filter: only the named task runs; out-of-scope work never blocks.
+#[test]
+fn task_filter_completes_without_running_others() {
+    let _g = ENV_GUARD.lock().unwrap();
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [
+                {{"id":"A","title":"run me","scope":["DONE.txt"],"accept":"{g}"}},
+                {{"id":"B","title":"not in scope","scope":["DONE.txt"],"accept":"{g}"}}
+            ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+    let code = run::run_loop(
+        &f.cfg,
+        &f.st,
+        &RunOptions { task_filter: Some("A".into()), ..Default::default() },
+    );
+    assert_eq!(code, 0, "in-scope completion must not hang on out-of-scope B");
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Done);
+    assert!(!st.contains_key("B"), "B must not have been dispatched");
+}
+
+/// --task naming a task that waits on out-of-scope deps → clean deadlock, no hang.
+#[test]
+fn task_filter_on_dependent_task_deadlocks_cleanly() {
+    let _g = ENV_GUARD.lock().unwrap();
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [
+                {{"id":"A","title":"base","scope":["DONE.txt"],"accept":"{g}"}},
+                {{"id":"B","title":"depends on A","deps":["A"],"scope":["DONE.txt"],"accept":"{g}"}}
+            ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+    let code = run::run_loop(
+        &f.cfg,
+        &f.st,
+        &RunOptions { task_filter: Some("B".into()), ..Default::default() },
+    );
+    assert_eq!(code, 2, "B waits on out-of-scope A → deadlock exit, no hang");
+}
+
+/// --worker naming no enabled worker fails fast instead of hanging.
+#[test]
+fn unknown_worker_filter_fails_fast() {
+    let _g = ENV_GUARD.lock().unwrap();
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"x","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+    let code = run::run_loop(
+        &f.cfg,
+        &f.st,
+        &RunOptions { worker_filter: Some("nope".into()), ..Default::default() },
+    );
+    assert_eq!(code, 2);
+    assert!(!f.st.worktree_root.join("A").exists(), "nothing ran");
 }

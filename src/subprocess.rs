@@ -132,6 +132,7 @@ pub fn run(
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)] // referenced only by unix-gated tests
     use super::*;
 
     #[cfg(unix)]
