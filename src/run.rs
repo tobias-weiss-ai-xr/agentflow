@@ -8,9 +8,9 @@ use crate::scheduler;
 use crate::state::{Store, TaskStatus};
 use crate::worktree;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::io::Write;
-use std::sync::{Arc, Mutex, mpsc};
+use std::path::PathBuf;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Default)]
@@ -22,12 +22,53 @@ pub struct RunOptions {
     pub poll_secs: Option<u64>,
 }
 
-enum Msg {
-    Done(String, String, Outcome), // (task id, worker name, outcome)
+/// Reap finished attempts from the channel: worker busy-ness, routing
+/// stats, status transitions + persistence. Shared by the main loop and
+/// `--once` (single source of truth for the attempt bookkeeping).
+fn reap(
+    rx: &mpsc::Receiver<(String, String, Outcome)>,
+    running: &Arc<Mutex<HashMap<String, ()>>>,
+    worker_busy: &Arc<Mutex<HashMap<String, bool>>>,
+    router: &mut Router,
+    status: &mut HashMap<String, TaskStatus>,
+    store: &Store,
+    max_attempts: u32,
+) {
+    while let Ok((id, worker_name, outcome)) = rx.try_recv() {
+        running.lock().unwrap().remove(&id);
+        worker_busy
+            .lock()
+            .unwrap()
+            .insert(worker_name.clone(), false);
+        router.record(&worker_name, matches!(outcome, Outcome::Merged));
+        let s = status.entry(id.clone()).or_default();
+        s.attempts += 1;
+        match outcome {
+            Outcome::Merged => {
+                s.state = TaskState::Done;
+                s.last_error = None;
+                println!("  ✓ {id} done (attempt {})", s.attempts);
+            }
+            Outcome::Failed(err) => {
+                s.last_error = Some(err.clone());
+                if s.attempts >= max_attempts {
+                    s.state = TaskState::Failed;
+                    println!(
+                        "  ✗ {id} failed (attempt {}/{}): {}",
+                        s.attempts, max_attempts, err
+                    );
+                } else {
+                    s.state = TaskState::Ready;
+                    println!("  ✗ {id} attempt {} failed, retrying: {}", s.attempts, err);
+                }
+            }
+        }
+        let _ = store.save(status);
+    }
 }
 
 /// UCB1 selection among the free, enabled, filter-matching workers.
-fn pick_worker<'a>(
+pub fn pick_worker<'a>(
     cfg: &'a Config,
     busy: &Mutex<HashMap<String, bool>>,
     router: &Router,
@@ -71,7 +112,12 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     repo_list.push(("(default)".to_string(), st.repo_dir.clone()));
-    worktree::heal(&repo_list, &st.worktree_root, &st.branch_prefix, &stale_running);
+    worktree::heal(
+        &repo_list,
+        &st.worktree_root,
+        &st.branch_prefix,
+        &stale_running,
+    );
     for id in &stale_running {
         if let Some(s) = status.get_mut(id) {
             s.state = TaskState::Ready; // previous owner died mid-run
@@ -84,13 +130,18 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     let _ = std::fs::create_dir_all(&log_dir);
     let _ = std::fs::create_dir_all(&store.prompt_dir());
 
-    let (tx, rx) = mpsc::channel::<Msg>();
+    let (tx, rx) = mpsc::channel::<(String, String, Outcome)>();
     let merge_locks = worktree::MergeLocks::new();
     let worker_busy: Arc<Mutex<HashMap<String, bool>>> = Arc::new(Mutex::new(HashMap::new()));
     let running: Arc<Mutex<HashMap<String, ()>>> = Arc::new(Mutex::new(HashMap::new()));
 
     let enabled = cfg.workers.iter().filter(|w| w.enabled).count();
-    let max_parallel = if st.max_parallel == 0 { enabled } else { st.max_parallel }.max(1);
+    let max_parallel = if st.max_parallel == 0 {
+        enabled
+    } else {
+        st.max_parallel
+    }
+    .max(1);
 
     let ctx = ExecCtx {
         cfg: cfg.clone(),
@@ -136,38 +187,15 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     let mut router = Router::from_receipts(&store.load_receipts());
     loop {
         // Reap finished tasks.
-        while let Ok(m) = rx.try_recv() {
-            match m {
-                Msg::Done(id, worker_name, outcome) => {
-                    running.lock().unwrap().remove(&id);
-                    worker_busy.lock().unwrap().insert(worker_name.clone(), false);
-                    router.record(&worker_name, matches!(outcome, Outcome::Merged));
-                    let s = status.entry(id.clone()).or_default();
-                    s.attempts += 1;
-                    match outcome {
-                        Outcome::Merged => {
-                            s.state = TaskState::Done;
-                            s.last_error = None;
-                            println!("  ✓ {id} done (attempt {})", s.attempts);
-                        }
-                        Outcome::Failed(err) => {
-                            s.last_error = Some(err.clone());
-                            if s.attempts >= max_attempts {
-                                s.state = TaskState::Failed;
-                                println!(
-                                    "  ✗ {id} failed (attempt {}/{}): {}",
-                                    s.attempts, max_attempts, err
-                                );
-                            } else {
-                                s.state = TaskState::Ready;
-                                println!("  ✗ {id} attempt {} failed, retrying: {}", s.attempts, err);
-                            }
-                        }
-                    }
-                    let _ = store.save(&status);
-                }
-            }
-        }
+        reap(
+            &rx,
+            &running,
+            &worker_busy,
+            &mut router,
+            &mut status,
+            &store,
+            max_attempts,
+        );
 
         // Terminal conditions (judged on the in-scope tasks only).
         let all_done = in_scope
@@ -203,7 +231,6 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
         if running.lock().unwrap().len() < max_parallel {
             let running_now = running.lock().unwrap().keys().cloned().collect::<Vec<_>>();
             let ready = scheduler::ready_tasks(cfg, &status, &running_now, max_attempts);
-            let mut dispatched = false;
             for t in ready {
                 if let Some(f) = &opts.task_filter {
                     if &t.id != f {
@@ -213,10 +240,11 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                 if running.lock().unwrap().len() >= max_parallel {
                     break;
                 }
-                let worker = match pick_worker(cfg, &worker_busy, &router, opts.worker_filter.as_deref()) {
-                    Some(w) => w.clone(),
-                    None => break, // no free worker this round
-                };
+                let worker =
+                    match pick_worker(cfg, &worker_busy, &router, opts.worker_filter.as_deref()) {
+                        Some(w) => w.clone(),
+                        None => break, // no free worker this round
+                    };
                 // Mark Running + persist BEFORE spawning (crash-safety).
                 let attempt = {
                     let s = status.entry(t.id.clone()).or_default();
@@ -225,7 +253,10 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                 };
                 let _ = store.save(&status);
 
-                worker_busy.lock().unwrap().insert(worker.name.clone(), true);
+                worker_busy
+                    .lock()
+                    .unwrap()
+                    .insert(worker.name.clone(), true);
                 running.lock().unwrap().insert(t.id.clone(), ());
                 let log_path = log_dir.join(format!("{}.log", t.id));
                 let tx2 = tx.clone();
@@ -234,41 +265,27 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                 let wname = worker.name.clone();
                 let wclone = worker.clone();
                 let model = worker.model.clone();
-                println!("  → {id} dispatch on {} ({model}) [attempt {attempt}]", worker.name);
+                println!(
+                    "  → {id} dispatch on {} ({model}) [attempt {attempt}]",
+                    worker.name
+                );
                 std::thread::spawn(move || {
                     let out = execute::execute_task(&ctx2, &wclone, &id, attempt, &log_path);
-                    let _ = tx2.send(Msg::Done(id, wname, out));
+                    let _ = tx2.send((id, wname, out));
                 });
-                dispatched = true;
             }
             if opts.once {
                 // --once: dispatch no more after this round; wait for in-flight.
-                let _ = dispatched;
                 while !running.lock().unwrap().is_empty() {
-                    while let Ok(m) = rx.try_recv() {
-                        let Msg::Done(id, wname, outcome) = m;
-                        running.lock().unwrap().remove(&id);
-                        worker_busy.lock().unwrap().insert(wname, false);
-                        let s = status.entry(id.clone()).or_default();
-                        s.attempts += 1;
-                        match outcome {
-                            Outcome::Merged => {
-                                s.state = TaskState::Done;
-                                s.last_error = None;
-                                println!("  ✓ {id} done (attempt {})", s.attempts);
-                            }
-                            Outcome::Failed(err) => {
-                                s.last_error = Some(err.clone());
-                                s.state = if s.attempts >= max_attempts {
-                                    TaskState::Failed
-                                } else {
-                                    TaskState::Ready
-                                };
-                                println!("  ✗ {id} finished: {err}");
-                            }
-                        }
-                        let _ = store.save(&status);
-                    }
+                    reap(
+                        &rx,
+                        &running,
+                        &worker_busy,
+                        &mut router,
+                        &mut status,
+                        &store,
+                        max_attempts,
+                    );
                     std::thread::sleep(Duration::from_millis(200));
                 }
                 println!("{}", board_of(cfg, &status));
@@ -309,20 +326,29 @@ pub fn dry_run(cfg: &Config, st: &Settings) -> i32 {
             }
         );
     }
-    println!("  ({} tasks ready now; nothing was created or changed)", ready.len());
+    println!(
+        "  ({} tasks ready now; nothing was created or changed)",
+        ready.len()
+    );
     0
 }
 
 fn board_of(cfg: &Config, status: &HashMap<String, TaskStatus>) -> String {
-    let mut rows = vec![format!("{:<12} {:<9} {:<8} {}", "TASK", "STATE", "ATTEMPTS", "LAST ERROR")];
+    let mut rows = vec![format!(
+        "{:<12} {:<9} {:<8} {}",
+        "TASK", "STATE", "ATTEMPTS", "LAST ERROR"
+    )];
     for t in &cfg.tasks {
         let s = status.get(&t.id).cloned().unwrap_or_default();
         let err = s
             .last_error
             .as_deref()
-            .map(|e| if e.len() > 48 { format!("{}…", &e[..48]) } else { e.to_string() })
+            .map(|e| e.chars().take(48).collect::<String>()) // chars, not bytes: UTF-8 safe
             .unwrap_or_default();
-        rows.push(format!("{:<12} {:<9?} {:<8} {}", t.id, s.state, s.attempts, err));
+        rows.push(format!(
+            "{:<12} {:<9?} {:<8} {}",
+            t.id, s.state, s.attempts, err
+        ));
     }
     rows.join("\n")
 }
@@ -355,7 +381,10 @@ pub fn status_json(cfg: &Config, st: &Settings) -> String {
 pub fn cost(cfg: &Config, st: &Settings, task_filter: Option<&str>) -> String {
     let store = Store::new(st.state_dir.clone());
     let receipts = store.load_receipts();
-    let mut lines = format!("{:<12} {:<9} {:<10} {}", "TASK", "ATTEMPTS", "WALL_S", "MODEL");
+    let mut lines = format!(
+        "{:<12} {:<9} {:<10} {}",
+        "TASK", "ATTEMPTS", "WALL_S", "MODEL"
+    );
     let mut total: f64 = 0.0;
     for t in &cfg.tasks {
         if let Some(f) = task_filter {
@@ -398,17 +427,24 @@ pub fn cost(cfg: &Config, st: &Settings, task_filter: Option<&str>) -> String {
     }
     if !by_worker.is_empty() {
         by_worker.sort();
-        lines.push_str(&format!("\n\n{:<14} {:<11} {}", "WORKER", "WINS/TOTAL", "TRUST"));
+        lines.push_str(&format!(
+            "\n\n{:<14} {:<11} {}",
+            "WORKER", "WINS/TOTAL", "TRUST"
+        ));
         for (name, w, n) in by_worker {
-            lines.push_str(&format!("\n{:<14} {:<11} {:.2}", name, format!("{w}/{n}"), w as f64 / n as f64));
+            lines.push_str(&format!(
+                "\n{:<14} {:<11} {:.2}",
+                name,
+                format!("{w}/{n}"),
+                w as f64 / n as f64
+            ));
         }
     }
     lines
 }
 
 /// `af attach <id>`: tail a task's log until its terminal state.
-pub fn attach(cfg: &Config, st: &Settings, id: &str) -> i32 {
-    let _ = cfg;
+pub fn attach(st: &Settings, id: &str) -> i32 {
     let store = Store::new(st.state_dir.clone());
     let log_path = store.log_dir().join(format!("{id}.log"));
     let mut pos: u64 = 0;

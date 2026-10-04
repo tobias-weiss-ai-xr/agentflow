@@ -17,12 +17,7 @@ pub fn shell() -> (&'static str, String) {
     }
 }
 
-pub fn run_accept(
-    accept: &str,
-    cwd: &Path,
-    env: &[(String, String)],
-    timeout: Duration,
-) -> CmdOut {
+pub fn run_accept(accept: &str, cwd: &Path, env: &[(String, String)], timeout: Duration) -> CmdOut {
     let (shell, flag) = shell();
     let args = vec![flag, accept.to_string()];
     // Gates are user-authored (trusted): full inherited environment.

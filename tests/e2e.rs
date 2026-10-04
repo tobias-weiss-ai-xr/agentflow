@@ -158,7 +158,9 @@ fn failed_attempts_get_failed_receipts() {
     assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 2);
     let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
     assert_eq!(receipts.len(), 3, "one receipt per failed attempt");
-    assert!(receipts.iter().all(|r| r.outcome == "failed" && r.worker == "w1"));
+    assert!(receipts
+        .iter()
+        .all(|r| r.outcome == "failed" && r.worker == "w1"));
     // Retry memory (ADR-13): the final (attempt-3) prompt render lists the
     // earlier failures.
     let prompt = std::fs::read_to_string(f.st.state_dir.join("prompts").join("A.md"))
@@ -220,7 +222,14 @@ fn dry_run_changes_nothing() {
         ),
         &worker_json(1),
     );
-    let code = run::run_loop(&f.cfg, &f.st, &RunOptions { dry_run: true, ..Default::default() });
+    let code = run::run_loop(
+        &f.cfg,
+        &f.st,
+        &RunOptions {
+            dry_run: true,
+            ..Default::default()
+        },
+    );
     assert_eq!(code, 0);
     assert!(!f.st.worktree_root.exists(), "no worktrees created");
     assert!(!f.repo.join("DONE.txt").exists(), "no merge happened");
@@ -286,7 +295,11 @@ fn self_heals_stale_running_state() {
     .unwrap();
     assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
     let st = Store::new(f.st.state_dir.clone()).load();
-    assert_eq!(st["A"].state, TaskState::Done, "stale running healed + completed");
+    assert_eq!(
+        st["A"].state,
+        TaskState::Done,
+        "stale running healed + completed"
+    );
     assert!(f.repo.join("DONE.txt").exists());
 }
 
@@ -309,9 +322,15 @@ fn task_filter_completes_without_running_others() {
     let code = run::run_loop(
         &f.cfg,
         &f.st,
-        &RunOptions { task_filter: Some("A".into()), ..Default::default() },
+        &RunOptions {
+            task_filter: Some("A".into()),
+            ..Default::default()
+        },
     );
-    assert_eq!(code, 0, "in-scope completion must not hang on out-of-scope B");
+    assert_eq!(
+        code, 0,
+        "in-scope completion must not hang on out-of-scope B"
+    );
     let st = Store::new(f.st.state_dir.clone()).load();
     assert_eq!(st["A"].state, TaskState::Done);
     assert!(!st.contains_key("B"), "B must not have been dispatched");
@@ -336,9 +355,15 @@ fn task_filter_on_dependent_task_deadlocks_cleanly() {
     let code = run::run_loop(
         &f.cfg,
         &f.st,
-        &RunOptions { task_filter: Some("B".into()), ..Default::default() },
+        &RunOptions {
+            task_filter: Some("B".into()),
+            ..Default::default()
+        },
     );
-    assert_eq!(code, 2, "B waits on out-of-scope A → deadlock exit, no hang");
+    assert_eq!(
+        code, 2,
+        "B waits on out-of-scope A → deadlock exit, no hang"
+    );
 }
 
 /// --worker naming no enabled worker fails fast instead of hanging.
@@ -357,7 +382,10 @@ fn unknown_worker_filter_fails_fast() {
     let code = run::run_loop(
         &f.cfg,
         &f.st,
-        &RunOptions { worker_filter: Some("nope".into()), ..Default::default() },
+        &RunOptions {
+            worker_filter: Some("nope".into()),
+            ..Default::default()
+        },
     );
     assert_eq!(code, 2);
     assert!(!f.st.worktree_root.join("A").exists(), "nothing ran");
@@ -398,9 +426,18 @@ fn agent_env_is_allowlisted() {
     );
     assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
     let env_txt = std::fs::read_to_string(&probe).unwrap();
-    assert!(env_txt.contains("AF_TEST_KEY=keyvalue-123"), "worker key visible: {env_txt}");
-    assert!(env_txt.contains("AF_TEST_EXTRA=extra-789"), "passthrough visible");
-    assert!(env_txt.contains("AF_TEST_LEAK=<unset>"), "foreign secret stripped: {env_txt}");
+    assert!(
+        env_txt.contains("AF_TEST_KEY=keyvalue-123"),
+        "worker key visible: {env_txt}"
+    );
+    assert!(
+        env_txt.contains("AF_TEST_EXTRA=extra-789"),
+        "passthrough visible"
+    );
+    assert!(
+        env_txt.contains("AF_TEST_LEAK=<unset>"),
+        "foreign secret stripped: {env_txt}"
+    );
     for k in [
         "AF_TEST_KEY",
         "AF_TEST_LEAK",
@@ -428,7 +465,10 @@ fn multi_repo_campaign_merges_into_each_repo() {
             ] }}"#,
             g = gate_cmd("DONE.txt")
         ),
-        &format!(r#"{{ "workers": [{{"name":"w1","provider":"p","model":"m","cli":"{}"}}]}}"#, AGENT.replace('\\', "\\\\")),
+        &format!(
+            r#"{{ "workers": [{{"name":"w1","provider":"p","model":"m","cli":"{}"}}]}}"#,
+            AGENT.replace('\\', "\\\\")
+        ),
     );
     // Second scratch repo + repos.json next to tasks.json.
     let auxrepo = f.dir.join("auxrepo");
@@ -447,7 +487,11 @@ fn multi_repo_campaign_merges_into_each_repo() {
     )
     .unwrap();
     // Re-load so cfg picks up repos.json (fixture loaded before it existed).
-    let cfg = config::load(&config_dir.join("tasks.json"), &config_dir.join("workers.json")).unwrap();
+    let cfg = config::load(
+        &config_dir.join("tasks.json"),
+        &config_dir.join("workers.json"),
+    )
+    .unwrap();
     let cfg = config::Config {
         repos: agentflow::config::load_repos(&config_dir.join("repos.json")).unwrap(),
         ..cfg
@@ -474,7 +518,10 @@ fn unknown_repo_warns_and_falls_back() {
         &worker_json(1),
     );
     assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
-    assert!(f.repo.join("DONE.txt").exists(), "fell back to default repo");
+    assert!(
+        f.repo.join("DONE.txt").exists(),
+        "fell back to default repo"
+    );
 }
 
 /// Task on a repo that exists on disk but is not a git repo: the attempt
@@ -500,7 +547,11 @@ fn task_on_broken_repo_fails_cleanly() {
         format!(r#"{{"repos": {{"broken": "{}"}}}}"#, bp),
     )
     .unwrap();
-    let cfg = config::load(&config_dir.join("tasks.json"), &config_dir.join("workers.json")).unwrap();
+    let cfg = config::load(
+        &config_dir.join("tasks.json"),
+        &config_dir.join("workers.json"),
+    )
+    .unwrap();
     let cfg = config::Config {
         repos: agentflow::config::load_repos(&config_dir.join("repos.json")).unwrap(),
         ..cfg
@@ -509,6 +560,8 @@ fn task_on_broken_repo_fails_cleanly() {
     let st = Store::new(f.st.state_dir.clone()).load();
     assert_eq!(st["A"].state, TaskState::Failed);
     let err = st["A"].last_error.as_deref().unwrap_or("");
-    assert!(err.contains("not a git repository"), "reason surfaced: {err}");
+    assert!(
+        err.contains("not a git repository"),
+        "reason surfaced: {err}"
+    );
 }
-

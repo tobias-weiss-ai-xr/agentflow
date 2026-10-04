@@ -172,8 +172,8 @@ struct WorkersFile {
 pub fn load(tasks_path: &Path, workers_path: &Path) -> Result<Config, String> {
     let tasks_json = std::fs::read_to_string(tasks_path)
         .map_err(|e| format!("read {}: {e}", tasks_path.display()))?;
-    let tf: TasksFile =
-        serde_json::from_str(&tasks_json).map_err(|e| format!("parse {}: {e}", tasks_path.display()))?;
+    let tf: TasksFile = serde_json::from_str(&tasks_json)
+        .map_err(|e| format!("parse {}: {e}", tasks_path.display()))?;
 
     let workers_json = std::fs::read_to_string(workers_path)
         .map_err(|e| format!("read {}: {e}", workers_path.display()))?;
@@ -182,11 +182,7 @@ pub fn load(tasks_path: &Path, workers_path: &Path) -> Result<Config, String> {
 
     let mut warnings = validate(&tf.tasks, &wf.workers)?;
 
-    let by_id: HashMap<String, Task> = tf
-        .tasks
-        .iter()
-        .map(|t| (t.id.clone(), t.clone()))
-        .collect();
+    let by_id: HashMap<String, Task> = tf.tasks.iter().map(|t| (t.id.clone(), t.clone())).collect();
 
     // Dangling deps are non-fatal (compat: configs reference tasks merged in
     // from sibling files). Report them; deadlock detection will surface any
@@ -194,7 +190,10 @@ pub fn load(tasks_path: &Path, workers_path: &Path) -> Result<Config, String> {
     for t in &tf.tasks {
         for d in &t.deps {
             if !by_id.contains_key(d) {
-                warnings.push(format!("task '{}': dep '{}' not in this file (assumed merged elsewhere)", t.id, d));
+                warnings.push(format!(
+                    "task '{}': dep '{}' not in this file (assumed merged elsewhere)",
+                    t.id, d
+                ));
             }
         }
     }
@@ -241,7 +240,10 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
             return Err("worker with empty name".into());
         }
         if w.provider.is_empty() || w.model.is_empty() {
-            return Err(format!("worker '{}': provider and model are required", w.name));
+            return Err(format!(
+                "worker '{}': provider and model are required",
+                w.name
+            ));
         }
         if !wnames.insert(w.name.as_str()) {
             return Err(format!("duplicate worker name: {}", w.name));
@@ -336,15 +338,14 @@ fn env_or_int(key: &str, default: u64) -> u64 {
 
 impl Settings {
     pub fn from_env() -> Settings {
-        let repo_dir = PathBuf::from(env_or("TF_REPO_DIR", "."));
         let state_dir = PathBuf::from(env_or("TF_STATE_DIR", "state"));
-        let cfg = Settings {
-            repo_dir: repo_dir.clone(),
-            state_dir: state_dir.clone(),
+        Settings {
+            repo_dir: PathBuf::from(env_or("TF_REPO_DIR", ".")),
             worktree_root: PathBuf::from(env_or(
                 "TF_WORKTREE_ROOT",
                 &state_dir.join("worktrees").to_string_lossy(),
             )),
+            state_dir,
             max_parallel: env_or_int("TF_MAX_PARALLEL", 0) as usize,
             branch_prefix: env_or("TF_BRANCH_PREFIX", "tf"),
             poll_secs: env_or_int("TF_POLL", 15),
@@ -357,9 +358,7 @@ impl Settings {
                 .split_whitespace()
                 .map(str::to_string)
                 .collect(),
-        };
-        let _ = repo_dir;
-        cfg
+        }
     }
 }
 
@@ -383,7 +382,8 @@ pub fn load_repos(repos_path: &Path) -> Result<BTreeMap<String, PathBuf>, String
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    Ok(rf.repos
+    Ok(rf
+        .repos
         .into_iter()
         .map(|(name, path)| {
             let p = PathBuf::from(&path);
@@ -430,10 +430,7 @@ impl Config {
     pub fn repo_warnings(&self, default_repo: &Path) -> Vec<String> {
         let mut w = Vec::new();
         for t in &self.tasks {
-            if !t.repo.is_empty()
-                && t.repo != "main"
-                && !self.repos.contains_key(&t.repo)
-            {
+            if !t.repo.is_empty() && t.repo != "main" && !self.repos.contains_key(&t.repo) {
                 w.push(format!(
                     "task '{}': repo '{}' not in repos.json — using default repo {}",
                     t.id,
@@ -543,7 +540,9 @@ mod tests {
         );
         let c = load(&d.join("tasks.json"), &d.join("workers.json")).unwrap();
         assert!(
-            c.warnings.iter().any(|w| w.contains("gate will be skipped")),
+            c.warnings
+                .iter()
+                .any(|w| w.contains("gate will be skipped")),
             "gate-less task should warn, not fail: {:?}",
             c.warnings
         );
@@ -655,8 +654,13 @@ mod repo_tests {
     fn relative_repo_paths_resolve_against_the_file() {
         let base = std::env::temp_dir().join(format!("af-repos-rel-{}", std::process::id()));
         // Absolute paths pass through on both platforms.
-        let abs = if cfg!(windows) { "C:/abs/path" } else { "/abs/path" };
-        let body = format!(r#"{{"repos": {{"main": "..", "docs": "../docs-site", "abs": "{abs}"}}}}"#);
+        let abs = if cfg!(windows) {
+            "C:/abs/path"
+        } else {
+            "/abs/path"
+        };
+        let body =
+            format!(r#"{{"repos": {{"main": "..", "docs": "../docs-site", "abs": "{abs}"}}}}"#);
         let p = write(&base.join("config"), "repos.json", &body);
         let map = load_repos(&p).unwrap();
         assert_eq!(map["main"], base);
@@ -688,8 +692,14 @@ mod repo_tests {
         // With repos.json: named + "main" resolve; "" stays default.
         cfg.repos.insert("main".into(), PathBuf::from("/r/main"));
         cfg.repos.insert("docs".into(), PathBuf::from("/r/docs"));
-        assert_eq!(cfg.repo_dir_for(&mk("main"), &default), PathBuf::from("/r/main"));
-        assert_eq!(cfg.repo_dir_for(&mk("docs"), &default), PathBuf::from("/r/docs"));
+        assert_eq!(
+            cfg.repo_dir_for(&mk("main"), &default),
+            PathBuf::from("/r/main")
+        );
+        assert_eq!(
+            cfg.repo_dir_for(&mk("docs"), &default),
+            PathBuf::from("/r/docs")
+        );
         assert_eq!(cfg.repo_dir_for(&mk(""), &default), default);
     }
 
@@ -698,9 +708,24 @@ mod repo_tests {
         let default = PathBuf::from("/default/repo");
         let mut cfg = Config {
             tasks: vec![
-                Task { id: "a".into(), title: "a".into(), repo: "".into(), ..Default::default() },
-                Task { id: "b".into(), title: "b".into(), repo: "main".into(), ..Default::default() },
-                Task { id: "c".into(), title: "c".into(), repo: "docs".into(), ..Default::default() },
+                Task {
+                    id: "a".into(),
+                    title: "a".into(),
+                    repo: "".into(),
+                    ..Default::default()
+                },
+                Task {
+                    id: "b".into(),
+                    title: "b".into(),
+                    repo: "main".into(),
+                    ..Default::default()
+                },
+                Task {
+                    id: "c".into(),
+                    title: "c".into(),
+                    repo: "docs".into(),
+                    ..Default::default()
+                },
             ],
             workers: vec![],
             defaults: WorkerDefaults::default(),
@@ -708,7 +733,11 @@ mod repo_tests {
             repos: BTreeMap::new(),
             warnings: vec![],
         };
-        cfg.by_id = cfg.tasks.iter().map(|t| (t.id.clone(), t.clone())).collect();
+        cfg.by_id = cfg
+            .tasks
+            .iter()
+            .map(|t| (t.id.clone(), t.clone()))
+            .collect();
         let w = cfg.repo_warnings(&default);
         assert_eq!(w.len(), 1, "only 'docs' warns: {w:?}");
         assert!(w[0].contains("task 'c'") && w[0].contains("docs"));

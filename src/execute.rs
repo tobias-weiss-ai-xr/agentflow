@@ -4,7 +4,7 @@
 //! outcome.
 
 use crate::config::{Config, Settings, Worker};
-use crate::state::{Receipt, Store, now_ts};
+use crate::state::{now_ts, Receipt, Store};
 use crate::{gate, worktree};
 use std::fs;
 use std::io::Write;
@@ -66,13 +66,22 @@ pub fn agent_env(
     let pairs = vec![
         ("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()),
         ("GIT_CONFIG_COUNT".to_string(), "1".to_string()),
-        ("GIT_CONFIG_KEY_0".to_string(), "credential.helper".to_string()),
+        (
+            "GIT_CONFIG_KEY_0".to_string(),
+            "credential.helper".to_string(),
+        ),
         ("GIT_CONFIG_VALUE_0".to_string(), String::new()),
     ];
     (pairs, allow)
 }
 
-pub fn execute_task(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_path: &Path) -> Outcome {
+pub fn execute_task(
+    ctx: &ExecCtx,
+    worker: &Worker,
+    id: &str,
+    attempt: u32,
+    log_path: &Path,
+) -> Outcome {
     let start = std::time::Instant::now();
     let outcome = execute_attempt(ctx, worker, id, attempt, log_path);
     // Receipt for EVERY attempt (merged + failed) — routing/cost substrate.
@@ -112,7 +121,8 @@ fn failure_context(receipts: &[Receipt], task_id: &str, attempt: u32) -> Option<
     if prior.is_empty() {
         return None;
     }
-    let mut out = String::from("\n\n## Previous attempts on this task (avoid repeating these failures)\n");
+    let mut out =
+        String::from("\n\n## Previous attempts on this task (avoid repeating these failures)\n");
     for r in prior {
         let why = r.error.as_deref().unwrap_or("(unknown failure)");
         out.push_str(&format!("- attempt {}: {}\n", r.attempt, why));
@@ -120,7 +130,13 @@ fn failure_context(receipts: &[Receipt], task_id: &str, attempt: u32) -> Option<
     Some(out)
 }
 
-fn execute_attempt(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_path: &Path) -> Outcome {
+fn execute_attempt(
+    ctx: &ExecCtx,
+    worker: &Worker,
+    id: &str,
+    attempt: u32,
+    log_path: &Path,
+) -> Outcome {
     let task = match ctx.cfg.by_id.get(id) {
         Some(t) => t.clone(),
         None => return Outcome::Failed(format!("unknown task {id}")),
@@ -128,12 +144,7 @@ fn execute_attempt(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_p
 
     // Multi-repo (ADR-11): worktree, branch, and merge target the task's repo.
     let repo = ctx.cfg.repo_dir_for(&task, &ctx.st.repo_dir);
-    let wt = match worktree::create(
-        &repo,
-        &ctx.st.worktree_root,
-        id,
-        &ctx.st.branch_prefix.clone(),
-    ) {
+    let wt = match worktree::create(&repo, &ctx.st.worktree_root, id, &ctx.st.branch_prefix) {
         Ok(w) => w,
         Err(e) => return Outcome::Failed(e),
     };
@@ -149,7 +160,10 @@ fn execute_attempt(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_p
             let _ = writeln!(f, "{s}");
         }
     };
-    append(&format!("== attempt {attempt} on worker {} ({}) ==", worker.name, worker.model));
+    append(&format!(
+        "== attempt {attempt} on worker {} ({}) ==",
+        worker.name, worker.model
+    ));
 
     // 1) Render + write prompt.
     let prompt = {
@@ -159,7 +173,7 @@ fn execute_attempt(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_p
     let prompt_path = ctx.store.prompt_dir().join(format!("{id}.md"));
     let _ = fs::create_dir_all(ctx.store.prompt_dir());
     if let Err(e) = fs::write(&prompt_path, &prompt) {
-        cleanup(&repo, &wt, &ctx.st);
+        cleanup(&repo, &wt);
         return Outcome::Failed(format!("cannot write prompt: {e}"));
     }
 
@@ -181,13 +195,14 @@ fn execute_attempt(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_p
         append(&out_lines);
     }
     if !agent_out.passed() {
-        let (kind, code) = (format!("{:?}", agent_out.kind), agent_out.code.map(|c| c.to_string()).unwrap_or_default());
-        cleanup(&repo, &wt, &ctx.st);
-        let _ = (kind, code);
+        cleanup(&repo, &wt);
         return Outcome::Failed(format!(
-            "agent exited {} (code {})",
-            format!("{:?}", agent_out.kind),
-            agent_out.code.map(|c| c.to_string()).unwrap_or_else(|| "-".into())
+            "agent exited {:?} (code {})",
+            agent_out.kind,
+            agent_out
+                .code
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "-".into())
         ));
     }
 
@@ -206,10 +221,13 @@ fn execute_attempt(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_p
                 append(&out_lines);
             }
             if !gate_out.passed() {
-                cleanup(&repo, &wt, &ctx.st);
+                cleanup(&repo, &wt);
                 return Outcome::Failed(format!(
                     "acceptance gate failed (exit {}): {}",
-                    gate_out.code.map(|c| c.to_string()).unwrap_or_else(|| "-".into()),
+                    gate_out
+                        .code
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "-".into()),
                     gate_out.combined().trim()
                 ));
             }
@@ -220,17 +238,16 @@ fn execute_attempt(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_p
     let msg = format!("af: {} — {}", task.id, task.title);
     if let Err(e) = worktree::merge(&repo, &wt.branch, &ctx.merge_locks, &msg) {
         append(&format!("-- merge failed: {e}"));
-        cleanup(&repo, &wt, &ctx.st);
+        cleanup(&repo, &wt);
         return Outcome::Failed(e);
     }
     append("-- merged --");
-    cleanup(&repo, &wt, &ctx.st);
+    cleanup(&repo, &wt);
     Outcome::Merged
 }
 
-fn cleanup(repo: &std::path::PathBuf, wt: &worktree::Worktree, st: &Settings) {
+fn cleanup(repo: &Path, wt: &worktree::Worktree) {
     worktree::remove(repo, wt);
-    let _ = st.worktree_root;
 }
 
 /// Full agent child argv: optional sandbox wrapper prefix, then the CLI and
@@ -262,7 +279,14 @@ Work on TASK_ID only. Do not touch files outside the allowed scope.
 When done, make sure the acceptance criteria hold and your changes are
 committed on the current branch."#;
 
-fn render_prompt(st: &Settings, task: &crate::config::Task, worker: &Worker, context: Option<&str>) -> String {    let template = fs::read_to_string(&st.prompt_file).unwrap_or_else(|_| DEFAULT_PROMPT.to_string());
+fn render_prompt(
+    st: &Settings,
+    task: &crate::config::Task,
+    worker: &Worker,
+    context: Option<&str>,
+) -> String {
+    let template =
+        fs::read_to_string(&st.prompt_file).unwrap_or_else(|_| DEFAULT_PROMPT.to_string());
     let scope = if task.scope.is_empty() {
         "*".to_string()
     } else {
@@ -315,9 +339,15 @@ mod tests {
         };
         let (pairs, allow) = agent_env(&w, &lookup);
         assert!(pairs.contains(&("GIT_TERMINAL_PROMPT".to_string(), "0".to_string())));
-        assert!(pairs.contains(&("GIT_CONFIG_KEY_0".to_string(), "credential.helper".to_string())));
+        assert!(pairs.contains(&(
+            "GIT_CONFIG_KEY_0".to_string(),
+            "credential.helper".to_string()
+        )));
         assert!(pairs.contains(&("GIT_CONFIG_VALUE_0".to_string(), String::new())));
-        assert!(allow.contains(&"AF_TEST_KEY".to_string()), "worker api key allowlisted");
+        assert!(
+            allow.contains(&"AF_TEST_KEY".to_string()),
+            "worker api key allowlisted"
+        );
         assert!(allow.contains(&"PATH".to_string()));
         assert!(allow.contains(&"A".to_string()) && allow.contains(&"B".to_string()));
         assert!(!allow.contains(&"AF_OTHER_SECRET".to_string()));
@@ -383,11 +413,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("af-prompt-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let tpl = dir.join("tpl.md");
-        std::fs::write(&tpl, "# {{TASK_ID}}: {{TASK_TITLE}}
+        std::fs::write(
+            &tpl,
+            "# {{TASK_ID}}: {{TASK_TITLE}}
 scope: {{SCOPE}}
 accept: {{ACCEPTANCE}}
 model {{MODEL}}/{{PROVIDER}}
-").unwrap();
+",
+        )
+        .unwrap();
         let st = crate::config::Settings {
             repo_dir: dir.clone(),
             state_dir: dir.clone(),
@@ -417,18 +451,29 @@ model {{MODEL}}/{{PROVIDER}}
             cli: "c".into(),
             ..Default::default()
         };
-        let out = render_prompt(&st, &task, &worker, Some("
+        let out = render_prompt(
+            &st,
+            &task,
+            &worker,
+            Some(
+                "
 
 ## Previous attempts on this task
 - attempt 1: boom
-"));
+",
+            ),
+        );
         assert!(out.contains("# X1: do things"));
-        assert!(out.contains("a.md
-b.md"), "scope list joined");
+        assert!(
+            out.contains(
+                "a.md
+b.md"
+            ),
+            "scope list joined"
+        );
         assert!(out.contains("test -f done"));
         assert!(out.contains("gpt-x/openai"));
         assert!(out.contains("attempt 1: boom"), "context appended");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-

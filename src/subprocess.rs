@@ -149,8 +149,7 @@ pub fn run(
             Some(0) => CmdKind::Success,
             Some(_) => CmdKind::NonZero,
             None => CmdKind::Killed, // terminated by signal
-        };
-        let _ = 0; // keep `code` extracted below too
+        }
     }
 
     // On timeout, orphaned grandchildren may hold the pipe write-ends —
@@ -158,17 +157,11 @@ pub fn run(
     let timed_out = kind == CmdKind::Timeout;
     let (stdout, stderr) = if timed_out {
         thread::sleep(Duration::from_millis(200));
-        (
-            buf1.lock().unwrap().clone(),
-            buf2.lock().unwrap().clone(),
-        )
+        (buf1.lock().unwrap().clone(), buf2.lock().unwrap().clone())
     } else {
         let _ = r1.join();
         let _ = r2.join();
-        (
-            buf1.lock().unwrap().clone(),
-            buf2.lock().unwrap().clone(),
-        )
+        (buf1.lock().unwrap().clone(), buf2.lock().unwrap().clone())
     };
     let code = status.as_ref().and_then(|s| s.code());
 
@@ -188,12 +181,33 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn exit_codes_are_classified() {
-        let ok = run("sh", &["-c".into(), "exit 0".into()], None, &[], EnvMode::Inherit, Duration::from_secs(5));
+        let ok = run(
+            "sh",
+            &["-c".into(), "exit 0".into()],
+            None,
+            &[],
+            EnvMode::Inherit,
+            Duration::from_secs(5),
+        );
         assert!(ok.passed());
-        let bad = run("sh", &["-c".into(), "exit 7".into()], None, &[], EnvMode::Inherit, Duration::from_secs(5));
+        let bad = run(
+            "sh",
+            &["-c".into(), "exit 7".into()],
+            None,
+            &[],
+            EnvMode::Inherit,
+            Duration::from_secs(5),
+        );
         assert_eq!(bad.kind, CmdKind::NonZero);
         assert_eq!(bad.code, Some(7));
-        let missing = run("definitely-not-a-real-bin-xyz", &[], None, &[], EnvMode::Inherit, Duration::from_secs(1));
+        let missing = run(
+            "definitely-not-a-real-bin-xyz",
+            &[],
+            None,
+            &[],
+            EnvMode::Inherit,
+            Duration::from_secs(1),
+        );
         assert_eq!(missing.kind, CmdKind::Missing);
     }
 
@@ -220,7 +234,11 @@ mod tests {
             EnvMode::Allowlist(vec!["PATH".into(), "AF_TEST_ALLOWLIST_VAR".into()]),
             Duration::from_secs(5),
         );
-        assert_eq!(out.stdout.trim(), "visible", "allowlisted key passes through");
+        assert_eq!(
+            out.stdout.trim(),
+            "visible",
+            "allowlisted key passes through"
+        );
         let _ = std::env::remove_var("AF_TEST_ALLOWLIST_VAR");
     }
 

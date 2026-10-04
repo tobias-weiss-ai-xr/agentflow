@@ -29,7 +29,10 @@ impl Cli {
         let out = Command::new(env!("CARGO_BIN_EXE_af"))
             .args(args)
             .env("TF_TASKS_JSON", self.dir.join("config").join("tasks.json"))
-            .env("TF_WORKERS_JSON", self.dir.join("config").join("workers.json"))
+            .env(
+                "TF_WORKERS_JSON",
+                self.dir.join("config").join("workers.json"),
+            )
             .env("TF_STATE_DIR", self.dir.join("state"))
             .env("TF_REPO_DIR", self.dir.join("repo"))
             .output()
@@ -75,7 +78,6 @@ impl Cli {
         s.attempts = 1;
         map.insert(id.to_string(), s);
         Store::new(st.state_dir.clone()).save(&map).unwrap();
-        let _ = &cfg;
     }
 
     fn seed_receipt(&self, id: &str) {
@@ -131,7 +133,10 @@ fn missing_config_errors_exit_two() {
     let out = Command::new(env!("CARGO_BIN_EXE_af"))
         .args(["status"])
         .env("TF_TASKS_JSON", cli.dir.join("config").join("nope.json"))
-        .env("TF_WORKERS_JSON", cli.dir.join("config").join("workers.json"))
+        .env(
+            "TF_WORKERS_JSON",
+            cli.dir.join("config").join("workers.json"),
+        )
         .env("TF_STATE_DIR", cli.dir.join("state"))
         .env("TF_REPO_DIR", cli.dir.join("repo"))
         .output()

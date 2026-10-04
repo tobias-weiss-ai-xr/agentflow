@@ -46,7 +46,10 @@ pub fn current_branch(repo: &Path) -> Result<String, String> {
     if out.passed() {
         Ok(out.stdout.trim().to_string())
     } else {
-        Err(format!("cannot determine current branch in {}", repo.display()))
+        Err(format!(
+            "cannot determine current branch in {}",
+            repo.display()
+        ))
     }
 }
 
@@ -65,7 +68,14 @@ pub fn create(repo: &Path, wt_root: &Path, id: &str, prefix: &str) -> Result<Wor
     let _ = git(repo, &["branch", "-D", &branch]);
     let out = git(
         repo,
-        &["worktree", "add", "-b", &branch, path.to_str().unwrap(), "HEAD"],
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch,
+            path.to_str().unwrap(),
+            "HEAD",
+        ],
     );
     if !out.passed() {
         return Err(format!(
@@ -139,10 +149,7 @@ mod tests {
     fn scratch_repo() -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "af-wt-{}-{n}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("af-wt-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         git_cmd(&dir, &["init", "-b", "main"]);
@@ -190,7 +197,10 @@ mod tests {
         git_cmd(&wt.path, &["add", "."]);
         git_cmd(&wt.path, &["commit", "-m", "task work"]);
         merge(&repo, &wt.branch, &locks, "merge T1").unwrap();
-        assert_eq!(std::fs::read_to_string(repo.join("f.txt")).unwrap(), "changed\n");
+        assert_eq!(
+            std::fs::read_to_string(repo.join("f.txt")).unwrap(),
+            "changed\n"
+        );
         assert_eq!(current_branch(&repo).unwrap(), "main");
         remove(&repo, &wt);
         assert!(!wt.path.exists());
@@ -203,11 +213,19 @@ mod tests {
         let locks = MergeLocks::new();
         let wt = create(&repo, &repo.parent().unwrap().join("wt"), "T2", "tf").unwrap();
         // Both sides change the same line differently.
-        std::fs::write(repo.join("f.txt"), "main version
-").unwrap();
+        std::fs::write(
+            repo.join("f.txt"),
+            "main version
+",
+        )
+        .unwrap();
         git_cmd(&repo, &["commit", "-am", "main change"]);
-        std::fs::write(wt.path.join("f.txt"), "branch version
-").unwrap();
+        std::fs::write(
+            wt.path.join("f.txt"),
+            "branch version
+",
+        )
+        .unwrap();
         git_cmd(&wt.path, &["commit", "-am", "branch change"]);
         let err = merge(&repo, &wt.branch, &locks, "merge T2").unwrap_err();
         assert!(err.contains("merge of tf/T2 failed"));
@@ -230,7 +248,10 @@ mod tests {
         std::fs::create_dir_all(&stale).unwrap();
         std::fs::write(stale.join("junk.txt"), "leftover\n").unwrap();
         let wt = create(&repo, &wt_root, "T3", "tf").unwrap();
-        assert!(wt.path.join(".git").exists(), "stale dir cleared, fresh worktree in place");
+        assert!(
+            wt.path.join(".git").exists(),
+            "stale dir cleared, fresh worktree in place"
+        );
         remove(&repo, &wt);
         let _ = std::fs::remove_dir_all(repo.parent().unwrap());
     }

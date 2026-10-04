@@ -96,7 +96,11 @@ mod tests {
             r.record("a", false);
         }
         let pool = [worker("a"), worker("b")];
-        assert_eq!(r.pick(pool.iter()).unwrap().name, "b", "explore term dominates 0/3");
+        assert_eq!(
+            r.pick(pool.iter()).unwrap().name,
+            "b",
+            "explore term dominates 0/3"
+        );
     }
 
     #[test]

@@ -49,7 +49,9 @@ fn parse(argv: &[String]) -> Result<Args, String> {
     a.cmd = it.next().cloned().unwrap_or_default();
     // `api` collapses into its subcommand: "status" | "results"
     if a.cmd == "api" {
-        let sub = it.next().ok_or("af api requires a subcommand: status | results")?;
+        let sub = it
+            .next()
+            .ok_or("af api requires a subcommand: status | results")?;
         a.cmd = format!("api-{sub}");
     }
     while let Some(arg) = it.next() {
@@ -67,11 +69,15 @@ fn parse(argv: &[String]) -> Result<Args, String> {
                         .map_err(|_| "--poll must be an integer")?,
                 )
             }
-            "--tasks" => a.tasks_file = Some(PathBuf::from(it.next().ok_or("--tasks needs a value")?)),
+            "--tasks" => {
+                a.tasks_file = Some(PathBuf::from(it.next().ok_or("--tasks needs a value")?))
+            }
             "--workers" => {
                 a.workers_file = Some(PathBuf::from(it.next().ok_or("--workers needs a value")?))
             }
-            "--repos" => a.repos_file = Some(PathBuf::from(it.next().ok_or("--repos needs a value")?)),
+            "--repos" => {
+                a.repos_file = Some(PathBuf::from(it.next().ok_or("--repos needs a value")?))
+            }
             other if other.starts_with('-') => return Err(format!("unknown flag: {other}")),
             other => {
                 // bare positional (e.g. `af attach <id>`)
@@ -187,7 +193,7 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
-            run::attach(&cfg, &st, &id)
+            run::attach(&st, &id)
         }
         "cost" => {
             println!("{}", run::cost(&cfg, &st, args.task.as_deref()));
@@ -224,11 +230,21 @@ mod tests {
 
     #[test]
     fn parse_api_subcommands() {
-        let a = parse(&["api".to_string(), "status".to_string(), "--json".to_string()]).unwrap();
+        let a = parse(&[
+            "api".to_string(),
+            "status".to_string(),
+            "--json".to_string(),
+        ])
+        .unwrap();
         assert_eq!(a.cmd, "api-status");
         assert!(a.json);
-        let a = parse(&["api".to_string(), "results".to_string(), "--task".to_string(), "X".to_string()])
-            .unwrap();
+        let a = parse(&[
+            "api".to_string(),
+            "results".to_string(),
+            "--task".to_string(),
+            "X".to_string(),
+        ])
+        .unwrap();
         assert_eq!(a.cmd, "api-results");
         assert_eq!(a.task.as_deref(), Some("X"));
     }

@@ -74,26 +74,13 @@ impl Store {
 
     pub fn save(&self, m: &HashMap<String, TaskStatus>) -> io::Result<()> {
         std::fs::create_dir_all(&self.dir)?;
-        let tmp = self.dir.join(format!("run-state.json.tmp{}", std::process::id()));
+        let tmp = self
+            .dir
+            .join(format!("run-state.json.tmp{}", std::process::id()));
         let data = serde_json::to_vec_pretty(m).map_err(io::Error::other)?;
         std::fs::write(&tmp, data)?;
         std::fs::rename(&tmp, self.status_file())?;
         Ok(())
-    }
-
-    /// Load-modify-save in one atomic step; returns the modified status.
-    pub fn update<F>(&self, id: &str, f: F) -> io::Result<TaskStatus>
-    where
-        F: FnOnce(&mut TaskStatus),
-    {
-        let mut m = self.load();
-        let val = {
-            let e = m.entry(id.to_string()).or_default();
-            f(e);
-            e.clone()
-        };
-        self.save(&m)?;
-        Ok(val)
     }
 
     pub fn log_dir(&self) -> PathBuf {
@@ -195,20 +182,6 @@ mod tests {
     }
 
     #[test]
-    fn transition_persisted_before_readable() {
-        let store = Store::new(tmpdir());
-        store
-            .update("T1", |s| {
-                s.state = TaskState::Running;
-                s.attempts = 1;
-            })
-            .unwrap();
-        let back = store.load();
-        assert_eq!(back["T1"].state, TaskState::Running);
-        assert_eq!(back["T1"].attempts, 1);
-    }
-
-    #[test]
     fn legacy_receipt_without_outcome_is_merged() {
         let d = tmpdir();
         let body = r#"{"task":"A","attempt":1,"worker":"w1","model":"m","wall_clock_s":1.0,"tokens":null,"ts":0}"#;
@@ -217,7 +190,10 @@ mod tests {
         std::fs::write(dir.join("A-1-0.json"), body).unwrap();
         let rs = Store::new(d).load_receipts();
         assert_eq!(rs.len(), 1);
-        assert_eq!(rs[0].outcome, "merged", "pre-routing receipts were success-only");
+        assert_eq!(
+            rs[0].outcome, "merged",
+            "pre-routing receipts were success-only"
+        );
     }
 
     #[test]

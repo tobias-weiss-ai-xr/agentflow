@@ -11,7 +11,12 @@ use std::collections::{HashMap, HashSet};
 /// config validation already rejects cycles).
 pub fn compute_depths(cfg: &Config) -> Result<HashMap<String, usize>, String> {
     let mut depths: HashMap<String, usize> = HashMap::new();
-    fn depth_of(id: &str, cfg: &Config, depths: &mut HashMap<String, usize>, visiting: &mut HashSet<String>) -> Result<usize, String> {
+    fn depth_of(
+        id: &str,
+        cfg: &Config,
+        depths: &mut HashMap<String, usize>,
+        visiting: &mut HashSet<String>,
+    ) -> Result<usize, String> {
         if let Some(d) = depths.get(id) {
             return Ok(*d);
         }
@@ -61,10 +66,7 @@ pub fn ready_tasks(
     max_attempts: u32,
 ) -> Vec<Task> {
     let depths = compute_depths(cfg).unwrap_or_default();
-    let running_scope: Vec<&Task> = running
-        .iter()
-        .filter_map(|id| cfg.by_id.get(id))
-        .collect();
+    let running_scope: Vec<&Task> = running.iter().filter_map(|id| cfg.by_id.get(id)).collect();
 
     let mut out: Vec<&Task> = Vec::new();
     for t in &cfg.tasks {
@@ -151,9 +153,10 @@ pub fn find_deadlock_in(
             }
             // Blocked if any dep failed, OR the dep does not exist in this
             // config (it will never resolve → can never become ready).
-            let stuck = t.deps.iter().any(|d| {
-                blocked.contains(d) || !cfg.by_id.contains_key(d)
-            });
+            let stuck = t
+                .deps
+                .iter()
+                .any(|d| blocked.contains(d) || !cfg.by_id.contains_key(d));
             if stuck {
                 blocked.insert(t.id.clone());
                 changed = true;
@@ -288,7 +291,10 @@ mod tests {
         let cfg = tasks0(); // C is ready and unblocked
         let mut status = status_of(&[("A", TaskState::Failed)]);
         status.get_mut("A").unwrap().attempts = 3;
-        assert!(find_deadlock(&cfg, &status, &[]).is_none(), "C can still run");
+        assert!(
+            find_deadlock(&cfg, &status, &[]).is_none(),
+            "C can still run"
+        );
     }
 
     #[test]
@@ -352,7 +358,9 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         let mut seed: u64 = 0x5eed;
         let mut rng = || {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (seed >> 33) as usize
         };
         for round in 0..50 {
@@ -368,8 +376,7 @@ mod tests {
                 deps.dedup();
                 tasks.push(format!(
                     r#"{{"id":"T{i}","title":"t","deps":[{}],"accept":"true"}}"#,
-                    deps
-                        .iter()
+                    deps.iter()
                         .map(|x| format!("\"{x}\""))
                         .collect::<Vec<_>>()
                         .join(",")
