@@ -170,7 +170,11 @@ fn execute_attempt(
         let context = failure_context(&ctx.store.load_receipts(), id, attempt);
         render_prompt(&ctx.st, &task, worker, context.as_deref())
     };
-    let prompt_path = ctx.store.prompt_dir().join(format!("{id}.md"));
+    // Absolute: the prompt path crosses the process boundary into the
+    // agent's cwd (a worktree) — a relative state_dir would point at a
+    // path that doesn't exist there (gitignored state, e.g.).
+    let prompt_path = std::path::absolute(ctx.store.prompt_dir().join(format!("{id}.md")))
+        .unwrap_or_else(|_| ctx.store.prompt_dir().join(format!("{id}.md")));
     let _ = fs::create_dir_all(ctx.store.prompt_dir());
     if let Err(e) = fs::write(&prompt_path, &prompt) {
         cleanup(&repo, &wt);
