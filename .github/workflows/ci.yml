@@ -15,3 +15,16 @@ jobs:
       - run: cargo test --all-targets
         # E2E uses the bundled example_agent + a scratch git repo; no network,
         # no LLM keys required.
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo llvm-cov --workspace --summary
+        # Line/region coverage table in the CI log (Windows toolchains can't
+        # produce it locally — no profiler_builtins).
