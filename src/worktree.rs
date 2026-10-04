@@ -145,8 +145,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         git_cmd(&dir, &["init", "-b", "main"]);
-        std::fs::write(dir.join("f.txt"), "base
-").unwrap();
+        // af's own merge commits need an identity; set it repo-locally so
+        // parallel tests don't race on the process env.
+        git_cmd(&dir, &["config", "user.name", "af test"]);
+        git_cmd(&dir, &["config", "user.email", "af@test"]);
+        std::fs::write(dir.join("f.txt"), "base\n").unwrap();
         git_cmd(&dir, &["add", "."]);
         git_cmd(&dir, &["commit", "-m", "init"]);
         dir
@@ -182,13 +185,11 @@ mod tests {
         let repo = scratch_repo();
         let locks = MergeLocks::new();
         let wt = create(&repo, &repo.parent().unwrap().join("wt"), "T1", "tf").unwrap();
-        std::fs::write(wt.path.join("f.txt"), "changed
-").unwrap();
+        std::fs::write(wt.path.join("f.txt"), "changed\n").unwrap();
         git_cmd(&wt.path, &["add", "."]);
         git_cmd(&wt.path, &["commit", "-m", "task work"]);
         merge(&repo, &wt.branch, &locks, "merge T1").unwrap();
-        assert_eq!(std::fs::read_to_string(repo.join("f.txt")).unwrap(), "changed
-");
+        assert_eq!(std::fs::read_to_string(repo.join("f.txt")).unwrap(), "changed\n");
         assert_eq!(current_branch(&repo).unwrap(), "main");
         remove(&repo, &wt);
         assert!(!wt.path.exists());
@@ -226,8 +227,7 @@ mod tests {
         let wt_root = repo.parent().unwrap().join("wt");
         let stale = wt_root.join("T3");
         std::fs::create_dir_all(&stale).unwrap();
-        std::fs::write(stale.join("junk.txt"), "leftover
-").unwrap();
+        std::fs::write(stale.join("junk.txt"), "leftover\n").unwrap();
         let wt = create(&repo, &wt_root, "T3", "tf").unwrap();
         assert!(wt.path.join(".git").exists(), "stale dir cleared, fresh worktree in place");
         remove(&repo, &wt);
