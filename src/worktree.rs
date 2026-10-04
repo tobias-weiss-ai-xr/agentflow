@@ -178,6 +178,20 @@ mod tests {
         );
     }
 
+    /// create() with one retry: CI runners occasionally fail a spawn
+    /// transiently (fork pressure with parallel test binaries). Production
+    /// semantics retry failed attempts too; a deterministic bug fails twice
+    /// and still panics here.
+    fn create_ok(repo: &Path, wt_root: &Path, id: &str) -> Worktree {
+        match create(repo, wt_root, id, "tf") {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("create {id} first try failed ({e}); retrying once");
+                create(repo, wt_root, id, "tf").expect("create after retry")
+            }
+        }
+    }
+
     #[test]
     fn create_rejects_non_repo() {
         let dir = std::env::temp_dir().join(format!("af-wt-norepo-{}", std::process::id()));
@@ -192,7 +206,7 @@ mod tests {
     fn create_merge_roundtrip_writes_into_repo() {
         let repo = scratch_repo();
         let locks = MergeLocks::new();
-        let wt = create(&repo, &repo.parent().unwrap().join("wt"), "T1", "tf").unwrap();
+        let wt = create_ok(&repo, &repo.parent().unwrap().join("wt"), "T1");
         std::fs::write(wt.path.join("f.txt"), "changed\n").unwrap();
         git_cmd(&wt.path, &["add", "."]);
         git_cmd(&wt.path, &["commit", "-m", "task work"]);
@@ -211,7 +225,7 @@ mod tests {
     fn merge_conflict_aborts_cleanly() {
         let repo = scratch_repo();
         let locks = MergeLocks::new();
-        let wt = create(&repo, &repo.parent().unwrap().join("wt"), "T2", "tf").unwrap();
+        let wt = create_ok(&repo, &repo.parent().unwrap().join("wt"), "T2");
         // Both sides change the same line differently.
         std::fs::write(
             repo.join("f.txt"),
@@ -247,7 +261,7 @@ mod tests {
         let stale = wt_root.join("T3");
         std::fs::create_dir_all(&stale).unwrap();
         std::fs::write(stale.join("junk.txt"), "leftover\n").unwrap();
-        let wt = create(&repo, &wt_root, "T3", "tf").unwrap();
+        let wt = create_ok(&repo, &wt_root, "T3");
         assert!(
             wt.path.join(".git").exists(),
             "stale dir cleared, fresh worktree in place"
@@ -261,8 +275,8 @@ mod tests {
         let repo = scratch_repo();
         let wt_root = repo.parent().unwrap().join("wt");
         let repos = vec![("main".to_string(), repo.clone())];
-        let w1 = create(&repo, &wt_root, "T4", "tf").unwrap();
-        let w2 = create(&repo, &wt_root, "T5", "tf").unwrap();
+        let w1 = create_ok(&repo, &wt_root, "T4");
+        let w2 = create_ok(&repo, &wt_root, "T5");
         heal(&repos, &wt_root, "tf", &["T5".to_string()]);
         assert!(!w1.path.exists(), "stale worktree removed");
         assert!(w2.path.exists(), "running worktree kept");

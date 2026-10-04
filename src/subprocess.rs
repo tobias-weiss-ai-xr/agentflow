@@ -87,12 +87,15 @@ pub fn run(
 
     let mut child = match c.spawn() {
         Ok(ch) => ch,
-        Err(_) => {
+        // Missing covers both a truly absent binary and transient spawn
+        // failures (e.g. fork under memory pressure on CI runners); the OS
+        // error text lands in stderr so diagnostics can tell them apart.
+        Err(e) => {
             return CmdOut {
                 kind: CmdKind::Missing,
                 code: None,
                 stdout: String::new(),
-                stderr: String::new(),
+                stderr: e.to_string(),
             }
         }
     };
