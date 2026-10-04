@@ -65,6 +65,10 @@ pub fn create(repo: &Path, wt_root: &Path, id: &str, prefix: &str) -> Result<Wor
         let _ = std::fs::remove_dir_all(&path);
     }
     // Drop a stale branch of the same name if it exists.
+    // Prune stale worktree registrations first: a raw-deleted worktree
+    // directory still holds its branch "checked out" in git's metadata,
+    // which would make the branch -D below (and thus the add) fail.
+    let _ = git(repo, &["worktree", "prune"]);
     let _ = git(repo, &["branch", "-D", &branch]);
     let out = git(
         repo,
