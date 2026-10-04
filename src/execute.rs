@@ -25,6 +25,53 @@ pub struct ExecCtx {
     pub merge_locks: worktree::MergeLocks,
 }
 
+/// System env keys the agent child needs to function (PATH, temp dirs, OS
+/// loader bits). Everything else in the orchestrator env is withheld.
+const AGENT_ENV_BASE: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "TEMP",
+    "TMP",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMFILES",
+    // Commit identity for the agent's own git commits (standard git env).
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+];
+
+/// Sandbox policy for the agent child (ADR-10): env allowlist that exposes
+/// ONLY this worker's `api_key_env` (+ optional passthrough), plus git
+/// hygiene pairs (no credential prompts/helpers). `lookup` abstracts env
+/// access for testing.
+pub fn agent_env(
+    worker: &Worker,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> (Vec<(String, String)>, Vec<String>) {
+    let mut allow: Vec<String> = AGENT_ENV_BASE.iter().map(|s| s.to_string()).collect();
+    if let Some(k) = &worker.api_key_env {
+        allow.push(k.clone());
+    }
+    if let Some(p) = lookup("TF_AGENT_ENV_PASSTHROUGH") {
+        for k in p.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            allow.push(k.to_string());
+        }
+    }
+    let pairs = vec![
+        ("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()),
+        ("GIT_CONFIG_COUNT".to_string(), "1".to_string()),
+        ("GIT_CONFIG_KEY_0".to_string(), "credential.helper".to_string()),
+        ("GIT_CONFIG_VALUE_0".to_string(), String::new()),
+    ];
+    (pairs, allow)
+}
+
 pub fn execute_task(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_path: &Path) -> Outcome {
     let start = Instant::now();
     let task = match ctx.cfg.by_id.get(id) {
@@ -66,20 +113,16 @@ pub fn execute_task(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_
     }
 
     // 2) Agent CLI (external, OpenAI-compatible): --provider P --model M -p @file
-    let agent_args = vec![
-        "--provider".to_string(),
-        worker.provider.clone(),
-        "--model".to_string(),
-        worker.model.clone(),
-        "-p".to_string(),
-        format!("@{}", prompt_path.display()),
-    ];
+    let argv = spawn_argv(&ctx.st, worker, &prompt_path);
+    let (agent_cmd, agent_args) = argv.split_first().unwrap();
+    let (env_pairs, env_allow) = agent_env(worker, &|k| std::env::var(k).ok());
     append("-- agent --");
     let agent_out = crate::subprocess::run(
-        &worker.cli,
-        &agent_args,
+        agent_cmd,
+        agent_args,
         Some(&wt_path),
-        &[],
+        &env_pairs,
+        crate::subprocess::EnvMode::Allowlist(env_allow),
         Duration::from_secs(ctx.st.agent_timeout_s),
     );
     let mut out_lines = agent_out.combined();
@@ -151,6 +194,20 @@ fn cleanup(repo: &std::path::PathBuf, wt: &worktree::Worktree, st: &Settings) {
     let _ = st.worktree_root;
 }
 
+/// Full agent child argv: optional sandbox wrapper prefix, then the CLI and
+/// its arguments (sandbox layer 3; pure for testing).
+fn spawn_argv(st: &Settings, worker: &Worker, prompt_path: &Path) -> Vec<String> {
+    let mut argv = st.sandbox_cmd.clone();
+    argv.push(worker.cli.clone());
+    argv.push("--provider".to_string());
+    argv.push(worker.provider.clone());
+    argv.push("--model".to_string());
+    argv.push(worker.model.clone());
+    argv.push("-p".to_string());
+    argv.push(format!("@{}", prompt_path.display()));
+    argv
+}
+
 const DEFAULT_PROMPT: &str = r#"You are an autonomous coding agent working in a git worktree.
 
 TASK ID: {{TASK_ID}}
@@ -166,8 +223,7 @@ Work on TASK_ID only. Do not touch files outside the allowed scope.
 When done, make sure the acceptance criteria hold and your changes are
 committed on the current branch."#;
 
-fn render_prompt(st: &Settings, task: &crate::config::Task, worker: &Worker) -> String {
-    let template = fs::read_to_string(&st.prompt_file).unwrap_or_else(|_| DEFAULT_PROMPT.to_string());
+fn render_prompt(st: &Settings, task: &crate::config::Task, worker: &Worker) -> String {    let template = fs::read_to_string(&st.prompt_file).unwrap_or_else(|_| DEFAULT_PROMPT.to_string());
     let scope = if task.scope.is_empty() {
         "*".to_string()
     } else {
@@ -190,4 +246,59 @@ fn render_prompt(st: &Settings, task: &crate::config::Task, worker: &Worker) -> 
         out = out.replace(k, v);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Settings;
+    use std::path::PathBuf;
+
+    fn worker(api_key_env: Option<&str>) -> Worker {
+        Worker {
+            name: "w".into(),
+            provider: "p".into(),
+            model: "m".into(),
+            api_key_env: api_key_env.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn agent_env_exposes_only_worker_key_plus_git_hygiene() {
+        let w = worker(Some("AF_TEST_KEY"));
+        let lookup = |k: &str| match k {
+            "TF_AGENT_ENV_PASSTHROUGH" => Some("A,B".into()),
+            _ => None,
+        };
+        let (pairs, allow) = agent_env(&w, &lookup);
+        assert!(pairs.contains(&("GIT_TERMINAL_PROMPT".to_string(), "0".to_string())));
+        assert!(pairs.contains(&("GIT_CONFIG_KEY_0".to_string(), "credential.helper".to_string())));
+        assert!(pairs.contains(&("GIT_CONFIG_VALUE_0".to_string(), String::new())));
+        assert!(allow.contains(&"AF_TEST_KEY".to_string()), "worker api key allowlisted");
+        assert!(allow.contains(&"PATH".to_string()));
+        assert!(allow.contains(&"A".to_string()) && allow.contains(&"B".to_string()));
+        assert!(!allow.contains(&"AF_OTHER_SECRET".to_string()));
+    }
+
+    #[test]
+    fn agent_env_without_api_key_has_no_key_slot() {
+        let (pairs, allow) = agent_env(&worker(None), &|_| None);
+        assert!(!allow.iter().any(|k| k.starts_with("AF_")));
+        assert_eq!(pairs.len(), 4);
+    }
+
+    #[test]
+    fn spawn_argv_prepends_sandbox_wrapper() {
+        let mut st = Settings::from_env();
+        st.sandbox_cmd = vec!["echo".into(), "wrapped".into()];
+        let argv = spawn_argv(&st, &worker(None), &PathBuf::from("p.md"));
+        assert_eq!(&argv[..2], &["echo".to_string(), "wrapped".to_string()]);
+        assert_eq!(argv[2], "pi");
+        assert!(argv.contains(&"-p".to_string()) && argv.contains(&"@p.md".to_string()));
+
+        st.sandbox_cmd.clear();
+        let argv = spawn_argv(&st, &worker(None), &PathBuf::from("p.md"));
+        assert_eq!(argv[0], "pi", "unset wrapper is a no-op");
+    }
 }

@@ -14,6 +14,7 @@ commit messages. Each ADR: *status, context, decision, consequence*.
 | ADR-7 | **arc42 documentation, one file per chapter** in `docs/arc42/`, maintained in the same change as the code. | accepted |
 | ADR-8 | **Repo split: taskfleet private/internal (bash, campaign runner), agentflow public (Rust product).** Public repo never contains secrets or internal configs. | accepted |
 | ADR-9 | **Wall-clock time, not token count, is the receipt/elapsed truth** (learned from the shell forks). | accepted |
+| ADR-10 | **Agent sandbox = env allowlist + git hygiene + opt-in wrapper seam; no embedded OS sandbox.** The agent child is untrusted: it gets an empty environment plus system basics, the dispatched worker's `api_key_env`, and `TF_AGENT_ENV_PASSTHROUGH`; `GIT_TERMINAL_PROMPT=0` and an empty `credential.helper` prevent auth hangs/theft. Real filesystem/network containment is delegated to a user-provided wrapper (`TF_SANDBOX_CMD`, e.g. firejail/bwrap) because OS sandboxes are platform-specific and af stays dependency-free. Limits documented in ch. 8.9. | accepted |
 
 ## Review items (open by default assumptions)
 

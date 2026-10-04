@@ -37,6 +37,12 @@ struct Fixture {
 fn fixture(tasks_json: &str, workers_json: &str) -> Fixture {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // The sandbox strips the agent child's env; the example_agent knobs must
+    // ride TF_AGENT_ENV_PASSTHROUGH (tests that override it set their own).
+    std::env::set_var(
+        "TF_AGENT_ENV_PASSTHROUGH",
+        "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
+    );
     let dir = std::env::temp_dir().join(format!("af-e2e-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -74,6 +80,7 @@ fn fixture(tasks_json: &str, workers_json: &str) -> Fixture {
         workers_file: config_dir.join("workers.json"),
         prompt_file: dir.join("no-template.md"),
         agent_timeout_s: 60,
+        sandbox_cmd: vec![],
     };
     Fixture { dir, repo, cfg, st }
 }
@@ -102,7 +109,7 @@ fn worker_json(max_attempts: u32) -> String {
 /// Gate exit-0 after agent writes DONE.txt → merged to main, all done.
 #[test]
 fn happy_path_dependency_and_merge() {
-    let _g = ENV_GUARD.lock().unwrap();
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     std::env::remove_var("FAKE_AGENT_EXIT");
     std::env::remove_var("FAKE_AGENT_TOUCH");
     let f = fixture(
@@ -133,7 +140,7 @@ fn happy_path_dependency_and_merge() {
 /// Agent exits non-zero → task fails after max_attempts, nothing merged.
 #[test]
 fn agent_failure_fails_task() {
-    let _g = ENV_GUARD.lock().unwrap();
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     std::env::set_var("FAKE_AGENT_EXIT", "7");
     std::env::remove_var("FAKE_AGENT_TOUCH");
     let f = fixture(
@@ -153,7 +160,7 @@ fn agent_failure_fails_task() {
 /// Agent succeeds but gate fails → task fails, nothing merged.
 #[test]
 fn gate_failure_fails_task() {
-    let _g = ENV_GUARD.lock().unwrap();
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     std::env::remove_var("FAKE_AGENT_EXIT");
     std::env::remove_var("FAKE_AGENT_TOUCH");
     let f = fixture(
@@ -174,7 +181,7 @@ fn gate_failure_fails_task() {
 /// --dry-run changes nothing.
 #[test]
 fn dry_run_changes_nothing() {
-    let _g = ENV_GUARD.lock().unwrap();
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     let f = fixture(
         &format!(
             r#"{{ "tasks": [ {{"id":"A","title":"x","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
@@ -191,7 +198,7 @@ fn dry_run_changes_nothing() {
 /// Status board is machine-readable as JSON after a run.
 #[test]
 fn status_json_after_run() {
-    let _g = ENV_GUARD.lock().unwrap();
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     std::env::remove_var("FAKE_AGENT_EXIT");
     std::env::remove_var("FAKE_AGENT_TOUCH");
     let f = fixture(
@@ -210,7 +217,7 @@ fn status_json_after_run() {
 /// Retry: agent always fails, max_attempts=2 → exactly 2 attempts, then Failed.
 #[test]
 fn retry_runs_up_to_max_attempts() {
-    let _g = ENV_GUARD.lock().unwrap();
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     std::env::set_var("FAKE_AGENT_EXIT", "7");
     std::env::remove_var("FAKE_AGENT_TOUCH");
     let f = fixture(
@@ -229,7 +236,7 @@ fn retry_runs_up_to_max_attempts() {
 /// Self-heal: a stale `running` entry from a dead process is reset and run.
 #[test]
 fn self_heals_stale_running_state() {
-    let _g = ENV_GUARD.lock().unwrap();
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     std::env::remove_var("FAKE_AGENT_EXIT");
     std::env::remove_var("FAKE_AGENT_TOUCH");
     let f = fixture(
@@ -255,7 +262,7 @@ fn self_heals_stale_running_state() {
 /// --task filter: only the named task runs; out-of-scope work never blocks.
 #[test]
 fn task_filter_completes_without_running_others() {
-    let _g = ENV_GUARD.lock().unwrap();
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     std::env::remove_var("FAKE_AGENT_EXIT");
     std::env::remove_var("FAKE_AGENT_TOUCH");
     let f = fixture(
@@ -282,7 +289,7 @@ fn task_filter_completes_without_running_others() {
 /// --task naming a task that waits on out-of-scope deps → clean deadlock, no hang.
 #[test]
 fn task_filter_on_dependent_task_deadlocks_cleanly() {
-    let _g = ENV_GUARD.lock().unwrap();
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     std::env::remove_var("FAKE_AGENT_EXIT");
     std::env::remove_var("FAKE_AGENT_TOUCH");
     let f = fixture(
@@ -306,7 +313,7 @@ fn task_filter_on_dependent_task_deadlocks_cleanly() {
 /// --worker naming no enabled worker fails fast instead of hanging.
 #[test]
 fn unknown_worker_filter_fails_fast() {
-    let _g = ENV_GUARD.lock().unwrap();
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     std::env::remove_var("FAKE_AGENT_EXIT");
     std::env::remove_var("FAKE_AGENT_TOUCH");
     let f = fixture(
@@ -323,4 +330,54 @@ fn unknown_worker_filter_fails_fast() {
     );
     assert_eq!(code, 2);
     assert!(!f.st.worktree_root.join("A").exists(), "nothing ran");
+}
+
+/// Sandbox layer 1: the agent child sees ONLY the dispatched worker's
+/// api key (+ passthrough) — not other secrets from the orchestrator env.
+#[test]
+fn agent_env_is_allowlisted() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::set_var("AF_TEST_KEY", "keyvalue-123");
+    std::env::set_var("AF_TEST_LEAK", "leak-456");
+    std::env::set_var("TF_AGENT_ENV_PASSTHROUGH", "AF_TEST_EXTRA");
+    std::env::set_var("AF_TEST_EXTRA", "extra-789");
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"x","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &format!(
+            r#"{{ "workers": [{{"name":"w1","provider":"p","model":"m","api_key_env":"AF_TEST_KEY","cli":"{agent}"}}]}}"#,
+            agent = AGENT.replace('\\', "\\\\")
+        ),
+    );
+    let probe = f.dir.join("env.txt");
+    std::env::set_var("FAKE_AGENT_ENV", &probe);
+    std::env::set_var(
+        "FAKE_AGENT_ENV_NAMES",
+        "AF_TEST_KEY,AF_TEST_LEAK,AF_TEST_EXTRA",
+    );
+    // The probe vars must ride the passthrough — they are not in the default
+    // allowlist (which is exactly the behavior under test).
+    std::env::set_var(
+        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_TEST_EXTRA,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
+    );
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
+    let env_txt = std::fs::read_to_string(&probe).unwrap();
+    assert!(env_txt.contains("AF_TEST_KEY=keyvalue-123"), "worker key visible: {env_txt}");
+    assert!(env_txt.contains("AF_TEST_EXTRA=extra-789"), "passthrough visible");
+    assert!(env_txt.contains("AF_TEST_LEAK=<unset>"), "foreign secret stripped: {env_txt}");
+    for k in [
+        "AF_TEST_KEY",
+        "AF_TEST_LEAK",
+        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_TEST_EXTRA",
+        "FAKE_AGENT_ENV",
+        "FAKE_AGENT_ENV_NAMES",
+    ] {
+        std::env::remove_var(k);
+    }
 }

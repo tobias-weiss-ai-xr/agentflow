@@ -24,7 +24,14 @@ pub struct Worktree {
 
 fn git(repo: &Path, args: &[&str]) -> CmdOut {
     let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    subprocess::run("git", &args, Some(repo), &[], Duration::from_secs(300))
+    subprocess::run(
+        "git",
+        &args,
+        Some(repo),
+        &[],
+        subprocess::EnvMode::Inherit, // af's own git ops are trusted
+        Duration::from_secs(300),
+    )
 }
 
 pub fn is_repo(repo: &Path) -> bool {

@@ -93,6 +93,9 @@ pub struct Worker {
     pub provider: String,
     pub model: String,
     pub api_base: Option<String>,
+    /// Env var holding this worker's API key; the agent child gets ONLY this
+    /// key from the orchestrator environment (sandbox layer 1).
+    pub api_key_env: Option<String>,
     pub enabled: bool,
     /// Agent CLI binary name; default `pi`. Passed `--provider/--model/-p @file`.
     pub cli: String,
@@ -105,6 +108,7 @@ impl Default for Worker {
             provider: String::new(),
             model: String::new(),
             api_base: None,
+            api_key_env: None,
             enabled: true,
             cli: "pi".to_string(),
         }
@@ -310,6 +314,9 @@ pub struct Settings {
     pub workers_file: PathBuf,
     pub prompt_file: PathBuf,
     pub agent_timeout_s: u64,
+    /// Whitespace-split command prefix wrapped around the agent argv
+    /// (`TF_SANDBOX_CMD`, e.g. "firejail --net=none"). Empty = no wrapper.
+    pub sandbox_cmd: Vec<String>,
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -342,6 +349,10 @@ impl Settings {
             workers_file: PathBuf::from(env_or("TF_WORKERS_JSON", "config/workers.json")),
             prompt_file: PathBuf::from("prompts/worker.md"),
             agent_timeout_s: env_or_int("TF_AGENT_TIMEOUT_S", 3600),
+            sandbox_cmd: env_or("TF_SANDBOX_CMD", "")
+                .split_whitespace()
+                .map(str::to_string)
+                .collect(),
         };
         let _ = repo_dir;
         cfg

@@ -49,7 +49,35 @@
 - Per-task logs → `state/logs/<task>.log`; `af attach <task>` tails live.
 - Status board is human (`--status`) and machine (`api status --json`) readable.
 
-## 8.8 Error contracts
+## 8.8 Sandboxing the agent child (ADR-10)
+
+The agent CLI executes LLM-directed tool calls — treat it as **untrusted**.
+Three portable layers, in enforcement order:
+
+1. **Env allowlist (default-on).** The child starts empty and receives only:
+   system basics (PATH, HOME/USERPROFILE, temp dirs, Windows loader keys), git
+   commit identity (`GIT_AUTHOR_*`/`GIT_COMMITTER_*`), the **dispatched**
+   worker's `api_key_env`, and `TF_AGENT_ENV_PASSTHROUGH` (comma-separated
+   extras). Other workers' keys and orchestrator secrets are withheld.
+   Gates and af's own git calls inherit the full env (trusted code).
+2. **Git hygiene (default-on).** Children get `GIT_TERMINAL_PROMPT=0` and an
+   empty `credential.helper` (via `GIT_CONFIG_*` env): no credential popups,
+   no hangs on auth prompts.
+3. **Wrapper seam (opt-in).** `TF_SANDBOX_CMD` is whitespace-split and
+   prepended to the agent argv.
+
+**Limits (be honest):** env hygiene is not containment. The worktree inherits
+the repo's remotes; a malicious agent with network + stored credentials could
+still attempt `git push` or exfiltrate worktree contents. Enforce with the
+wrapper:
+
+| OS | Recipe |
+|---|---|
+| Linux | `TF_SANDBOX_CMD="bwrap --unshare-net --ro-bind / / --bind <wt> <wt> --dev /dev --proc /proc"` or `firejail --net=none --private=...` |
+| macOS | `sandbox-exec -f <profile>` (Seatbelt profile denying network/write-outside) |
+| Windows | run af inside a restricted Job/AppContainer or a container; no in-process equivalent |
+
+## 8.9 Error contracts
 
 - All module public fns return typed errors (`Result`) with a stable message;
   no silent partial writes; a crash mid-write never corrupts state (8.2/6.2).

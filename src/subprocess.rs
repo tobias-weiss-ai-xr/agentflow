@@ -40,11 +40,23 @@ impl CmdOut {
     }
 }
 
+/// Environment policy for a spawned child (sandbox layer 1).
+#[derive(Debug, Clone)]
+pub enum EnvMode {
+    /// Inherit the parent environment. Trusted callers only: af's own git
+    /// operations and user-authored acceptance gates.
+    Inherit,
+    /// Start EMPTY; take the named keys from the parent env. Used for the
+    /// untrusted agent CLI. `env` pairs are always applied on top.
+    Allowlist(Vec<String>),
+}
+
 pub fn run(
     cmd: &str,
     args: &[String],
     cwd: Option<&Path>,
     env: &[(String, String)],
+    env_mode: EnvMode,
     timeout: Duration,
 ) -> CmdOut {
     let mut c = Command::new(cmd);
@@ -52,8 +64,23 @@ pub fn run(
     if let Some(d) = cwd {
         c.current_dir(d);
     }
-    for (k, v) in env {
-        c.env(k, v);
+    match env_mode {
+        EnvMode::Inherit => {
+            for (k, v) in env {
+                c.env(k, v);
+            }
+        }
+        EnvMode::Allowlist(keys) => {
+            c.env_clear();
+            for k in &keys {
+                if let Ok(v) = std::env::var(k) {
+                    c.env(k, v);
+                }
+            }
+            for (k, v) in env {
+                c.env(k, v);
+            }
+        }
     }
     c.stdout(Stdio::piped());
     c.stderr(Stdio::piped());
@@ -138,13 +165,40 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn exit_codes_are_classified() {
-        let ok = run("sh", &["-c".into(), "exit 0".into()], None, &[], Duration::from_secs(5));
+        let ok = run("sh", &["-c".into(), "exit 0".into()], None, &[], EnvMode::Inherit, Duration::from_secs(5));
         assert!(ok.passed());
-        let bad = run("sh", &["-c".into(), "exit 7".into()], None, &[], Duration::from_secs(5));
+        let bad = run("sh", &["-c".into(), "exit 7".into()], None, &[], EnvMode::Inherit, Duration::from_secs(5));
         assert_eq!(bad.kind, CmdKind::NonZero);
         assert_eq!(bad.code, Some(7));
-        let missing = run("definitely-not-a-real-bin-xyz", &[], None, &[], Duration::from_secs(1));
+        let missing = run("definitely-not-a-real-bin-xyz", &[], None, &[], EnvMode::Inherit, Duration::from_secs(1));
         assert_eq!(missing.kind, CmdKind::Missing);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn allowlist_env_strips_foreign_keys() {
+        // SAFETY: single-threaded test section over a unique var name.
+        std::env::set_var("AF_TEST_ALLOWLIST_VAR", "visible");
+        let out = run(
+            "sh",
+            &["-c".into(), "echo ${AF_TEST_ALLOWLIST_VAR:-unset}".into()],
+            None,
+            &[],
+            EnvMode::Allowlist(vec!["PATH".into()]),
+            Duration::from_secs(5),
+        );
+        assert_eq!(out.stdout.trim(), "unset", "foreign key must be stripped");
+
+        let out = run(
+            "sh",
+            &["-c".into(), "echo ${AF_TEST_ALLOWLIST_VAR:-unset}".into()],
+            None,
+            &[],
+            EnvMode::Allowlist(vec!["PATH".into(), "AF_TEST_ALLOWLIST_VAR".into()]),
+            Duration::from_secs(5),
+        );
+        assert_eq!(out.stdout.trim(), "visible", "allowlisted key passes through");
+        let _ = std::env::remove_var("AF_TEST_ALLOWLIST_VAR");
     }
 
     #[cfg(unix)]
@@ -156,6 +210,7 @@ mod tests {
             &["-c".into(), "sleep 30".into()],
             None,
             &[],
+            EnvMode::Inherit,
             Duration::from_millis(300),
         );
         assert_eq!(out.kind, CmdKind::Timeout);
@@ -170,6 +225,7 @@ mod tests {
             &["-c".into(), "echo hi; echo err >&2".into()],
             None,
             &[],
+            EnvMode::Inherit,
             Duration::from_secs(5),
         );
         assert!(out.stdout.contains("hi"));

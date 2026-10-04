@@ -27,7 +27,7 @@ providers directly.
 - **Retry** — `max_attempts` per task, fresh branch + worktree on every attempt
 - **Self-healing** — atomic JSON state; crash-safe resume; orphan worktree cleanup at startup
 - **Observable** — status board (`--json`), live `attach`, per-task logs, wall-clock cost receipts
-- **Sound by construction** — spec → contract → test pyramid (30 tests, incl. E2E against a stub agent + scratch git repo; no network in CI)
+- **Sound by construction** — spec → contract → test pyramid (41 tests, incl. E2E against a stub agent + scratch git repo; no network in CI)
 
 ## Quick start
 
@@ -72,8 +72,24 @@ af cost   [--task ID]
 ## Worker schema (`config/workers.json`)
 
 `defaults` (`accept_timeout_s`, `max_attempts`, `retry_delay_s`, `agent_timeout_s`)
-plus a `workers` list: `name`, `provider`, `model`, `api_base`, `enabled`,
-`cli` (agent CLI binary; default `pi`). Each worker runs at most one task at a time.
+plus a `workers` list: `name`, `provider`, `model`, `api_base`, `api_key_env`,
+`enabled`, `cli` (agent CLI binary; default `pi`). Each worker runs at most one
+task at a time.
+
+## Sandboxing
+
+The agent CLI executes LLM-directed tool calls, so `af` treats it as untrusted
+(ADR-10):
+
+- **Env allowlist** — the agent child sees only system basics, the dispatched
+  worker's `api_key_env`, and `TF_AGENT_ENV_PASSTHROUGH` (comma-separated
+  extras). Other workers' API keys and your shell secrets are withheld.
+- **Git hygiene** — `GIT_TERMINAL_PROMPT=0`, credential helpers disabled:
+  no credential popups, no hangs.
+- **Wrapper seam** — `TF_SANDBOX_CMD="firejail --net=none"` (or bwrap /
+  sandbox-exec / a container) is prepended to the agent argv for real
+  filesystem/network containment. Env hygiene alone is not a sandbox —
+  see `docs/arc42/08-concepts.md` §8.8 for threat model and recipes.
 
 ## Agent CLI compatibility
 
@@ -89,9 +105,9 @@ is a stub agent (writes a file + commits) used by the test suite and CI.
 ## Testing
 
 ```sh
-cargo test        # 30 tests: unit (scheduler DAG, contention, deadlock, state,
-                  # receipts, config validation, subprocess contracts) + E2E
-                  # (fake agent + scratch git repo — no network)
+cargo test        # 41 tests: unit (scheduler DAG, contention, deadlock, state,
+                  # receipts, config validation, sandbox policy, subprocess
+                  # contracts) + E2E (fake agent + scratch git repo — no network)
 ```
 
 See `docs/arc42/` for the architecture documentation (12 chapters), and

@@ -25,7 +25,15 @@ pub fn run_accept(
 ) -> CmdOut {
     let (shell, flag) = shell();
     let args = vec![flag, accept.to_string()];
-    subprocess::run(shell, &args, Some(cwd), env, timeout)
+    // Gates are user-authored (trusted): full inherited environment.
+    subprocess::run(
+        shell,
+        &args,
+        Some(cwd),
+        env,
+        crate::subprocess::EnvMode::Inherit,
+        timeout,
+    )
 }
 
 #[cfg(test)]

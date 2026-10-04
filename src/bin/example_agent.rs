@@ -28,6 +28,20 @@ fn main() -> ExitCode {
         eprintln!("example_agent: failing with exit {exit}");
         return ExitCode::from(exit.clamp(0, 255) as u8);
     }
+    // Env probe (sandbox tests): dump `FAKE_AGENT_ENV_NAMES` to `FAKE_AGENT_ENV`
+    // as `NAME=value` / `NAME=<unset>` lines so tests can assert what the agent
+    // child actually received.
+    if let Ok(probe) = std::env::var("FAKE_AGENT_ENV") {
+        let names = std::env::var("FAKE_AGENT_ENV_NAMES").unwrap_or_default();
+        let mut s = String::new();
+        for n in names.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            match std::env::var(n) {
+                Ok(v) => s.push_str(&format!("{n}={v}\n")),
+                Err(_) => s.push_str(&format!("{n}=<unset>\n")),
+            }
+        }
+        let _ = std::fs::write(&probe, s);
+    }
     let _ = std::fs::write(&touch, format!("{out}\n"));
     println!("{out}");
 
