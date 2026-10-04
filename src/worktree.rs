@@ -69,7 +69,8 @@ pub fn create(repo: &Path, wt_root: &Path, id: &str, prefix: &str) -> Result<Wor
     );
     if !out.passed() {
         return Err(format!(
-            "worktree add failed: {}",
+            "worktree add failed ({:?}): {}",
+            out.kind,
             out.combined().trim()
         ));
     }
