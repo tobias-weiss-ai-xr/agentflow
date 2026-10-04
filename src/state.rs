@@ -45,6 +45,10 @@ pub struct Receipt {
     pub ts: u64,
     #[serde(default = "default_outcome")]
     pub outcome: String,
+    /// First line of the failure reason (≤200 chars); None on merged
+    /// attempts and for legacy receipts.
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -109,7 +113,18 @@ impl Store {
         let data = serde_json::to_vec_pretty(r).map_err(io::Error::other)?;
         let path = self
             .receipt_dir()
-            .join(format!("{}-{}-{}.json", r.task, r.attempt, r.ts));
+            // Nanos in the name: fast retries can land in the same second
+            // (task-attempt-ts would otherwise overwrite, losing receipts).
+            .join(format!(
+                "{}-{}-{}-{}x.json",
+                r.task,
+                r.attempt,
+                r.ts,
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.subsec_nanos())
+                    .unwrap_or(0)
+            ));
         std::fs::write(path, data)
     }
 
@@ -218,6 +233,7 @@ mod tests {
                 tokens: Some(100),
                 ts: 1,
                 outcome: "merged".into(),
+                error: None,
             })
             .unwrap();
         store
@@ -230,6 +246,7 @@ mod tests {
                 tokens: None,
                 ts: 2,
                 outcome: "failed".into(),
+                error: Some("agent exited 7".into()),
             })
             .unwrap();
         let rs = store.load_receipts();

@@ -80,6 +80,10 @@ pub fn execute_task(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_
         Outcome::Merged => "merged",
         Outcome::Failed(_) => "failed",
     };
+    let error = match &outcome {
+        Outcome::Failed(e) => Some(e.lines().next().unwrap_or("").chars().take(200).collect()),
+        Outcome::Merged => None,
+    };
     let _ = ctx.store.append_receipt(&Receipt {
         task: id.to_string(),
         attempt,
@@ -89,8 +93,31 @@ pub fn execute_task(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_
         tokens: None,
         ts: now_ts(),
         outcome: outcome_name.to_string(),
+        error,
     });
     outcome
+}
+
+/// Episodic retry memory (ADR-13): prior failed attempts of this task, as a
+/// prompt block. None for first attempts. Pure for testing.
+/// ponytail: per-task only — cross-task episode recall needs task types.
+fn failure_context(receipts: &[Receipt], task_id: &str, attempt: u32) -> Option<String> {
+    if attempt < 2 {
+        return None;
+    }
+    let prior: Vec<&Receipt> = receipts
+        .iter()
+        .filter(|r| r.task == task_id && r.attempt < attempt && r.outcome == "failed")
+        .collect();
+    if prior.is_empty() {
+        return None;
+    }
+    let mut out = String::from("\n\n## Previous attempts on this task (avoid repeating these failures)\n");
+    for r in prior {
+        let why = r.error.as_deref().unwrap_or("(unknown failure)");
+        out.push_str(&format!("- attempt {}: {}\n", r.attempt, why));
+    }
+    Some(out)
 }
 
 fn execute_attempt(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_path: &Path) -> Outcome {
@@ -125,7 +152,10 @@ fn execute_attempt(ctx: &ExecCtx, worker: &Worker, id: &str, attempt: u32, log_p
     append(&format!("== attempt {attempt} on worker {} ({}) ==", worker.name, worker.model));
 
     // 1) Render + write prompt.
-    let prompt = render_prompt(&ctx.st, &task, worker);
+    let prompt = {
+        let context = failure_context(&ctx.store.load_receipts(), id, attempt);
+        render_prompt(&ctx.st, &task, worker, context.as_deref())
+    };
     let prompt_path = ctx.store.prompt_dir().join(format!("{id}.md"));
     let _ = fs::create_dir_all(ctx.store.prompt_dir());
     if let Err(e) = fs::write(&prompt_path, &prompt) {
@@ -232,7 +262,7 @@ Work on TASK_ID only. Do not touch files outside the allowed scope.
 When done, make sure the acceptance criteria hold and your changes are
 committed on the current branch."#;
 
-fn render_prompt(st: &Settings, task: &crate::config::Task, worker: &Worker) -> String {    let template = fs::read_to_string(&st.prompt_file).unwrap_or_else(|_| DEFAULT_PROMPT.to_string());
+fn render_prompt(st: &Settings, task: &crate::config::Task, worker: &Worker, context: Option<&str>) -> String {    let template = fs::read_to_string(&st.prompt_file).unwrap_or_else(|_| DEFAULT_PROMPT.to_string());
     let scope = if task.scope.is_empty() {
         "*".to_string()
     } else {
@@ -253,6 +283,9 @@ fn render_prompt(st: &Settings, task: &crate::config::Task, worker: &Worker) -> 
     let mut out = template;
     for (k, v) in map {
         out = out.replace(k, v);
+    }
+    if let Some(ctx) = context {
+        out.push_str(ctx);
     }
     out
 }
@@ -309,5 +342,39 @@ mod tests {
         st.sandbox_cmd.clear();
         let argv = spawn_argv(&st, &worker(None), &PathBuf::from("p.md"));
         assert_eq!(argv[0], "pi", "unset wrapper is a no-op");
+    }
+
+    fn receipt_of(task: &str, attempt: u32, outcome: &str, error: Option<&str>) -> Receipt {
+        Receipt {
+            task: task.into(),
+            attempt,
+            worker: "w".into(),
+            model: "m".into(),
+            wall_clock_s: 1.0,
+            tokens: None,
+            ts: 0,
+            outcome: outcome.into(),
+            error: error.map(|e| e.into()),
+        }
+    }
+
+    #[test]
+    fn failure_context_first_attempt_has_no_block() {
+        assert!(failure_context(&[], "A", 1).is_none());
+    }
+
+    #[test]
+    fn failure_context_lists_only_earlier_failures_of_this_task() {
+        let rs = vec![
+            receipt_of("A", 1, "failed", Some("agent exited NonZero (code 7)")),
+            receipt_of("B", 1, "failed", Some("other task")),
+            receipt_of("A", 2, "failed", Some("gate failed (exit 1)")),
+            receipt_of("A", 3, "merged", None),
+        ];
+        let ctx = failure_context(&rs, "A", 3).unwrap();
+        assert!(ctx.contains("attempt 1: agent exited NonZero (code 7)"));
+        assert!(ctx.contains("attempt 2: gate failed (exit 1)"));
+        assert!(!ctx.contains("other task"), "other tasks excluded");
+        assert!(!ctx.contains("merged"), "merged attempts excluded");
     }
 }

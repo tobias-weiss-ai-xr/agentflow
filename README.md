@@ -23,13 +23,14 @@ providers directly.
 - **Parallel dispatch** — one worker per provider+model slot; concurrent tasks in isolated git worktrees
 - **Multi-repo** — one campaign can touch several repositories: `repos.json` maps names to paths, each task's worktree/branch/merge targets its own repo, deps order across repos
 - **Measured routing** — every attempt leaves a receipt with its outcome; free workers are picked by UCB1 (track record + exploration), per-worker trust shown in `af cost`
+- **Retry memory** — failed attempts record their error; retry prompts list the task's earlier failures so the agent doesn't repeat them
 - **Exact acceptance gates** — each task declares a shell command that must exit 0 before merge
 - **Dependency DAG** — `deps` ordering, critical-path priority, deadlock detection
 - **Contention avoidance** — tasks with overlapping `scope` globs are not dispatched concurrently
 - **Retry** — `max_attempts` per task, fresh branch + worktree on every attempt
 - **Self-healing** — atomic JSON state; crash-safe resume; orphan worktree cleanup at startup
 - **Observable** — status board (`--json`), live `attach`, per-task logs, wall-clock cost receipts
-- **Sound by construction** — spec → contract → test pyramid (53 tests, incl. E2E against a stub agent + scratch git repos; no network in CI)
+- **Sound by construction** — spec → contract → test pyramid (54 tests, incl. E2E against a stub agent + scratch git repos; no network in CI)
 
 ## Quick start
 
@@ -112,10 +113,10 @@ is a stub agent (writes a file + commits) used by the test suite and CI.
 ## Testing
 
 ```sh
-cargo test        # 53 tests: unit (scheduler DAG, contention, deadlock, state,
+cargo test        # 54 tests: unit (scheduler DAG, contention, deadlock, state,
                   # receipts, config validation, sandbox policy, multi-repo,
-                  # UCB1 router, subprocess contracts) + E2E (fake agent +
-                  # scratch git repos — no network)
+                  # UCB1 router, retry context, subprocess contracts) + E2E
+                  # (fake agent + scratch git repos — no network)
 ```
 
 See `docs/arc42/` for the architecture documentation (12 chapters), and

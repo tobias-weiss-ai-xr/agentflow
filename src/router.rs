@@ -78,6 +78,7 @@ mod tests {
             tokens: None,
             ts: 0,
             outcome: outcome.into(),
+            error: None,
         }
     }
 
