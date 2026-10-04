@@ -654,15 +654,14 @@ mod repo_tests {
     #[test]
     fn relative_repo_paths_resolve_against_the_file() {
         let base = std::env::temp_dir().join(format!("af-repos-rel-{}", std::process::id()));
-        let p = write(
-            &base.join("config"),
-            "repos.json",
-            r#"{"repos": {"main": "..", "docs": "../docs-site", "abs": "C:/abs/path"}}"#,
-        );
+        // Absolute paths pass through on both platforms.
+        let abs = if cfg!(windows) { "C:/abs/path" } else { "/abs/path" };
+        let body = format!(r#"{{"repos": {{"main": "..", "docs": "../docs-site", "abs": "{abs}"}}}}"#);
+        let p = write(&base.join("config"), "repos.json", &body);
         let map = load_repos(&p).unwrap();
         assert_eq!(map["main"], base);
         assert_eq!(map["docs"], base.join("docs-site"));
-        assert_eq!(map["abs"], PathBuf::from("C:/abs/path"));
+        assert_eq!(map["abs"], PathBuf::from(abs));
     }
 
     #[test]

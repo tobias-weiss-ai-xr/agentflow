@@ -25,6 +25,6 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - run: cargo llvm-cov --workspace --summary
+      - run: cargo llvm-cov --workspace  # text report to the log
         # Line/region coverage table in the CI log (Windows toolchains can't
         # produce it locally — no profiler_builtins).

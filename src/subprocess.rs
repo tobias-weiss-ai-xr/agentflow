@@ -207,11 +207,11 @@ mod tests {
         let start = Instant::now();
         let out = run(
             "sh",
-            &["-c".into(), "sleep 30".into()],
+            &["-c".into(), "sleep 60".into()],
             None,
             &[],
             EnvMode::Inherit,
-            Duration::from_millis(300),
+            Duration::from_secs(2),
         );
         assert_eq!(out.kind, CmdKind::Timeout);
         assert!(start.elapsed() < Duration::from_secs(10), "killed on time");
