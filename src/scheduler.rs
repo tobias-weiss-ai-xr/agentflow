@@ -100,7 +100,9 @@ pub fn ready_tasks(
     indexed.sort_by(|(ia, a), (ib, b)| {
         let da = depths.get(&a.id).copied().unwrap_or(0);
         let db = depths.get(&b.id).copied().unwrap_or(0);
-        db.cmp(&da).then(b.priority.cmp(&a.priority)).then(ia.cmp(ib))
+        db.cmp(&da)
+            .then(b.priority.rank().cmp(&a.priority.rank()))
+            .then(ia.cmp(ib))
     });
     indexed.into_iter().map(|(_, t)| t.clone()).collect()
 }
@@ -136,7 +138,12 @@ pub fn find_deadlock(
             if blocked.contains(&t.id) {
                 continue;
             }
-            if t.deps.iter().any(|d| blocked.contains(d)) {
+            // Blocked if any dep failed, OR the dep does not exist in this
+            // config (it will never resolve → can never become ready).
+            let stuck = t.deps.iter().any(|d| {
+                blocked.contains(d) || !cfg.by_id.contains_key(d)
+            });
+            if stuck {
                 blocked.insert(t.id.clone());
                 changed = true;
             }
@@ -296,6 +303,24 @@ mod tests {
         let cfg = tasks0();
         let status = status_of(&[("A", TaskState::Failed)]);
         assert!(find_deadlock(&cfg, &status, &["B".to_string()]).is_none());
+    }
+
+    #[test]
+    fn unknown_dep_is_deadlock_not_infinite_loop() {
+        // A dep id that never resolves (compat: merged from a sibling file)
+        // must surface as a deadlock, not spin forever.
+        let cfg = cfg_with(
+            r#"{ "tasks": [
+                {"id":"A","title":"a","deps":["GHOST"],"accept":"true"}
+            ]}"#,
+            r#"{ "workers": [{"name":"w1","provider":"p","model":"m"}]}"#,
+        );
+        let status = status_of(&[]);
+        assert!(cfg.warnings.iter().any(|w| w.contains("GHOST")));
+        assert!(
+            find_deadlock(&cfg, &status, &[]).is_some(),
+            "absent dep must block → deadlock"
+        );
     }
 
     #[test]

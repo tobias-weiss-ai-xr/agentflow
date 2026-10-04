@@ -4,7 +4,7 @@
 
 ### Requirement: Task schema loading
 
-`af` SHALL load a `tasks.json` file of the form `{ "_meta": {...}, "tasks": [...] }` into typed `Task` records. Each task SHALL support the fields `id`, `title`, `deps`, `scope`, `accept`, `acceptance_prose`, `manual`, `repo`, `priority`. Validation SHALL reject: duplicate task ids, `deps` referencing unknown ids, tasks that are neither `manual` nor have an `accept` gate.
+`af` SHALL load a `tasks.json` file of the form `{ "_meta": {...}, "tasks": [...] }` into typed `Task` records. Each task SHALL support the fields `id`, `title`, `deps`, `scope`, `accept`, `acceptance_prose`, `manual`, `repo`, `priority` (a number, or the levels `LOW`/`MEDIUM`/`HIGH`/`CRITICAL`). Validation SHALL reject: duplicate task ids and dependency cycles. It SHALL warn (without failing) on: `deps` referencing ids not present in the file (taskfleet composes configs across files), and tasks that are neither `manual` nor have an `accept` gate (the corpus runs these gate-less).
 
 #### Scenario: valid config loads
 
@@ -16,15 +16,25 @@ THEN both tasks are parsed and the dependency graph resolves without error.
 WHEN a `tasks.json` contains two tasks with the same `id`
 THEN loading fails with an error naming the duplicate id.
 
-#### Scenario: dangling dependency rejected
+#### Scenario: dependency cycle rejected
+
+WHEN a task's `deps` (transitively) reference the task itself
+THEN loading fails with an error naming the cycle.
+
+#### Scenario: dangling dependency warns
 
 WHEN a task's `deps` references an id that does not exist in the file
-THEN loading fails with an error naming the missing dep.
+THEN loading succeeds and emits a warning naming the missing dep.
 
-#### Scenario: task without gate and not manual rejected
+#### Scenario: task without gate and not manual warns
 
 WHEN a task has neither `accept` nor `manual: true`
-THEN loading fails with a validation error.
+THEN loading succeeds, warns, and the gate is skipped at run time.
+
+#### Scenario: string priority levels accepted
+
+WHEN a task declares `priority: "HIGH"` and another `priority: 3`
+THEN both parse and rank deterministically (CRITICAL > HIGH > number-ranked).
 
 ### Requirement: Worker schema loading
 

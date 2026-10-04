@@ -26,6 +26,36 @@ impl TaskState {
     }
 }
 
+/// Priority rank: accepts a number or the corpus' string levels (LOW/MEDIUM/
+/// HIGH/CRITICAL). Used as a tie-breaker when multiple tasks are ready.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Priority {
+    Num(i64),
+    Str(String),
+}
+
+impl Default for Priority {
+    fn default() -> Self {
+        Priority::Num(0)
+    }
+}
+
+impl Priority {
+    pub fn rank(&self) -> i64 {
+        match self {
+            Priority::Num(n) => *n,
+            Priority::Str(s) => match s.to_uppercase().as_str() {
+                "LOW" | "MINOR" => -10,
+                "MEDIUM" | "NORMAL" | "MED" => 0,
+                "HIGH" => 10,
+                "CRITICAL" | "URGENT" => 20,
+                _ => 0,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Task {
@@ -36,7 +66,7 @@ pub struct Task {
     pub accept: Option<String>,
     pub acceptance_prose: Option<String>,
     pub manual: bool,
-    pub priority: i64,
+    pub priority: Priority,
     pub repo: String,
 }
 
@@ -50,7 +80,7 @@ impl Default for Task {
             accept: None,
             acceptance_prose: None,
             manual: false,
-            priority: 0,
+            priority: Priority::default(),
             repo: String::new(),
         }
     }
@@ -111,6 +141,9 @@ pub struct Config {
     pub workers: Vec<Worker>,
     pub defaults: WorkerDefaults,
     pub by_id: HashMap<String, Task>,
+    /// Non-fatal compatibility notes (dangling deps, gate-less tasks) —
+    /// taskfleet's corpus relies on these, so they warn instead of fail.
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -140,7 +173,7 @@ pub fn load(tasks_path: &Path, workers_path: &Path) -> Result<Config, String> {
     let wf: WorkersFile = serde_json::from_str(&workers_json)
         .map_err(|e| format!("parse {}: {e}", workers_path.display()))?;
 
-    validate(&tf.tasks, &wf.workers)?;
+    let mut warnings = validate(&tf.tasks, &wf.workers)?;
 
     let by_id: HashMap<String, Task> = tf
         .tasks
@@ -148,15 +181,29 @@ pub fn load(tasks_path: &Path, workers_path: &Path) -> Result<Config, String> {
         .map(|t| (t.id.clone(), t.clone()))
         .collect();
 
+    // Dangling deps are non-fatal (compat: configs reference tasks merged in
+    // from sibling files). Report them; deadlock detection will surface any
+    // dep that truly never resolves.
+    for t in &tf.tasks {
+        for d in &t.deps {
+            if !by_id.contains_key(d) {
+                warnings.push(format!("task '{}': dep '{}' not in this file (assumed merged elsewhere)", t.id, d));
+            }
+        }
+    }
+
     Ok(Config {
         tasks: tf.tasks,
         workers: wf.workers,
         defaults: wf.defaults,
         by_id,
+        warnings,
     })
 }
 
-fn validate(tasks: &[Task], workers: &[Worker]) -> Result<(), String> {
+/// Returns warnings (non-fatal) or a hard error.
+fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
+    let mut warnings = Vec::new();
     // unique ids
     let mut seen: HashSet<&str> = HashSet::new();
     for t in tasks {
@@ -167,17 +214,12 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<(), String> {
             return Err(format!("duplicate task id: {}", t.id));
         }
     }
-    let ids: HashSet<&str> = seen;
 
     for t in tasks {
-        for d in &t.deps {
-            if !ids.contains(d.as_str()) {
-                return Err(format!("task '{}': dep '{}' does not exist", t.id, d));
-            }
-        }
+        // No gate and not manual: legacy corpus runs these gate-less; warn.
         if t.accept.is_none() && !t.manual {
-            return Err(format!(
-                "task '{}': neither 'accept' gate nor manual=true",
+            warnings.push(format!(
+                "task '{}': no acceptance gate and not manual — gate will be skipped",
                 t.id
             ));
         }
@@ -203,7 +245,7 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<(), String> {
     if enabled == 0 {
         return Err("no enabled workers (workers.json needs at least one enabled worker)".into());
     }
-    Ok(())
+    Ok(warnings)
 }
 
 /// Depth-first cycle detection over task `deps`. Returns the ids forming a cycle.
@@ -382,12 +424,16 @@ mod tests {
             &d.join("workers.json"),
             r#"{ "workers": [{"name":"w1","provider":"p","model":"m"}]}"#,
         );
-        let e = load(&d.join("tasks.json"), &d.join("workers.json")).unwrap_err();
-        assert!(e.contains("dep 'NOPE' does not exist"), "{e}");
+        let c = load(&d.join("tasks.json"), &d.join("workers.json")).unwrap();
+        assert!(
+            c.warnings.iter().any(|w| w.contains("NOPE")),
+            "dangling dep should warn, not fail: {:?}",
+            c.warnings
+        );
     }
 
     #[test]
-    fn no_gate_and_not_manual_rejected() {
+    fn no_gate_and_not_manual_warns() {
         let d = tmpdir("cfg-nogate");
         wt(
             &d.join("tasks.json"),
@@ -397,8 +443,33 @@ mod tests {
             &d.join("workers.json"),
             r#"{ "workers": [{"name":"w1","provider":"p","model":"m"}]}"#,
         );
-        let e = load(&d.join("tasks.json"), &d.join("workers.json")).unwrap_err();
-        assert!(e.contains("neither 'accept' gate nor manual"), "{e}");
+        let c = load(&d.join("tasks.json"), &d.join("workers.json")).unwrap();
+        assert!(
+            c.warnings.iter().any(|w| w.contains("gate will be skipped")),
+            "gate-less task should warn, not fail: {:?}",
+            c.warnings
+        );
+    }
+
+    #[test]
+    fn priority_accepts_number_and_string() {
+        let d = tmpdir("cfg-prio");
+        wt(
+            &d.join("tasks.json"),
+            r#"{ "tasks": [
+                {"id":"A","title":"a","priority":3,"accept":"true"},
+                {"id":"B","title":"b","priority":"CRITICAL","accept":"true"},
+                {"id":"C","title":"c","accept":"true"}
+            ]}"#,
+        );
+        wt(
+            &d.join("workers.json"),
+            r#"{ "workers": [{"name":"w1","provider":"p","model":"m"}]}"#,
+        );
+        let c = load(&d.join("tasks.json"), &d.join("workers.json")).unwrap();
+        assert_eq!(c.by_id["A"].priority.rank(), 3);
+        assert_eq!(c.by_id["B"].priority.rank(), 20);
+        assert_eq!(c.by_id["C"].priority.rank(), 0);
     }
 
     #[test]

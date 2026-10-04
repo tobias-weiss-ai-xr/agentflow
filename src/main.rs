@@ -94,6 +94,9 @@ fn load_cfg(args: &Args) -> Result<(config::Config, Settings), String> {
         .clone()
         .unwrap_or_else(|| st.workers_file.clone());
     let cfg = config::load(&tasks, &workers)?;
+    for w in &cfg.warnings {
+        eprintln!("warning: {w}");
+    }
     Ok((cfg, st))
 }
 

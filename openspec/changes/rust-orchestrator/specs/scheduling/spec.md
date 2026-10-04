@@ -57,6 +57,11 @@ When the scheduler has ready-queueable work only through tasks that are permanen
 WHEN every remaining task depends on a task that is `failed` with attempts exhausted
 THEN the run exits with status code 2 and lists the blocked tasks.
 
+#### Scenario: absent dependency is a deadlock
+
+WHEN a task's dep id does not exist in the loaded config (merged in from a sibling file that is not present)
+THEN the run exits cleanly with status 2 instead of looping forever.
+
 #### Scenario: no deadlock while progress possible
 
 WHEN at least one task is `running` or `ready`
