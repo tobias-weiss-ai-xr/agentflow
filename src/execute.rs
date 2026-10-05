@@ -316,7 +316,11 @@ Work on TASK_ID only. Do not touch files outside the allowed scope.
 When done, make sure the acceptance criteria hold and your changes are
 committed on the current branch."#;
 
-fn render_prompt(
+/// Render the agent prompt for one task from the configured template
+/// (missing file ⇒ built-in `DEFAULT_PROMPT`). Public as the pinned
+/// contract surface for `tests/contract_prompt.rs` — every render path
+/// must surface scope, id/title, and the exact gate command.
+pub fn render_prompt(
     st: &Settings,
     task: &crate::config::Task,
     worker: &Worker,
