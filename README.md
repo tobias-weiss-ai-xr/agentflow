@@ -62,6 +62,33 @@ af clean [--dry-run]
 af validate [--worker NAME]
 ```
 
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Done — every in-scope task reached `done` (or `--dry-run`/`--once` finished its work) |
+| `2` | Configuration error, unknown flag/command, or **deadlock** (no task can make progress) |
+| `3` | Stopped early — the wall-clock budget was exhausted before every in-scope task could be started |
+
+### Campaign budget (`TF_MAX_WALL_CLOCK_S`)
+
+A campaign can be given a spend ceiling in seconds. `TF_MAX_WALL_CLOCK_S`
+(default `0`) is compared against the sum of `wall_clock_s` over the
+receipts for the in-scope tasks — the exact TOTAL `af cost` reports, so the
+ceiling is enforced against the same ledger the report shows (receipts are
+persisted, so the cap survives restarts and counts across runs).
+
+- `0` = **unlimited**, the legacy behaviour — exactly as before.
+- When the measured spend is **at or above** the cap, `af run` stops
+  dispatching **new** attempts; attempts already in flight are allowed to
+  finish (a running attempt is never killed). It prints one diagnostic
+  naming the spend, the cap, and how many in-scope tasks were not started,
+  then exits `3`.
+- **Completion wins**: a campaign whose in-scope tasks are all already
+  `done` exits `0` even when the measured spend exceeds the cap.
+- `af run --dry-run` prints the same budget line when the spend is already
+  over the cap, still creating nothing and still exiting `0`.
+
 `af cost` aggregates the receipts every attempt appends to `state/receipts/`.
 Plain `af cost` totals every attempt; `--last` narrows to the most recent
 receipt per task (the greatest `ts`, ties broken by the greater attempt

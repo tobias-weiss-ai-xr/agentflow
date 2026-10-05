@@ -323,6 +323,14 @@ pub struct Settings {
     /// so a hung agent stops burning the clock (and paid tokens) instead
     /// of sitting out the whole total timeout.
     pub agent_stall_s: u64,
+    /// Campaign wall-clock spend ceiling (`TF_MAX_WALL_CLOCK_S`), in
+    /// seconds. **0 = unlimited** (the default): exactly the legacy
+    /// behaviour. Any non-zero value stops NEW dispatches once the receipts
+    /// for the in-scope tasks already total at least this many wall-clock
+    /// seconds — attempts already in flight still finish — and the run
+    /// exits 3 (stopped early) instead of looping. The receipts are the
+    /// ledger, so the ceiling survives restarts and composes across runs.
+    pub max_wall_clock_s: u64,
     /// Whitespace-split command prefix wrapped around the agent argv
     /// (`TF_SANDBOX_CMD`, e.g. "firejail --net=none"). Empty = no wrapper.
     pub sandbox_cmd: Vec<String>,
@@ -358,6 +366,7 @@ impl Settings {
             prompt_file: PathBuf::from("prompts/worker.md"),
             agent_timeout_s: env_or_int("TF_AGENT_TIMEOUT_S", 3600),
             agent_stall_s: env_or_int("TF_AGENT_STALL_S", 0),
+            max_wall_clock_s: env_or_int("TF_MAX_WALL_CLOCK_S", 0),
             sandbox_cmd: env_or("TF_SANDBOX_CMD", "")
                 .split_whitespace()
                 .map(str::to_string)

@@ -735,6 +735,7 @@ model {{MODEL}}/{{PROVIDER}}
             prompt_file: tpl.clone(),
             agent_timeout_s: 60,
             agent_stall_s: 0,
+            max_wall_clock_s: 0,
             sandbox_cmd: vec![],
         };
         let task = crate::config::Task {
