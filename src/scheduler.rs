@@ -280,6 +280,7 @@ mod tests {
                         state: st.clone(),
                         attempts: 0,
                         last_error: None,
+                        phase: None,
                     },
                 )
             })
@@ -553,6 +554,7 @@ mod tests {
                         state: s,
                         attempts: (rng() % 5) as u32,
                         last_error: None,
+                        phase: None,
                     },
                 );
             }

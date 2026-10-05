@@ -35,6 +35,7 @@ fn sample_map() -> HashMap<String, TaskStatus> {
             state: TaskState::Done,
             attempts: 1,
             last_error: None,
+            phase: None,
         },
     );
     m

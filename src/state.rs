@@ -18,6 +18,11 @@ pub struct TaskStatus {
     pub state: TaskState,
     pub attempts: u32,
     pub last_error: Option<String>,
+    /// Journal: the furthest phase this task's current attempt reached
+    /// (effect sandwich, pi-durable). `None` on legacy state files and
+    /// between attempts — `resume_action` maps it to `RerunAgent`.
+    #[serde(default)]
+    pub phase: Option<AttemptPhase>,
 }
 
 impl Default for TaskStatus {
@@ -26,7 +31,49 @@ impl Default for TaskStatus {
             state: TaskState::Ready,
             attempts: 0,
             last_error: None,
+            phase: None,
         }
+    }
+}
+
+/// One attempt's phase in the effect sandwich (pi-durable journal):
+/// commit intent → perform effect → commit outcome. Persisted at every
+/// boundary so a crashed orchestrator can resume an attempt without
+/// re-running the expensive, non-replayable agent step.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptPhase {
+    /// Worktree created; the agent may be running but nothing durable
+    /// proves it finished. Resume must re-run the agent (safe).
+    #[default]
+    Spawned,
+    /// The agent exited 0 and its change is committed on the attempt
+    /// branch. Never re-invoke the agent after this point.
+    AgentDone,
+    /// The acceptance gate passed. Only the (idempotent) merge remains.
+    GatePassed,
+}
+
+/// How a stale `running` attempt resumes after a crash, derived from its
+/// journaled [`AttemptPhase`] (startup heal in `run.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeAction {
+    /// No durable agent outcome → fresh attempt (agent, gate, merge).
+    RerunAgent,
+    /// Agent outcome is committed → re-run only the acceptance gate, merge.
+    RerunGate,
+    /// Gate already passed → re-run only the merge, idempotently.
+    MergeOnly,
+}
+
+/// Map a journaled phase to the resume plan. `None` (legacy state files,
+/// inter-attempt gap) and `Spawned` both mean "the agent's outcome was
+/// never committed" → the always-safe `RerunAgent`.
+pub fn resume_action(phase: Option<AttemptPhase>) -> ResumeAction {
+    match phase {
+        None | Some(AttemptPhase::Spawned) => ResumeAction::RerunAgent,
+        Some(AttemptPhase::AgentDone) => ResumeAction::RerunGate,
+        Some(AttemptPhase::GatePassed) => ResumeAction::MergeOnly,
     }
 }
 
@@ -270,6 +317,7 @@ mod tests {
                 state: TaskState::Done,
                 attempts: 1,
                 last_error: None,
+                phase: None,
             },
         );
         store.save(&m).unwrap();
@@ -286,6 +334,59 @@ mod tests {
         assert!(std::fs::read_to_string(store.status_file())
             .unwrap()
             .contains("done"));
+    }
+
+    #[test]
+    fn resume_action_maps_every_phase_to_a_resume_plan() {
+        assert_eq!(resume_action(None), ResumeAction::RerunAgent);
+        assert_eq!(
+            resume_action(Some(AttemptPhase::Spawned)),
+            ResumeAction::RerunAgent,
+            "Spawned means no durable agent outcome — safe re-run"
+        );
+        assert_eq!(
+            resume_action(Some(AttemptPhase::AgentDone)),
+            ResumeAction::RerunGate
+        );
+        assert_eq!(
+            resume_action(Some(AttemptPhase::GatePassed)),
+            ResumeAction::MergeOnly
+        );
+    }
+
+    #[test]
+    fn phase_persists_snake_case_and_legacy_files_load_without_it() {
+        let dir = tmpdir();
+        let store = Store::new(dir.clone());
+        let mut m = HashMap::new();
+        m.insert(
+            "A".to_string(),
+            TaskStatus {
+                state: TaskState::Running,
+                attempts: 1,
+                last_error: None,
+                phase: Some(AttemptPhase::AgentDone),
+            },
+        );
+        store.save(&m).unwrap();
+        let raw = std::fs::read_to_string(store.status_file()).unwrap();
+        assert!(
+            raw.contains("\"agent_done\""),
+            "phase must serialize as snake_case: {raw}"
+        );
+        assert_eq!(store.load()["A"].phase, Some(AttemptPhase::AgentDone));
+
+        // Legacy state file (written before the journal existed) has no
+        // `phase` key — it must still load, as None (= RerunAgent).
+        std::fs::write(
+            store.status_file(),
+            r#"{ "A": { "state": "running", "attempts": 1, "last_error": null } }"#,
+        )
+        .unwrap();
+        let s = &store.load()["A"];
+        assert_eq!(s.state, TaskState::Running);
+        assert_eq!(s.phase, None, "missing phase key defaults to None");
+        assert_eq!(resume_action(s.phase), ResumeAction::RerunAgent);
     }
 
     #[test]

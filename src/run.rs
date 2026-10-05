@@ -3,13 +3,15 @@
 
 use crate::config::{Config, Settings, TaskState};
 use crate::execute::{self, ExecCtx, Outcome};
+use crate::gate;
 use crate::router::Router;
 use crate::scheduler;
-use crate::state::{Store, TaskStatus};
+use crate::state::{resume_action, AttemptPhase, ResumeAction, Store, TaskStatus};
+use crate::subprocess::{self, EnvMode};
 use crate::worktree;
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -41,6 +43,17 @@ fn reap(
             .unwrap()
             .insert(worker_name.clone(), false);
         router.record(&worker_name, matches!(outcome, Outcome::Merged));
+        // Journal reconciliation: attempt threads persist phase boundaries
+        // via load-modify-save (see `record_phase`), so this in-memory map
+        // has not seen them. Copy every entry's freshest persisted boundary
+        // over before the whole-map save below — otherwise reaping one task
+        // would clobber a concurrent attempt's journal (or this attempt's
+        // own final boundary) with the stale pre-attempt copy.
+        for (k, persisted) in &store.load() {
+            if let Some(s) = status.get_mut(k) {
+                s.phase = persisted.phase;
+            }
+        }
         let s = status.entry(id.clone()).or_default();
         s.attempts += 1;
         match outcome {
@@ -127,11 +140,11 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
         &st.branch_prefix,
         &stale_running,
     );
+    // Effect-sandwich resume (pi-durable): for each stale `running` task,
+    // finish only the effects its dead attempt had not yet committed — a
+    // crash must never re-run the expensive, non-replayable agent step.
     for id in &stale_running {
-        if let Some(s) = status.get_mut(id) {
-            s.state = TaskState::Ready; // previous owner died mid-run
-            s.last_error = Some("previous run interrupted".into());
-        }
+        heal_stale_attempt(cfg, st, &mut status, id, max_attempts);
     }
     let _ = store.save(&status);
 
@@ -258,6 +271,10 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                 let attempt = {
                     let s = status.entry(t.id.clone()).or_default();
                     s.state = TaskState::Running;
+                    // Fresh attempt: the journal restarts at Spawned (the
+                    // worker commits it before spawning the agent). A crash
+                    // in that window resumes as RerunAgent — always safe.
+                    s.phase = None;
                     s.attempts + 1
                 };
                 let _ = store.save(&status);
@@ -303,6 +320,270 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
         }
 
         std::thread::sleep(Duration::from_secs(poll.max(1)));
+    }
+}
+
+/// git helper for the resume paths (same trusted-child policy as
+/// worktree.rs's own git operations: full inherited env, hard timeout).
+fn git_run(repo: &Path, args: &[&str]) -> subprocess::CmdOut {
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    subprocess::run(
+        "git",
+        &args,
+        Some(repo),
+        &[],
+        EnvMode::Inherit,
+        Duration::from_secs(300),
+    )
+}
+
+/// Does the attempt branch still exist in the repo? (The agent's durable
+/// work lives there.)
+fn branch_exists(repo: &Path, branch: &str) -> bool {
+    git_run(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .passed()
+}
+
+/// Is `branch` already fully contained in the repo's checked-out base?
+fn branch_merged_into_head(repo: &Path, branch: &str) -> bool {
+    git_run(repo, &["merge-base", "--is-ancestor", branch, "HEAD"]).passed()
+}
+
+/// Is this task's af merge commit already in the base's history? Covers the
+/// crash window AFTER a successful merge whose cleanup already deleted the
+/// branch — the task's work is in the base, so "record merged" is exact.
+fn merge_commit_in_base(repo: &Path, id: &str) -> bool {
+    let out = git_run(
+        repo,
+        &[
+            "log",
+            "--format=%H",
+            "-1",
+            "--grep",
+            &format!("^af: {id} — "),
+            "HEAD",
+        ],
+    );
+    out.passed() && !out.stdout.trim().is_empty()
+}
+
+/// Keep/repair the dead attempt's worktree so the gate can re-run inside
+/// it: a valid worktree is reused as-is; anything else (missing dir, or a
+/// raw leftover directory without git metadata) is rebuilt from the
+/// EXISTING branch (`git worktree add <path> <branch>` — no new branch, so
+/// the committed agent work is never discarded). None when git cannot
+/// materialize it → caller falls back to RerunAgent.
+fn ensure_worktree_on_branch(
+    repo: &Path,
+    wt_root: &Path,
+    id: &str,
+    branch: &str,
+) -> Option<PathBuf> {
+    let wt_path = wt_root.join(id);
+    // A live worktree carries a `.git` file/dir; a stale plain directory
+    // does not and must be cleared before `worktree add`.
+    if wt_path.join(".git").exists() {
+        return Some(wt_path);
+    }
+    let _ = std::fs::remove_dir_all(&wt_path);
+    std::fs::create_dir_all(wt_root).ok()?;
+    // Drop stale registrations left by raw-deleted worktree dirs (same
+    // reason as worktree::create) so the branch is free to check out.
+    let _ = git_run(repo, &["worktree", "prune"]);
+    let out = git_run(repo, &["worktree", "add", wt_path.to_str()?, branch]);
+    if out.passed() {
+        Some(wt_path)
+    } else {
+        None
+    }
+}
+
+/// Reset a resumed-and-failed attempt exactly like a normally failed one:
+/// terminal Failed at max attempts, else Ready for a fresh agent attempt.
+fn mark_resumed_failure(
+    status: &mut HashMap<String, TaskStatus>,
+    id: &str,
+    max_attempts: u32,
+    err: &str,
+) {
+    if let Some(s) = status.get_mut(id) {
+        s.last_error = Some(err.to_string());
+        s.phase = None; // next attempt journals from Spawned again
+        s.state = if s.attempts >= max_attempts {
+            TaskState::Failed
+        } else {
+            TaskState::Ready
+        };
+    }
+}
+
+/// Shared tail of both resume paths: land the attempt branch in the base
+/// IDEMPOTENTLY (merge — or just record merged when the branch is already
+/// an ancestor / the task's merge commit is already in the base), mark the
+/// task Done, and drop the attempt's worktree + branch. Returns false only
+/// when the task is unknown (caller falls back to RerunAgent).
+fn finish_resume_merge(
+    cfg: &Config,
+    st: &Settings,
+    status: &mut HashMap<String, TaskStatus>,
+    id: &str,
+    max_attempts: u32,
+    repo: &Path,
+    branch: &str,
+) -> bool {
+    let Some(task) = cfg.by_id.get(id) else {
+        return false;
+    };
+    let already_merged = branch_merged_into_head(repo, branch) || merge_commit_in_base(repo, id);
+    let merged = if already_merged {
+        Ok(()) // idempotent: record merged without a second merge
+    } else {
+        worktree::merge(
+            repo,
+            branch,
+            &worktree::MergeLocks::new(),
+            &format!("af: {} — {}", task.id, task.title),
+        )
+    };
+    match merged {
+        Ok(()) => {
+            if let Some(s) = status.get_mut(id) {
+                s.state = TaskState::Done;
+                s.last_error = None;
+                s.phase = Some(AttemptPhase::GatePassed);
+            }
+            // Merge consumed the attempt — drop its worktree + branch
+            // (best-effort, exactly like execute_attempt's cleanup).
+            worktree::remove(
+                repo,
+                &worktree::Worktree {
+                    path: st.worktree_root.join(id),
+                    branch: branch.to_string(),
+                },
+            );
+            println!("  ✓ {id} resumed to done (agent not re-run)");
+            true
+        }
+        Err(e) => {
+            mark_resumed_failure(
+                status,
+                id,
+                max_attempts,
+                &format!("resume merge failed: {e}"),
+            );
+            true
+        }
+    }
+}
+
+/// RerunGate resume (phase = AgentDone): the agent already committed its
+/// change on `<prefix>/<id>` — re-run ONLY the acceptance gate in a
+/// kept/repaired worktree, then merge on success. Never re-invokes the
+/// agent. Returns false when the resume artifacts are gone (branch/worktree
+/// cannot be recovered) → caller falls back to RerunAgent (always safe).
+fn resume_gate_only(
+    cfg: &Config,
+    st: &Settings,
+    status: &mut HashMap<String, TaskStatus>,
+    id: &str,
+    max_attempts: u32,
+) -> bool {
+    let Some(task) = cfg.by_id.get(id) else {
+        return false;
+    };
+    let repo = cfg.repo_dir_for(task, &st.repo_dir);
+    let branch = format!("{}/{}", st.branch_prefix, id);
+    if !branch_exists(&repo, &branch) {
+        return false; // the agent's durable work is gone — only a re-run recovers
+    }
+    let Some(wt_path) = ensure_worktree_on_branch(&repo, &st.worktree_root, id, &branch) else {
+        return false;
+    };
+    // Re-run only the gate. Manual/gateless attempts have nothing to check —
+    // the agent step was their last pre-merge effect.
+    let gate_ok = if !task.manual {
+        match &task.accept {
+            Some(accept) => gate::run_accept(
+                accept,
+                &wt_path,
+                &st.gate_env,
+                Duration::from_secs(cfg.defaults.accept_timeout_s),
+                task.gate_replay,
+            )
+            .passed(),
+            None => true,
+        }
+    } else {
+        true
+    };
+    if !gate_ok {
+        mark_resumed_failure(status, id, max_attempts, "resumed acceptance gate failed");
+        return true;
+    }
+    // Journal the boundary in the in-memory map (persisted by the heal's
+    // single save): gate passed — only the merge remains.
+    if let Some(s) = status.get_mut(id) {
+        s.phase = Some(AttemptPhase::GatePassed);
+    }
+    finish_resume_merge(cfg, st, status, id, max_attempts, &repo, &branch)
+}
+
+/// MergeOnly resume (phase = GatePassed): gate already passed — land the
+/// branch idempotently (or record merged when it already is). Never invokes
+/// agent or gate. Falls back to RerunAgent only when there is NO evidence of
+/// the work: no branch AND no merge commit in the base.
+fn resume_merge_only(
+    cfg: &Config,
+    st: &Settings,
+    status: &mut HashMap<String, TaskStatus>,
+    id: &str,
+    max_attempts: u32,
+) -> bool {
+    let Some(task) = cfg.by_id.get(id) else {
+        return false;
+    };
+    let repo = cfg.repo_dir_for(task, &st.repo_dir);
+    let branch = format!("{}/{}", st.branch_prefix, id);
+    if !branch_exists(&repo, &branch) && !merge_commit_in_base(&repo, id) {
+        return false; // → RerunAgent
+    }
+    finish_resume_merge(cfg, st, status, id, max_attempts, &repo, &branch)
+}
+
+/// Startup heal for one stale `running` task — the effect-sandwich resume.
+/// RerunAgent: previous behavior (reset to Ready; the stale worktree is
+/// replaced when the retry is dispatched). RerunGate / MergeOnly: finish
+/// only the remaining effects, never re-invoking the agent.
+fn heal_stale_attempt(
+    cfg: &Config,
+    st: &Settings,
+    status: &mut HashMap<String, TaskStatus>,
+    id: &str,
+    max_attempts: u32,
+) {
+    let action = resume_action(status.get(id).and_then(|s| s.phase));
+    let handled = match action {
+        ResumeAction::RerunGate => resume_gate_only(cfg, st, status, id, max_attempts),
+        ResumeAction::MergeOnly => resume_merge_only(cfg, st, status, id, max_attempts),
+        ResumeAction::RerunAgent => false, // handled by the reset below
+    };
+    if !handled {
+        // RerunAgent, or a resume that lost its artifacts (always safe):
+        // fresh attempt from Ready; the stale worktree is dropped by
+        // worktree::create when the retry is dispatched.
+        if let Some(s) = status.get_mut(id) {
+            s.state = TaskState::Ready;
+            s.last_error = Some("previous run interrupted".into());
+            s.phase = None;
+        }
     }
 }
 
