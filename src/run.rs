@@ -95,6 +95,15 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     }
 
     let store = Store::new(st.state_dir.clone());
+    // Single writer per TF_STATE_DIR: a second `af run` must not clobber
+    // run-state.json. Held (and released on drop) for the whole run.
+    let _lock = match store.acquire_lock() {
+        Ok(g) => g,
+        Err(err) => {
+            eprintln!("config error: {err}");
+            return 2;
+        }
+    };
     let poll = opts.poll_secs.unwrap_or(st.poll_secs);
     let max_attempts = cfg.defaults.max_attempts;
 
