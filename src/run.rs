@@ -836,6 +836,23 @@ fn select_receipts<'a>(receipts: &'a [Receipt], filter: &CostFilter) -> Vec<&'a 
     window
 }
 
+/// Stable grouping key for a failed attempt's reason: the first line of
+/// `error`, trimmed, truncated to 48 characters; `unknown` when the receipt
+/// carries no `error` (legacy or failed-without-detail).
+fn waste_reason(r: &Receipt) -> String {
+    match &r.error {
+        None => "unknown".to_string(),
+        Some(e) => e
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .chars()
+            .take(48)
+            .collect(),
+    }
+}
+
 /// `af cost`: aggregate receipts (wall-clock truth, ADR-9). The table rows
 /// honor `filter.task`; the TOTAL line and the per-worker trust block are
 /// computed over the window-selected receipts only — with no window flags
@@ -906,6 +923,54 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
                 format!("{w}/{n}"),
                 w as f64 / n as f64
             ));
+        }
+    }
+    // Wasted spend (failed attempts): computed from the SAME window-selected
+    // receipts as the rest of the report, so `--last` / `--since` / `--task`
+    // narrow it too. A failed attempt's wall-clock is otherwise
+    // indistinguishable from productive spend — this is the only place it is
+    // reported.
+    let failed: Vec<&Receipt> = selected
+        .iter()
+        .copied()
+        .filter(|r| r.outcome == "failed")
+        .collect();
+    let mut wasted: f64 = 0.0;
+    for r in &failed {
+        wasted += r.wall_clock_s;
+    }
+    let pct = if selected.is_empty() {
+        0.0
+    } else {
+        failed.len() as f64 / selected.len() as f64 * 100.0
+    };
+    lines.push_str(&format!(
+        "\nWASTED: {:.1}s on {} of {} attempt(s) ({:.1}%)",
+        wasted,
+        failed.len(),
+        selected.len(),
+        pct
+    ));
+    if !failed.is_empty() {
+        let mut by_reason: HashMap<String, (f64, usize)> = HashMap::new();
+        for r in &failed {
+            let e = by_reason.entry(waste_reason(r)).or_insert((0.0, 0));
+            e.0 += r.wall_clock_s;
+            e.1 += 1;
+        }
+        let mut rows: Vec<(String, f64, usize)> = by_reason
+            .into_iter()
+            .map(|(k, (secs, n))| (k, secs, n))
+            .collect();
+        // Descending seconds; ties broken by the reason string ascending.
+        rows.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        lines.push_str("\nWASTED BY REASON");
+        for (reason, secs, n) in rows {
+            lines.push_str(&format!("\n  {:<28} {:.1}s  ({})", reason, secs, n));
         }
     }
     lines
@@ -1338,6 +1403,31 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn waste_reason_is_first_line_trimmed_truncated_or_unknown() {
+        let r = |error: Option<&str>| Receipt {
+            task: "A".into(),
+            attempt: 1,
+            worker: "w".into(),
+            model: "m".into(),
+            wall_clock_s: 1.0,
+            tokens: None,
+            ts: 0,
+            outcome: "failed".into(),
+            error: error.map(str::to_string),
+        };
+        // No error on the receipt → the literal key.
+        assert_eq!(waste_reason(&r(None)), "unknown");
+        // First line only, trimmed.
+        assert_eq!(
+            waste_reason(&r(Some("  gate failed (exit 1): boom\nextra detail"))),
+            "gate failed (exit 1): boom"
+        );
+        // Truncated to a stable 48 characters.
+        let long = "x".repeat(60);
+        assert_eq!(waste_reason(&r(Some(&long))), "x".repeat(48));
     }
 
     #[test]

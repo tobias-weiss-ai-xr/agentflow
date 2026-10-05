@@ -417,6 +417,111 @@ fn cost_since_filters_receipts_by_time() {
     assert_ne!(code, 0, "impossible month must exit non-zero: {out}");
 }
 
+// spec: state/cost-receipts
+#[test]
+fn cost_report_surfaces_wasted_spend() {
+    // Failed attempts must not be invisible: the report totals their
+    // wall-clock, breaks it down by reason, and the whole waste section is
+    // computed over the SAME window-selected receipts as the rest of the
+    // report (so `--last` / `--since` narrow it too).
+    let tasks = r#"{ "tasks": [
+        { "id": "A", "title": "a", "accept": "true" },
+        { "id": "B", "title": "b", "accept": "true" },
+        { "id": "C", "title": "c", "accept": "true" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    let (_, st) = cli.settings();
+    let store = Store::new(st.state_dir.clone());
+    let receipt =
+        |task: &str, attempt: u32, ts: u64, wall: f64, outcome: &str, error: Option<&str>| {
+            Receipt {
+                task: task.into(),
+                attempt,
+                worker: "w1".into(),
+                model: "m".into(),
+                wall_clock_s: wall,
+                tokens: None,
+                ts,
+                outcome: outcome.into(),
+                error: error.map(str::to_string),
+            }
+        };
+    for r in [
+        receipt(
+            "A",
+            1,
+            1_000,
+            100.0,
+            "failed",
+            Some("acceptance gate failed (exit 1): boom"),
+        ),
+        receipt("A", 2, 2_000, 10.0, "merged", None),
+        receipt(
+            "B",
+            1,
+            3_000,
+            20.0,
+            "failed",
+            Some("agent exited NonZero (code 7)"),
+        ),
+        receipt("C", 1, 4_000, 5.0, "merged", None),
+    ] {
+        store.append_receipt(&r).unwrap();
+    }
+
+    // Plain `af cost`: waste section is always present — exact summed
+    // failed seconds, failed/total attempt counts, and the percentage.
+    let (code, out) = cli.af(&["cost"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("WASTED BY REASON"), "header: {out}");
+    assert!(
+        out.contains("WASTED: 120.0s on 2 of 4 attempt(s) (50.0%)"),
+        "waste total: {out}"
+    );
+    assert!(
+        out.contains("acceptance gate failed (exit 1): boom"),
+        "reason key: {out}"
+    );
+    assert!(out.contains("100.0s"), "first reason seconds: {out}");
+    assert!(
+        out.contains("agent exited NonZero (code 7)"),
+        "second reason key: {out}"
+    );
+    assert!(out.contains("20.0s"), "second reason seconds: {out}");
+
+    // `--last` drops A's older failed attempt: only B's failure survives,
+    // so the waste figure narrows to 20.0s of 3 receipts — proving the
+    // waste section shares the window selection rather than restating the
+    // full-report number.
+    let (code, out) = cli.af(&["cost", "--last"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("WASTED: 20.0s on 1 of 3 attempt(s) (33.3%)"),
+        "windowed waste total: {out}"
+    );
+    assert!(
+        !out.contains("acceptance gate failed"),
+        "the windowed-out failure is not reported: {out}"
+    );
+    assert!(
+        out.contains("agent exited NonZero (code 7)"),
+        "the surviving failure is reported: {out}"
+    );
+
+    // A window with no failures reports 0.0s explicitly (no panic, no
+    // division by zero) and omits the reason breakdown.
+    let (code, out) = cli.af(&["cost", "--since", "4000"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("WASTED: 0.0s on 0 of 1 attempt(s) (0.0%)"),
+        "zero-failure window: {out}"
+    );
+    assert!(
+        !out.contains("WASTED BY REASON"),
+        "no reasons when there are no failures: {out}"
+    );
+}
+
 // spec: cli/run-commands
 #[test]
 fn dry_run_prints_plan_without_spawning_agents() {
