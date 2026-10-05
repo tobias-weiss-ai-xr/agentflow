@@ -6,7 +6,9 @@
 use crate::config::TaskState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::OpenOptions;
 use std::io;
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -130,6 +132,74 @@ impl Store {
         out.sort_by_key(|r| r.ts);
         out
     }
+
+    pub fn lock_file(&self) -> PathBuf {
+        self.dir.join(".lock")
+    }
+
+    /// Acquire the single-writer lock for this state dir.
+    ///
+    /// Unlinks `run-state.json` from concurrent `af run` processes: creates
+    /// `<state_dir>/.lock` with O_CREAT|O_EXCL and records this pid. A second
+    /// live owner gets an error; a lock whose pid is dead is reclaimed.
+    pub fn acquire_lock(&self) -> io::Result<LockGuard> {
+        std::fs::create_dir_all(&self.dir)?;
+        let path = self.lock_file();
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut f) => {
+                writeln!(f, "{}", std::process::id())?;
+                Ok(LockGuard {
+                    state_dir: self.dir.clone(),
+                })
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                let existing = std::fs::read_to_string(&path).unwrap_or_default();
+                let pid: u32 = existing.trim().parse().unwrap_or(0);
+                if pid != 0 && pid_alive(pid) {
+                    Err(io::Error::other(format!(
+                        "another af owns this state dir (pid {pid})"
+                    )))
+                } else {
+                    // Stale lock: the owner is gone. Reclaim it.
+                    std::fs::write(&path, format!("{}\n", std::process::id()))?;
+                    Ok(LockGuard {
+                        state_dir: self.dir.clone(),
+                    })
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// Held for the lifetime of a run; releasing it removes `<state_dir>/.lock`.
+#[derive(Debug)]
+pub struct LockGuard {
+    state_dir: PathBuf,
+}
+
+impl LockGuard {
+    pub fn state_dir(&self) -> &PathBuf {
+        &self.state_dir
+    }
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(self.state_dir.join(".lock"));
+    }
+}
+
+/// Liveness check with no extra dependency: `kill -0 <pid>` succeeds only
+/// while the process exists (and we may signal it).
+fn pid_alive(pid: u32) -> bool {
+    std::process::Command::new("sh")
+        .args(["-c", &format!("kill -0 {pid}")])
+        // The probe is expected to fail for stale pids; don't spam stderr.
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 pub fn now_ts() -> u64 {
