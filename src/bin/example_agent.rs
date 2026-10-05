@@ -8,6 +8,13 @@
 //! - `FAKE_AGENT_EXIT`: exit code (default 0)
 //! - `FAKE_AGENT_TOUCH`: file to write into the current directory (default `DONE.txt`)
 //! - `FAKE_AGENT_OUT`:   content to write (default a summary line)
+//! - `FAKE_AGENT_ENV` / `FAKE_AGENT_ENV_NAMES`: sandbox env probe (see below)
+//! - `FAKE_AGENT_TOUCH_FROM_MODEL`: when set (and `FAKE_AGENT_TOUCH` unset),
+//!   write `{model}.txt` instead — lets two workers with distinct `--model`s
+//!   produce distinct merged artifacts in a parallel-dispatch test.
+//! - `FAKE_AGENT_SLEEP_MS`: optional fixed delay before doing work, so E2E
+//!   tests can hold a task in the `running` state long enough to observe that
+//!   several tasks are genuinely in flight at the same instant.
 //!
 //! Like a real agent, it commits its work to the current branch so the
 //! orchestrator's merge actually carries the changes to the base branch.
@@ -15,18 +22,44 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let _ = std::env::args().skip(1).collect::<Vec<_>>(); // accept any args
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Optional `--model` value (worker selection): lets a test give each
+    // worker its own output file so two merged tasks leave two artifacts.
+    let model = args
+        .windows(2)
+        .find(|w| w[0] == "--model")
+        .and_then(|w| w.get(1))
+        .cloned();
     let exit: i32 = std::env::var("FAKE_AGENT_EXIT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
-    let touch = std::env::var("FAKE_AGENT_TOUCH").unwrap_or_else(|_| "DONE.txt".to_string());
+    // Output file: explicit `FAKE_AGENT_TOUCH` wins, else (opt-in) the model
+    // name, else the historical default.
+    let touch = std::env::var("FAKE_AGENT_TOUCH")
+        .ok()
+        .or_else(|| {
+            if std::env::var("FAKE_AGENT_TOUCH_FROM_MODEL").is_ok() {
+                model.map(|m| format!("{m}.txt"))
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "DONE.txt".to_string());
     let out = std::env::var("FAKE_AGENT_OUT")
         .unwrap_or_else(|_| "example-agent: task complete".to_string());
 
     if exit != 0 {
         eprintln!("example_agent: failing with exit {exit}");
         return ExitCode::from(exit.clamp(0, 255) as u8);
+    }
+    // Optional fixed delay so a test can observe several tasks running at
+    // once (parallel-dispatch E2E proof). Bounded and deterministically short.
+    if let Some(ms) = std::env::var("FAKE_AGENT_SLEEP_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms.min(2000)));
     }
     // Env probe (sandbox tests): dump `FAKE_AGENT_ENV_NAMES` to `FAKE_AGENT_ENV`
     // as `NAME=value` / `NAME=<unset>` lines so tests can assert what the agent
