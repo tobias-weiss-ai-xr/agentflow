@@ -42,15 +42,6 @@ THEN only one is dispatched; the other is held until the first finishes.
 WHEN task X and task Y declare disjoint globs
 THEN both may be dispatched concurrently.
 
-### Requirement: Retry with fresh branch
-
-A task SHALL allow up to `max_attempts` attempts (default from worker defaults). Each attempt SHALL use a newly created branch and worktree; a failed attempt SHALL NOT be retried on dirty state.
-
-#### Scenario: retry after gate failure
-
-WHEN a task's gate fails on attempt 1 and `max_attempts = 3`
-THEN the task is re-queued for a fresh attempt and runs at most 3 times total.
-
 ### Requirement: Deadlock detection
 
 When the scheduler has ready-queueable work only through tasks that are permanently `failed`, or when no task can make progress, `af run` SHALL exit cleanly with a non-zero status and a message naming the blocking tasks.
@@ -120,3 +111,39 @@ THEN scope enforcement passes and the attempt proceeds to the gate and merge.
 
 WHEN a task declares no scope
 THEN every changed file is accepted.
+
+### Requirement: Retry reuses verified agent work
+
+A task SHALL allow up to `max_attempts` attempts (default from worker
+defaults). When an attempt fails only at the acceptance gate, the attempt
+branch SHALL be kept (it carries the agent's committed, scope-clean work),
+and the next attempt SHALL attach to that branch and re-run ONLY the gate —
+the agent SHALL NOT be re-invoked while its verified work survives. A scope
+violation, agent failure, or merge failure SHALL discard the attempt branch,
+and the next attempt SHALL be a fresh agent run on a newly created branch.
+If the gate fails again on the gate-only reuse path, the branch SHALL be
+dropped so the following attempt is a fresh agent run.
+
+#### Scenario: gate failure retries only the gate
+
+GIVEN a task whose attempt 1 commits its agent work, passes the scope check, and fails only the gate
+WHEN the task is retried while the attempt branch still carries that committed work
+THEN the retry re-runs only the gate, the agent is not invoked again, and the task merges once the gate passes.
+
+#### Scenario: gate failure keeps the verified branch
+
+GIVEN a task whose agent committed its work and the gate failed
+WHEN the failed attempt is cleaned up
+THEN only the worktree directory is removed — the attempt branch survives carrying the agent's commits beyond the base branch.
+
+#### Scenario: a second gate failure falls back to a fresh attempt
+
+GIVEN a gate-only retry whose gate fails again with `max_attempts = 3`
+WHEN the next attempt starts
+THEN the task runs a total of 3 attempts with receipts `failed, failed, merged` — the second gate failure drops the branch so the final attempt is a fresh agent run that can merge.
+
+#### Scenario: attempts are bounded by max_attempts
+
+GIVEN a task whose agent fails on every attempt and `max_attempts = 2`
+WHEN the task runs to exhaustion
+THEN exactly 2 attempts are made and the task ends `failed`.
