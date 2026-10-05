@@ -31,7 +31,7 @@ will re-scope and re-dispatch.
 ## Acceptance gate — the orchestrator WILL run this
 
 ```sh
-bun install --silent && bun run typecheck && bun test
+{{ACCEPT_CMD}}
 ```
 
 You MUST run this command yourself before committing. If it fails, fix your
