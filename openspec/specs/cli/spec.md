@@ -126,3 +126,15 @@ THEN its COST cell shows `$<usd>` computed from its tokens with four decimals an
 GIVEN receipts naming workers that are not in `cfg.workers` alongside receipts for a configured worker
 WHEN `af cost` runs
 THEN it exits 0, shows `-` for the absent workers' rows, and prints one footnote line after the tables listing the absent names (sorted, deduplicated) with the attempt count.
+
+#### Scenario: A declared basis is never blank
+
+GIVEN workers that declare `params_b` or `price_per_mtok_usd` whose receipts record no `tokens` at all (the default output mode captures none)
+WHEN `af cost` runs
+THEN each declaring worker's COST cell still shows its declared rate — `N.NNx` relative to the cheapest declaring worker, or `$<price>/Mtok` for a declared price, unit-suffixed so a rate is never misread as a spend — because a declared rate is a property of the worker and not of the tokens that happened to be recorded; only a worker declaring neither basis shows `-`.
+
+#### Scenario: The interrupted placeholder is not a missing worker
+
+GIVEN an `interrupted` receipt whose `worker` is the placeholder `unknown` (the startup heal cannot know which worker a killed attempt was running)
+WHEN `af cost` runs
+THEN the report shows the `INTERRUPTED` line for that attempt but does NOT footnote `unknown` as a worker absent from the config, while a receipt naming a worker that genuinely is not in `cfg.workers` is still footnoted.

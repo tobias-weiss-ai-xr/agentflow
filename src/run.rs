@@ -1,6 +1,14 @@
 //! Run: the dispatch loop (poll → reap → dispatch) and query commands used
 //! by the CLI (spec: cli, scheduling, state).
 
+/// The `worker` recorded on a receipt when the worker genuinely is not
+/// knowable. The startup heal writes it for an attempt that a killed
+/// orchestrator left `running`: the task state does not persist which worker
+/// was running, and inventing one would be a lie in the cost ledger. It is
+/// agentflow admitting ignorance — NOT a worker name — so the cost report
+/// must never treat it as a worker that went missing from the config.
+pub const UNKNOWN_WORKER: &str = "unknown";
+
 use crate::config::{Config, Settings, TaskState};
 use crate::cost::{basis as declared_basis, estimate_usd, size_ratio, Basis};
 use crate::execute::{self, ExecCtx, Outcome};
@@ -744,8 +752,8 @@ fn heal_stale_attempt(
             attempt,
             // The worker is not persisted in the task state, so the dead
             // attempt's worker is unknowable at heal time.
-            worker: "unknown".to_string(),
-            model: "unknown".to_string(),
+            worker: UNKNOWN_WORKER.to_string(),
+            model: UNKNOWN_WORKER.to_string(),
             wall_clock_s: 0.0,
             tokens: None,
             ts: crate::state::now_ts(),
@@ -1163,18 +1171,28 @@ fn basis_line(bases: &[(String, Option<Basis>)]) -> String {
     }
 }
 
-/// The COST cell for one WORKER row: real dollars (`$` + 4 decimals) from
-/// a declared price via [`estimate_usd`]; a relative RATE (`N.NNx`, 2
-/// decimals — a PROXY, never a `$`) from a declared `params_b` via
-/// [`size_ratio`]; `-` when the worker declares neither basis, is absent
-/// from `cfg.workers`, or its receipts record no tokens (legacy receipts).
+/// The COST cell for one WORKER row. A DECLARED basis always renders
+/// something — the rate a worker declares is a property of the WORKER, not
+/// of whether its receipts happened to record tokens (the default output
+/// mode records none), so a token-less worker must not blank the cell:
+///
+/// * declared `price_per_mtok_usd` + tokens → real dollars (`$` + 4
+///   decimals) for the worker's whole recorded spend, via [`estimate_usd`];
+/// * declared `price_per_mtok_usd`, no tokens recorded → the declared RATE,
+///   unit-suffixed (`$0.6000/Mtok`) so it can never be misread as a spend;
+/// * declared `params_b` → a relative RATE (`N.NNx`, 2 decimals — a PROXY,
+///   never a `$`) via [`size_ratio`], whatever the token count;
+/// * nothing declared (or absent from `cfg.workers`) → `-`.
 fn worker_cost_cell(basis: Option<Basis>, tokens: Option<u64>, all_declared: &[Basis]) -> String {
-    match (basis, tokens) {
-        (Some(Basis::Priced(price)), Some(t)) => format!("${:.4}", estimate_usd(t, price)),
-        (Some(Basis::Sized(params)), Some(t)) if t > 0 => {
+    match basis {
+        Some(Basis::Sized(params)) => {
             size_ratio(params, all_declared).map_or_else(|| "-".into(), |r| format!("{r:.2}x"))
         }
-        _ => "-".into(),
+        Some(Basis::Priced(price)) => match tokens {
+            Some(t) => format!("${:.4}", estimate_usd(t, price)),
+            None => format!("${price:.4}/Mtok"),
+        },
+        None => "-".into(),
     }
 }
 
@@ -1463,7 +1481,10 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
     // edits, so this is a NOTE — never an error, never blocking the report.
     let mut unknown: BTreeMap<&str, usize> = BTreeMap::new();
     for r in &selected {
-        if !bases.iter().any(|(name, _)| name == &r.worker) {
+        // `UNKNOWN_WORKER` is the heal's placeholder for "the worker of this
+        // killed attempt is unknowable", not a worker that vanished from the
+        // config: the INTERRUPTED line already accounts for that attempt.
+        if r.worker != UNKNOWN_WORKER && !bases.iter().any(|(name, _)| name == &r.worker) {
             *unknown.entry(r.worker.as_str()).or_insert(0) += 1;
         }
     }
@@ -2300,15 +2321,28 @@ mod tests {
             worker_cost_cell(Some(Basis::Sized(8.0)), Some(1), &all),
             "2.00x"
         );
-        // Legacy receipts (no tokens) and a zero-token sum degrade to `-`.
-        assert_eq!(worker_cost_cell(Some(Basis::Priced(2.0)), None, &all), "-");
-        assert_eq!(worker_cost_cell(Some(Basis::Sized(8.0)), None, &all), "-");
+        // A DECLARED basis is never blanked by a missing token count: the
+        // default output mode records none, and the rate is a property of the
+        // worker — otherwise a text-mode campaign shows `-` in every cell, the
+        // very question the column answers. A zero-token sum keeps its rate
+        // too: it is a rate, not a spend.
+        assert_eq!(
+            worker_cost_cell(Some(Basis::Sized(8.0)), None, &all),
+            "2.00x"
+        );
         assert_eq!(
             worker_cost_cell(Some(Basis::Sized(8.0)), Some(0), &all),
-            "-"
+            "2.00x"
+        );
+        // With no tokens a declared price shows the declared RATE — with a
+        // unit, so it can never be misread as a spend figure.
+        assert_eq!(
+            worker_cost_cell(Some(Basis::Priced(2.0)), None, &all),
+            "$2.0000/Mtok"
         );
         // No declared basis (or a worker absent from the config): `-`.
         assert_eq!(worker_cost_cell(None, Some(1), &all), "-");
+        assert_eq!(worker_cost_cell(None, None, &all), "-");
         // No Sized basis to relate to: never invent a reference rate.
         assert_eq!(worker_cost_cell(Some(Basis::Sized(8.0)), Some(1), &[]), "-");
     }

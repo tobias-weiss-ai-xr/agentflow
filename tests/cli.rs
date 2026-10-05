@@ -709,6 +709,81 @@ fn a_declared_price_beats_the_params_proxy_in_the_cost_report() {
     );
 }
 
+/// A DECLARED basis must never render as `-`. The rate a worker declares is
+/// a property of the WORKER, not of whether its receipts happened to record
+/// tokens — and the default output mode records none. Without this, a
+/// campaign whose workers run in text mode shows `-` in every COST cell,
+/// which is precisely the question the column exists to answer ("is the big
+/// model eating the budget?"). A declared price with no tokens shows the
+/// declared RATE, unit-suffixed so it can never be misread as a spend.
+// spec: cli/cost-report#a-declared-basis-is-never-blank
+#[test]
+fn cost_report_shows_a_declared_rate_even_when_no_tokens_were_recorded() {
+    let tasks = r#"{ "tasks": [ { "id": "A", "title": "a", "accept": "true" } ] }"#;
+    let workers = r#"{ "defaults": { "max_attempts": 1, "accept_timeout_s": 10 },
+        "workers": [
+            { "name": "small", "provider": "openai", "model": "flash", "params_b": 8, "enabled": true, "cli": "unused" },
+            { "name": "big", "provider": "openai", "model": "glm", "params_b": 400, "enabled": true, "cli": "unused" },
+            { "name": "priced", "provider": "openai", "model": "cheap", "price_per_mtok_usd": 0.6, "enabled": true, "cli": "unused" },
+            { "name": "nobasis", "provider": "openai", "model": "m", "enabled": true, "cli": "unused" }
+        ] }"#;
+    let cli = Cli::new_with(tasks, workers);
+    let (_, st) = cli.settings();
+    let store = Store::new(st.state_dir.clone());
+    // EVERY attempt is a legacy/text-mode receipt: no tokens anywhere, which
+    // is exactly the case that used to blank the whole column.
+    for (worker, ts) in [
+        ("small", 1_000u64),
+        ("big", 2_000),
+        ("priced", 3_000),
+        ("nobasis", 4_000),
+    ] {
+        store
+            .append_receipt(&Receipt {
+                task: "A".into(),
+                attempt: 1,
+                worker: worker.into(),
+                model: "m".into(),
+                wall_clock_s: 1.0,
+                tokens: None,
+                ts,
+                outcome: "merged".into(),
+                error: None,
+            })
+            .unwrap();
+    }
+
+    let (code, out) = cli.af(&["cost"]);
+    assert_eq!(code, 0, "{out}");
+    // 400B against the cheapest declared 8B basis is exactly 50x — the
+    // assumption the operator declared, visible with no token data at all.
+    for (worker, cell) in [("big", "50.00x"), ("small", "1.00x")] {
+        assert!(
+            out.contains(&format!(
+                "{:<14} {:<11} {:.2} {}",
+                worker, "1/1", 1.00, cell
+            )),
+            "{worker} must show its declared rate {cell}: {out}"
+        );
+    }
+    // A declared price with no tokens shows the declared RATE (with its unit),
+    // never a `-` and never a bare `$` that would read as a spend figure.
+    assert!(
+        out.contains("$0.6000/Mtok"),
+        "a priced worker with no tokens shows its declared rate: {out}"
+    );
+    // The invariant is "declared means rendered", never "always invented":
+    // a worker declaring NOTHING keeps the placeholder.
+    let nobasis = out
+        .lines()
+        .find(|l| l.starts_with("nobasis"))
+        .unwrap_or_else(|| panic!("nobasis worker row: {out}"));
+    assert!(
+        nobasis.trim_end().ends_with('-'),
+        "a worker declaring no basis shows the placeholder: {nobasis}"
+    );
+}
+
 /// Historical receipts outlive config edits: a receipt naming a worker that
 /// is no longer in workers.json renders as `-` and gets ONE footnote line
 /// naming those workers (sorted, deduped, with the attempt count) — a note,

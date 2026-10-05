@@ -179,6 +179,11 @@ fn execute_attempt(
     // Token usage lifted out of the agent's JSON transcript, when the
     // worker opted into json output mode. Every failure path that did not
     // run the agent reports `None`.
+    // The tokens the attempt spent, parsed from the CLI's JSON transcript
+    // (json output mode). Once the agent has run, this is the cost ledger's
+    // record of the attempt, so EVERY failure from here on must carry it: a
+    // scope violation, a gate failure or a merge conflict still spent it —
+    // and those are the most expensive failures of all.
     let mut tokens: Option<u64> = None;
     // Effect sandwich, boundary 1 (commit intent BEFORE the effect): the
     // attempt is live — worktree ready, agent about to spawn. A crash from
@@ -300,14 +305,14 @@ fn execute_attempt(
             Ok(b) => b,
             Err(e) => {
                 cleanup(&repo, &wt);
-                return (Outcome::Failed(e), None);
+                return (Outcome::Failed(e), tokens);
             }
         };
         let changed = match changed_paths(&wt_path, &base_branch) {
             Ok(c) => c,
             Err(e) => {
                 cleanup(&repo, &wt);
-                return (Outcome::Failed(e), None);
+                return (Outcome::Failed(e), tokens);
             }
         };
         let violations = scope_violations(&changed, &task.scope);
@@ -324,7 +329,7 @@ fn execute_attempt(
                     violations.join(", "),
                     task.scope.join(", ")
                 )),
-                None,
+                tokens,
             );
         }
     }
@@ -374,7 +379,7 @@ fn execute_attempt(
                             .unwrap_or_else(|| "-".into()),
                         gate_out.combined().trim()
                     )),
-                    None,
+                    tokens,
                 );
             }
             // Effect sandwich, boundary 3 (commit outcome AFTER the gate
@@ -389,7 +394,7 @@ fn execute_attempt(
     if let Err(e) = worktree::merge(&repo, &wt.branch, &ctx.merge_locks, &msg) {
         append(&format!("-- merge failed: {e}"));
         cleanup(&repo, &wt);
-        return (Outcome::Failed(e), None);
+        return (Outcome::Failed(e), tokens);
     }
     append("-- merged --");
     cleanup(&repo, &wt);

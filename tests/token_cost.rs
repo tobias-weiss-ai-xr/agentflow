@@ -156,6 +156,46 @@ fn workers_json(output: Option<&str>) -> String {
     )
 }
 
+/// The receipt is the cost ledger: a failure that happens AFTER the agent ran
+/// must still record the tokens the attempt spent. Without this, exactly the
+/// most expensive failures — a scope violation, a gate failure, a merge
+/// conflict — are the ones the COST column cannot see, so their spend
+/// silently disappears from the ledger.
+// spec: config/worker-schema-loading#json-output-mode-captures-token-usage
+#[test]
+fn a_failed_attempt_still_records_the_tokens_it_spent() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    let f = fixture(&tasks_json(), &workers_json(Some("json")), "failed-tokens");
+    std::env::set_var("FAKE_AGENT_JSON", "1");
+    std::env::set_var("FAKE_AGENT_JSON_TOKENS", KNOWN_TOTAL.to_string());
+    // The stub commits a file OUTSIDE the task's declared scope, so the
+    // attempt fails scope enforcement AFTER the agent spent its tokens.
+    std::env::set_var("FAKE_AGENT_TOUCH", "rogue.txt");
+
+    let _ = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
+
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    let failed: Vec<_> = receipts.iter().filter(|r| r.task == "A").collect();
+    assert!(
+        !failed.is_empty(),
+        "the attempt left a receipt: {receipts:?}"
+    );
+    let r = failed[0];
+    assert_eq!(
+        r.outcome, "failed",
+        "the scope violation failed the attempt"
+    );
+    assert!(
+        r.error.as_deref().unwrap_or("").contains("out of scope"),
+        "the reason is the scope violation: {r:?}"
+    );
+    assert_eq!(
+        r.tokens,
+        Some(KNOWN_TOTAL),
+        "the tokens a failing attempt spent still belong in the ledger: {receipts:?}"
+    );
+}
+
 /// End-to-end: `output: "json"` turns the agent CLI's JSON Lines transcript
 /// into (a) a receipt with REAL token usage and (b) a human-readable task
 /// log — while a worker that omits `output` (the default text mode) still

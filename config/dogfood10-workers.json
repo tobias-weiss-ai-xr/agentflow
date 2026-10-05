@@ -1,0 +1,35 @@
+{
+  "_meta": {
+    "project": "agentflow-dogfood10",
+    "note": "params_b values below are ILLUSTRATIVE OPERATOR ASSUMPTIONS for this campaign, not vendor-published numbers: they exist so the new cost-basis plumbing is exercised end to end (declared basis, af validate warning path, and a non-trivial relative ratio in af cost)."
+  },
+  "defaults": {
+    "accept_timeout_s": 3000,
+    "max_attempts": 6,
+    "retry_delay_s": 15,
+    "agent_timeout_s": 4200
+  },
+  "workers": [
+    {
+      "name": "opencode-go",
+      "provider": "opencode-go",
+      "model": "deepseek-v4-flash",
+      "api_base": "",
+      "api_key_env": "",
+      "enabled": true,
+      "cli": "pi",
+      "output": "json",
+      "params_b": 32
+    },
+    {
+      "name": "zai",
+      "provider": "zai",
+      "model": "glm-5.2",
+      "api_base": "",
+      "api_key_env": "",
+      "enabled": true,
+      "cli": "pi",
+      "params_b": 400
+    }
+  ]
+}

@@ -102,7 +102,11 @@ receipts only.
 
 The table also carries a `TOKENS` column: it sums the `tokens` recorded on
 the selected receipts and shows `-` when they carry none, so a report over
-legacy receipts reads exactly as it did before the column existed.
+legacy receipts reads exactly as it did before the column existed. In JSON
+output mode the receipt is the cost ledger, so a FAILED attempt records the
+tokens it spent too — a scope violation, a gate failure or a merge conflict
+happens after the agent has already run, and those are the most expensive
+failures of all.
 
 Both tables also carry a `COST` column — an estimate of expense derived
 from the basis each worker DECLARES (see `params_b` / `price_per_mtok_usd`
@@ -111,13 +115,17 @@ budget?" even when no provider reports a price. A worker with a declared
 price shows real dollars (`$` + four decimals, computed from its recorded
 tokens — summed over a task row's attempts); a worker with only `params_b`
 shows its relative RATE (`1.25x` — a task row spanning several workers
-shows the token-weighted mean); and `-` appears when nothing is declared,
-the receipts carry no tokens, or the receipt names a worker that is no
-longer in `workers.json`. One `cost basis:` line above the tables states
-the basis in force — declared prices, the `params_b` proxy (relative;
-cheapest declared worker = `1.00x`), or none — so a proxy can never be
-misread as money. Receipts naming workers absent from the config are
-listed in one `note:` footnote after the tables (sorted, deduplicated
+shows the token-weighted mean); and `-` appears when the worker declares
+NEITHER basis, or when the receipt names a worker that is no longer in
+`workers.json`. A declared basis is never blanked by missing token data:
+the default output mode records no tokens, so a declaring worker shows its
+rate (`1.25x`) or its declared price (`$0.6000/Mtok`, unit-suffixed so a
+rate is never misread as a spend) rather than `-`. One `cost basis:` line
+above the tables states the basis in force — declared prices, the
+`params_b` proxy (relative; cheapest declared worker = `1.00x`), or none —
+so a proxy can never be misread as money. Receipts naming workers absent
+from the config are listed in one `note:` footnote after the tables
+(sorted, deduplicated
 names with the attempt count): historical receipts routinely outlive
 config edits, so this is a note — never an error.
 

@@ -219,6 +219,54 @@ fn a_killed_attempt_is_recorded_as_interrupted_and_excluded_from_trust() {
     );
 }
 
+/// The heal writes the placeholder `unknown` for an attempt whose worker was
+/// never persisted. That is agentflow admitting ignorance, NOT a worker that
+/// went missing from the config, so the cost report must not footnote it as
+/// one — the INTERRUPTED line already accounts for the attempt. A worker that
+/// genuinely is gone from the config must still be footnoted.
+// spec: cli/cost-report#the-interrupted-placeholder-is-not-a-missing-worker
+// spec: cli/cost-report#receipts-naming-a-worker-absent-from-the-config-are-footnoted
+// spec: cli/cost-report#interrupted-attempts-are-reported-distinctly
+#[test]
+fn the_interrupted_placeholder_worker_is_not_footnoted_as_missing() {
+    let f = fixture(&tasks_json(), &worker_json(1));
+    let store = Store::new(f.st.state_dir.clone());
+    store
+        .append_receipt(&receipt("A", 1, run::UNKNOWN_WORKER, "interrupted", 1))
+        .unwrap();
+
+    let out = run::cost(&f.cfg, &f.st, &CostFilter::default());
+    assert!(
+        out.contains("INTERRUPTED:"),
+        "the attempt is still accounted for:\n{out}"
+    );
+    assert!(
+        !out.contains("note:"),
+        "the placeholder is not a worker that went missing:\n{out}"
+    );
+
+    // A worker that really is absent from the config still gets the note —
+    // and the placeholder is never mixed into it.
+    store
+        .append_receipt(&receipt("A", 2, "ghost", "merged", 2))
+        .unwrap();
+    let out = run::cost(&f.cfg, &f.st, &CostFilter::default());
+    let note = out
+        .lines()
+        .find(|l| l.starts_with("note:"))
+        .unwrap_or_else(|| panic!("a note for the absent worker:\n{out}"));
+    assert!(note.contains("ghost"), "the real stranger is named: {note}");
+    assert!(
+        !note.contains(run::UNKNOWN_WORKER),
+        "the placeholder must never be named as missing: {note}"
+    );
+    assert_eq!(
+        out.lines().filter(|l| l.starts_with("note:")).count(),
+        1,
+        "exactly one note line:\n{out}"
+    );
+}
+
 /// The predicate is the single source of truth for the rule: only `merged`
 /// and `failed` are verdicts on the worker.
 // spec: state/cost-receipts#interrupted-attempts-are-recorded-as-non-verdicts
