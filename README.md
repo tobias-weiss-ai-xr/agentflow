@@ -147,6 +147,16 @@ plus a `workers` list: `name`, `provider`, `model`, `api_base`, `api_key_env`,
 `enabled`, `cli` (agent CLI binary; default `pi`). Each worker runs at most one
 task at a time.
 
+`retry_delay_s` (default `0`, strictly opt-in) is the backoff between
+attempts of the SAME task: after a failed attempt that will be retried,
+the task waits this many seconds before its next attempt starts. The wait
+rides the retry path only — first attempts, tasks that merge on the first
+try, and every other worker's dispatches are never delayed (each paced
+retry is announced in the run log). It mainly helps against provider rate
+limits; since the agent run dominates a campaign's cost, an unexplained
+pause per retry is otherwise pure added wall-clock, so `0` (no delay) is
+the default and a campaign that wants backoff sets it explicitly.
+
 Tasks accept an optional `repo` field: `""` (default) or `"main"` target the
 main repo (`TF_REPO_DIR`); other names must appear in `repos.json` (next to
 tasks.json or via `--repos`/`TF_REPOS_JSON`) — e.g.
@@ -232,7 +242,7 @@ to two or more workers. Here is a full two-repo / two-worker campaign.
   "defaults": {
     "accept_timeout_s": 600,
     "max_attempts": 3,
-    "retry_delay_s": 30,
+    "retry_delay_s": 0,
     "agent_timeout_s": 3600
   },
   "workers": [

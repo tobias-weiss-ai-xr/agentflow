@@ -104,7 +104,9 @@ fn config_loading_and_validation_contract() {
     assert!(cfg.by_id["A"].gate_replay, "gate_replay defaults to true");
     assert_eq!(cfg.by_id["A"].priority.rank(), 0, "priority defaults to 0");
     assert_eq!(cfg.defaults.max_attempts, 3);
-    assert_eq!(cfg.defaults.retry_delay_s, 30);
+    // 0 = opt-in pacing (r9-retry-pacing): an omitted retry_delay_s means
+    // no delay between attempts — the legacy behaviour.
+    assert_eq!(cfg.defaults.retry_delay_s, 0);
 
     // An explicit value WINS over the default: the two files differ only in
     // that one field (expanded in defaults_apply_and_explicit_values_win).
@@ -214,7 +216,7 @@ fn defaults_apply_and_explicit_values_win() {
     let wd_absent = load(&t_wd_absent, &w_wd_absent).unwrap();
     let wd_present = load(&t_wd_present, &w_wd_present).unwrap();
     assert_eq!(wd_absent.defaults.max_attempts, 3);
-    assert_eq!(wd_absent.defaults.retry_delay_s, 30);
+    assert_eq!(wd_absent.defaults.retry_delay_s, 0);
     assert_eq!(wd_absent.defaults.accept_timeout_s, 600);
     assert_eq!(wd_absent.defaults.agent_timeout_s, 3600);
     assert_eq!(wd_present.defaults.max_attempts, 7);
@@ -235,7 +237,7 @@ fn defaults_apply_and_explicit_values_win() {
             wd.retry_delay_s,
             wd.agent_timeout_s
         ),
-        (600, 3, 30, 3600)
+        (600, 3, 0, 3600)
     );
     let w = Worker::default();
     assert!(w.enabled, "a worker defaults to enabled");

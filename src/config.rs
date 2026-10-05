@@ -144,6 +144,16 @@ impl Default for Worker {
 pub struct WorkerDefaults {
     pub accept_timeout_s: u64,
     pub max_attempts: u32,
+    /// Backoff BETWEEN attempts of the same task (`retry_delay_s`): after
+    /// a failed attempt that will be retried, the task waits this many
+    /// seconds before its next attempt starts (see run.rs's dispatch
+    /// thread — the wait rides the retry path only, so first attempts,
+    /// first-try merges and other workers' dispatches are never delayed).
+    ///
+    /// Default **0** = no delay, strictly OPT-IN: agentflow's cost is
+    /// dominated by the agent run itself, so an unexplained 30s pause per
+    /// retry is pure added wall-clock, and backoff only helps against
+    /// provider rate limits — a campaign that wants it sets it explicitly.
     pub retry_delay_s: u64,
     pub agent_timeout_s: u64,
 }
@@ -153,7 +163,10 @@ impl Default for WorkerDefaults {
         WorkerDefaults {
             accept_timeout_s: 600,
             max_attempts: 3,
-            retry_delay_s: 30,
+            // Opt-in backoff (see the field doc above): 0 keeps the legacy
+            // no-delay behaviour for every existing workers.json that omits
+            // the field; one that SETS it keeps meaning what it says.
+            retry_delay_s: 0,
             agent_timeout_s: 3600,
         }
     }
