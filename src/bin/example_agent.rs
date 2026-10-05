@@ -15,6 +15,9 @@
 //! - `FAKE_AGENT_SLEEP_MS`: optional fixed delay before doing work, so E2E
 //!   tests can hold a task in the `running` state long enough to observe that
 //!   several tasks are genuinely in flight at the same instant.
+//! - `FAKE_AGENT_HANG_MS`: optional delay BEFORE any output at all (capped
+//!   like `FAKE_AGENT_SLEEP_MS`), so a test can present a genuinely stalled
+//!   agent — silent on stdout/stderr far longer than a stall window.
 //!
 //! Like a real agent, it commits its work to the current branch so the
 //! orchestrator's merge actually carries the changes to the base branch.
@@ -52,6 +55,16 @@ fn main() -> ExitCode {
     if exit != 0 {
         eprintln!("example_agent: failing with exit {exit}");
         return ExitCode::from(exit.clamp(0, 255) as u8);
+    }
+    // Watchdog-test knob: hang BEFORE writing any output — the stub stays
+    // silent on stdout/stderr (an "agent stopped producing output" stall),
+    // bounded exactly like FAKE_AGENT_SLEEP_MS so no test can ask for an
+    // unbounded sleep.
+    if let Some(ms) = std::env::var("FAKE_AGENT_HANG_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms.min(2000)));
     }
     // Optional fixed delay so a test can observe several tasks running at
     // once (parallel-dispatch E2E proof). Bounded and deterministically short.

@@ -94,6 +94,7 @@ fn fixture(tasks_json: &str, workers_json: &str) -> Fixture {
         workers_file: config_dir.join("workers.json"),
         prompt_file: dir.join("no-template.md"),
         agent_timeout_s: 60,
+        agent_stall_s: 0,
         sandbox_cmd: vec![],
     };
     Fixture { dir, repo, cfg, st }

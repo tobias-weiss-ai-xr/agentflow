@@ -219,13 +219,23 @@ fn execute_attempt(
         let (agent_cmd, agent_args) = argv.split_first().unwrap();
         let (env_pairs, env_allow) = agent_env(worker, &|k| std::env::var(k).ok());
         append("-- agent --");
-        let agent_out = crate::subprocess::run(
+        // Stall watchdog (agent CLI ONLY — git and gate calls stay on plain
+        // `run`: a silent gate is not necessarily a stalled one, and their
+        // timeout contracts are pinned by tests): 0 = disabled, exactly the
+        // legacy total-timeout-only behaviour.
+        let stall = if ctx.st.agent_stall_s == 0 {
+            None
+        } else {
+            Some(Duration::from_secs(ctx.st.agent_stall_s))
+        };
+        let agent_out = crate::subprocess::run_with_stall(
             agent_cmd,
             agent_args,
             Some(&wt_path),
             &env_pairs,
             crate::subprocess::EnvMode::Allowlist(env_allow),
             Duration::from_secs(ctx.st.agent_timeout_s),
+            stall,
         );
         let out_lines = agent_out.combined();
         if !out_lines.is_empty() {
@@ -233,14 +243,28 @@ fn execute_attempt(
         }
         if !agent_out.passed() {
             cleanup(&repo, &wt);
-            return Outcome::Failed(format!(
-                "agent exited {:?} (code {})",
-                agent_out.kind,
-                agent_out
-                    .code
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "-".into())
-            ));
+            // Same single failure path, distinct diagnosis: a stall names
+            // the configured window (it is a different disease than "ran
+            // out of total time"), every other failure keeps the
+            // historical "agent exited …" shape that callers match on.
+            let reason = if agent_out.kind == crate::subprocess::CmdKind::Stalled {
+                format!(
+                    "agent stalled: produced no output for {}s (stall window, TF_AGENT_STALL_S={}); killed before agent_timeout_s={}",
+                    ctx.st.agent_stall_s,
+                    ctx.st.agent_stall_s,
+                    ctx.st.agent_timeout_s
+                )
+            } else {
+                format!(
+                    "agent exited {:?} (code {})",
+                    agent_out.kind,
+                    agent_out
+                        .code
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "-".into())
+                )
+            };
+            return Outcome::Failed(reason);
         }
     }
 
@@ -710,6 +734,7 @@ model {{MODEL}}/{{PROVIDER}}
             workers_file: dir.join("w.json"),
             prompt_file: tpl.clone(),
             agent_timeout_s: 60,
+            agent_stall_s: 0,
             sandbox_cmd: vec![],
         };
         let task = crate::config::Task {

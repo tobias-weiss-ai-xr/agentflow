@@ -315,6 +315,14 @@ pub struct Settings {
     pub workers_file: PathBuf,
     pub prompt_file: PathBuf,
     pub agent_timeout_s: u64,
+    /// Stall watchdog window for the agent CLI (`TF_AGENT_STALL_S`), in
+    /// seconds. **0 = DISABLED** (the default): the agent is bounded only
+    /// by `agent_timeout_s`, exactly the legacy behaviour. Any non-zero
+    /// value kills an agent that has produced no output (stdout or
+    /// stderr) for this many seconds — classified `CmdKind::Stalled` —
+    /// so a hung agent stops burning the clock (and paid tokens) instead
+    /// of sitting out the whole total timeout.
+    pub agent_stall_s: u64,
     /// Whitespace-split command prefix wrapped around the agent argv
     /// (`TF_SANDBOX_CMD`, e.g. "firejail --net=none"). Empty = no wrapper.
     pub sandbox_cmd: Vec<String>,
@@ -349,6 +357,7 @@ impl Settings {
             workers_file: PathBuf::from(env_or("TF_WORKERS_JSON", "config/workers.json")),
             prompt_file: PathBuf::from("prompts/worker.md"),
             agent_timeout_s: env_or_int("TF_AGENT_TIMEOUT_S", 3600),
+            agent_stall_s: env_or_int("TF_AGENT_STALL_S", 0),
             sandbox_cmd: env_or("TF_SANDBOX_CMD", "")
                 .split_whitespace()
                 .map(str::to_string)

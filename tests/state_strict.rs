@@ -61,6 +61,7 @@ fn fixture(dir: &Path) -> (config::Config, Settings) {
         workers_file: workers,
         prompt_file: dir.join("no-template.md"),
         agent_timeout_s: 60,
+        agent_stall_s: 0,
         sandbox_cmd: vec![],
     };
     (cfg, st)
