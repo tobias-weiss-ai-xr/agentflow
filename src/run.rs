@@ -142,6 +142,10 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     };
     let poll = opts.poll_secs.unwrap_or(st.poll_secs);
     let max_attempts = cfg.defaults.max_attempts;
+    let retry_delay_s = cfg.defaults.retry_delay_s;
+    // --once dispatches no second attempt, so it never paces one either
+    // (the wait would only delay the exit).
+    let pace_retries = !opts.once;
 
     // --- self-heal: remove orphan worktrees from dead attempts ---
     // A corrupt ledger is an ERROR, never a fresh campaign: refusing here is
@@ -380,6 +384,43 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                 );
                 std::thread::spawn(move || {
                     let out = execute::execute_task(&ctx2, &wclone, &id, attempt, &log_path);
+                    // Retry pacing (`retry_delay_s`, default 0): after a
+                    // FAILED attempt that will be retried — `attempt <
+                    // max_attempts`; reap will count this attempt and send
+                    // the task back to Ready — wait the configured backoff
+                    // before reporting the outcome, so the next attempt
+                    // cannot start until it has elapsed. The wait lives in
+                    // THIS attempt's thread, on the retry path ONLY:
+                    //   * a first attempt is never delayed (it starts on
+                    //     dispatch, and a task that merges first try never
+                    //     reaches this branch), and
+                    //   * the dispatcher loop never sleeps for it — round 8
+                    //     removed the global poll sleep, and a global wait
+                    //     would stall every worker slot and re-introduce
+                    //     that idle time. With several workers in flight
+                    //     the wait belongs to the retrying task, so the
+                    //     other slots keep dispatching.
+                    if pace_retries
+                        && retry_delay_s > 0
+                        && attempt < max_attempts
+                        && matches!(out, Outcome::Failed(_))
+                    {
+                        // Observable: one clear line naming the task and
+                        // the seconds, in the run log and the task's own
+                        // log, so a puzzling pause is explainable.
+                        println!(
+                            "  \u{23f8} {id} attempt {attempt} failed — pacing retry: waiting {retry_delay_s}s (retry_delay_s)"
+                        );
+                        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&log_path)
+                        {
+                            let _ = writeln!(
+                                f,
+                                "af: pacing retry — waiting {retry_delay_s}s (retry_delay_s) before attempt {}",
+                                attempt + 1
+                            );
+                        }
+                        std::thread::sleep(Duration::from_secs(retry_delay_s));
+                    }
                     let _ = tx2.send((id, wname, out));
                 });
             }
