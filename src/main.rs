@@ -13,14 +13,30 @@ USAGE:
   af status    [--json]
   af api       status [--json] | results --task ID
   af attach    ID
-  af cost      [--task ID]
+  af cost      [--task ID] [--last] [--since DATE|UNIX_TS]
   af clean     [--dry-run]
   af validate  [--worker NAME] [--tasks FILE] [--workers FILE]
   af --help | --version
 
+COST REPORT WINDOWS (af cost):
+  --last                aggregate only the most recent receipt per task:
+                        the one with the greatest ts, ties broken by the
+                        greater attempt number — retries are not
+                        double-counted. ATTEMPTS is 1 per task.
+  --since DATE|UNIX_TS  aggregate only receipts with ts >= the instant;
+                        DATE is YYYY-MM-DD (UTC midnight) or a bare unix
+                        timestamp. Applied before --last, so
+                        `--last --since D` = the latest attempt per task
+                        since D.
+  The windows compose with each other and with --task ID (which narrows
+  the table rows); the TOTAL line and the per-worker trust block are
+  always computed over the selected receipts only. Plain `af cost`
+  totals every attempt of every task.
+
 ENV: TF_REPO_DIR, TF_STATE_DIR, TF_MAX_PARALLEL, TF_BRANCH_PREFIX, TF_POLL,
      TF_GATE_ENV, TF_TASKS_JSON, TF_WORKERS_JSON, TF_AGENT_TIMEOUT_S";
 
+#[derive(Debug)]
 struct Args {
     cmd: String,
     once: bool,
@@ -32,6 +48,8 @@ struct Args {
     tasks_file: Option<PathBuf>,
     workers_file: Option<PathBuf>,
     repos_file: Option<PathBuf>,
+    last: bool,
+    since: Option<u64>,
 }
 
 fn parse(argv: &[String]) -> Result<Args, String> {
@@ -46,6 +64,8 @@ fn parse(argv: &[String]) -> Result<Args, String> {
         tasks_file: None,
         workers_file: None,
         repos_file: None,
+        last: false,
+        since: None,
     };
     let mut it = argv.iter();
     a.cmd = it.next().cloned().unwrap_or_default();
@@ -79,6 +99,11 @@ fn parse(argv: &[String]) -> Result<Args, String> {
             }
             "--repos" => {
                 a.repos_file = Some(PathBuf::from(it.next().ok_or("--repos needs a value")?))
+            }
+            "--last" => a.last = true,
+            "--since" => {
+                let v = it.next().ok_or("--since needs a value")?;
+                a.since = Some(run::parse_since(v).map_err(|e| format!("--since: {e}"))?);
             }
             other if other.starts_with('-') => return Err(format!("unknown flag: {other}")),
             other => {
@@ -202,7 +227,12 @@ fn main() -> ExitCode {
             run::attach(&st, &id)
         }
         "cost" => {
-            println!("{}", run::cost(&cfg, &st, args.task.as_deref()));
+            let filter = run::CostFilter {
+                task: args.task.clone(),
+                last: args.last,
+                since: args.since,
+            };
+            println!("{}", run::cost(&cfg, &st, &filter));
             0
         }
         "clean" => run::clean(&cfg, &st, args.dry_run),
@@ -286,5 +316,43 @@ mod tests {
     #[test]
     fn parse_rejects_unknown_flag() {
         assert!(parse(&["run".to_string(), "--nope".to_string()]).is_err());
+    }
+
+    #[test]
+    fn parse_cost_window_flags() {
+        let a = parse(&[
+            "cost".to_string(),
+            "--last".to_string(),
+            "--since".to_string(),
+            "2024-01-01".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(a.cmd, "cost");
+        assert!(a.last);
+        assert_eq!(a.since, Some(1_704_067_200), "YYYY-MM-DD is UTC midnight");
+
+        let a = parse(&[
+            "cost".to_string(),
+            "--since".to_string(),
+            "1700000000".to_string(),
+        ])
+        .unwrap();
+        assert!(!a.last);
+        assert_eq!(a.since, Some(1_700_000_000), "bare unix timestamp");
+    }
+
+    #[test]
+    fn parse_rejects_bad_since_value() {
+        // A missing value and an unparseable value are errors naming the
+        // flag — surfaced as exit 2 by main(), never a panic.
+        assert!(parse(&["cost".to_string(), "--since".to_string()]).is_err());
+        let err = parse(&[
+            "cost".to_string(),
+            "--since".to_string(),
+            "not-a-date".to_string(),
+        ])
+        .unwrap_err();
+        assert!(err.starts_with("--since:"), "{err}");
+        assert!(err.contains("not-a-date"), "{err}");
     }
 }

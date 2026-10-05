@@ -57,10 +57,21 @@ af run [--once] [--dry-run] [--worker NAME] [--task ID] [--poll SECS]
 af status [--json]
 af api status [--json] | results --task ID
 af attach ID
-af cost [--task ID]
+af cost [--task ID] [--last] [--since DATE|UNIX_TS]
 af clean [--dry-run]
 af validate [--worker NAME]
 ```
+
+`af cost` aggregates the receipts every attempt appends to `state/receipts/`.
+Plain `af cost` totals every attempt; `--last` narrows to the most recent
+receipt per task (the greatest `ts`, ties broken by the greater attempt
+number) so retries are not double-counted; `--since DATE|UNIX_TS` keeps only
+receipts with `ts >=` the instant — `DATE` is `YYYY-MM-DD` (UTC midnight) or
+a bare unix timestamp, applied before `--last` so `--last --since D` is
+"the latest attempt per task since D". The window flags compose with each
+other and with `--task ID` (which narrows the table rows); the TOTAL line
+and the per-worker trust block are always computed over the selected
+receipts only.
 
 ## Task schema (`config/tasks.json`)
 

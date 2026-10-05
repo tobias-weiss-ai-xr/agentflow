@@ -256,6 +256,167 @@ fn cost_prints_table_and_task_filter() {
     assert!(out.contains("TOTAL: 0.0s"));
 }
 
+// spec: state/cost-receipts#cost-aggregates-receipts
+#[test]
+fn cost_last_shows_the_latest_attempt_per_task() {
+    // Several attempts per task with distinct ts: `af cost` totals every
+    // attempt, while `af cost --last` totals ONE attempt per task — the
+    // receipt with the greatest ts — reporting ATTEMPTS 1, and the trust
+    // block reflects only those selected receipts.
+    let tasks = r#"{ "tasks": [
+        { "id": "A", "title": "a", "accept": "true" },
+        { "id": "B", "title": "b", "accept": "true" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    let (_, st) = cli.settings();
+    let store = Store::new(st.state_dir.clone());
+    let receipt =
+        |task: &str, attempt: u32, ts: u64, wall: f64, worker: &str, outcome: &str| Receipt {
+            task: task.into(),
+            attempt,
+            worker: worker.into(),
+            model: "m".into(),
+            wall_clock_s: wall,
+            tokens: None,
+            ts,
+            outcome: outcome.into(),
+            error: None,
+        };
+    for r in [
+        receipt("A", 1, 1_000, 30.0, "w1", "failed"),
+        receipt("A", 2, 2_000, 12.0, "w2", "merged"),
+        receipt("B", 1, 3_000, 5.0, "w1", "merged"),
+    ] {
+        store.append_receipt(&r).unwrap();
+    }
+
+    // Plain `af cost`: every attempt is totaled and counted.
+    let (code, out) = cli.af(&["cost"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("TOTAL: 47.0s across 3 receipt(s)"), "{out}");
+    assert!(
+        out.contains(&format!("{:<12} {:<9}", "A", 2)),
+        "A shows both attempts: {out}"
+    );
+    assert!(
+        out.contains(&format!("{:<14} {:<11} {:.2}", "w1", "1/2", 0.50)),
+        "trust over every receipt: {out}"
+    );
+
+    // `af cost --last`: one attempt per task, ATTEMPTS 1, retries not
+    // double-counted.
+    let (code, out) = cli.af(&["cost", "--last"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("TOTAL: 17.0s across 2 receipt(s)"), "{out}");
+    assert!(
+        out.contains(&format!("{:<12} {:<9} {:<10.1}", "A", 1, 12.0)),
+        "A row: {out}"
+    );
+    assert!(
+        out.contains(&format!("{:<12} {:<9} {:<10.1}", "B", 1, 5.0)),
+        "B row: {out}"
+    );
+    assert!(
+        !out.contains("30.0"),
+        "the older failed attempt is not counted: {out}"
+    );
+    // Trust reflects ONLY the selected receipts: w1 now 1/1 (B's merge),
+    // w2 1/1 (A's latest merge) — A's failed attempt on w1 is gone.
+    assert!(
+        out.contains(&format!("{:<14} {:<11} {:.2}", "w1", "1/1", 1.00)),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!("{:<14} {:<11} {:.2}", "w2", "1/1", 1.00)),
+        "{out}"
+    );
+
+    // --last composes with --task: the table narrows to A's latest.
+    let (code, out) = cli.af(&["cost", "--last", "--task", "A"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains(&format!("{:<12} {:<9} {:<10.1}", "A", 1, 12.0)),
+        "{out}"
+    );
+    assert!(
+        !out.lines()
+            .any(|l| l.split_whitespace().next() == Some("B")),
+        "B has no row under --task A: {out}"
+    );
+}
+
+#[test]
+fn cost_since_filters_receipts_by_time() {
+    let cli = Cli::new();
+    let (_, st) = cli.settings();
+    let store = Store::new(st.state_dir.clone());
+    let receipt = |attempt: u32, ts: u64, wall: f64, worker: &str, outcome: &str| Receipt {
+        task: "A".into(),
+        attempt,
+        worker: worker.into(),
+        model: "m".into(),
+        wall_clock_s: wall,
+        tokens: None,
+        ts,
+        outcome: outcome.into(),
+        error: None,
+    };
+    for r in [
+        receipt(1, 1_600_000_000, 100.0, "w1", "failed"), // 2020-09-13
+        receipt(2, 1_700_000_000, 20.0, "w1", "failed"),  // 2023-11-14
+        receipt(3, 1_750_000_000, 30.0, "w2", "merged"),  // 2024-06-15
+    ] {
+        store.append_receipt(&r).unwrap();
+    }
+
+    // A bare unix timestamp excludes older receipts and keeps newer ones.
+    let (code, out) = cli.af(&["cost", "--since", "1650000000"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("TOTAL: 50.0s across 2 receipt(s)"), "{out}");
+    assert!(!out.contains("100.0"), "2020 receipt excluded: {out}");
+    assert!(
+        out.contains(&format!("{:<14} {:<11} {:.2}", "w1", "0/1", 0.00)),
+        "trust reflects only the windowed receipts: {out}"
+    );
+
+    // The bound is inclusive: ts >= since keeps the boundary receipt.
+    let (code, out) = cli.af(&["cost", "--since", "1600000000"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("TOTAL: 150.0s across 3 receipt(s)"), "{out}");
+
+    // YYYY-MM-DD is UTC midnight: 2023-01-01 = 1672531200.
+    let (code, out) = cli.af(&["cost", "--since", "2023-01-01"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("TOTAL: 50.0s across 2 receipt(s)"), "{out}");
+
+    // --since composes with --last: the latest attempt per task WITHIN the
+    // window; the trust block reflects only that selected receipt.
+    let (code, out) = cli.af(&["cost", "--since", "1650000000", "--last"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("TOTAL: 30.0s across 1 receipt(s)"), "{out}");
+    assert!(
+        out.contains(&format!("{:<12} {:<9}", "A", 1)),
+        "ATTEMPTS is 1 under --last: {out}"
+    );
+    assert!(
+        out.contains(&format!("{:<14} {:<11} {:.2}", "w2", "1/1", 1.00)),
+        "{out}"
+    );
+    assert!(
+        !out.contains("w1"),
+        "w1's windowed-out attempts leave no trust row: {out}"
+    );
+
+    // An unparseable value is a clear error with a non-zero exit — and an
+    // impossible calendar date is rejected too.
+    let (code, out) = cli.af(&["cost", "--since", "not-a-date"]);
+    assert_ne!(code, 0, "bad --since must exit non-zero: {out}");
+    assert!(out.contains("--since"), "error names the flag: {out}");
+    assert!(out.contains("not-a-date"), "error names the value: {out}");
+    let (code, out) = cli.af(&["cost", "--since", "2024-13-01"]);
+    assert_ne!(code, 0, "impossible month must exit non-zero: {out}");
+}
+
 // spec: cli/run-commands
 #[test]
 fn dry_run_prints_plan_without_spawning_agents() {
