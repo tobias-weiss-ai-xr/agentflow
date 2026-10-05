@@ -62,6 +62,13 @@ fn default_true() -> bool {
     true
 }
 
+/// Serde default for `Worker::output`: the field is opt-in — a workers.json
+/// that omits it keeps today's behaviour exactly (text mode: raw agent
+/// output in the log, no token capture), no migration needed.
+fn default_output() -> String {
+    "text".to_string()
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Task {
@@ -94,6 +101,15 @@ pub struct Worker {
     pub enabled: bool,
     /// Agent CLI binary name; default `pi`. Passed `--provider/--model/-p @file`.
     pub cli: String,
+    /// Agent CLI output mode (`output`): `"text"` (the default — the
+    /// legacy behaviour: raw stdout/stderr in the task log, no token
+    /// capture, receipt `tokens: None`) or `"json"` (the CLI is spawned
+    /// with `--mode json` and its JSON Lines transcript is parsed: the
+    /// log gets a human-readable rendering and the attempt receipt
+    /// carries the transcript's final `totalTokens`; see `transcript`).
+    /// Any other value is rejected at load time.
+    #[serde(default = "default_output")]
+    pub output: String,
     /// Extra arguments for the agent CLI (per worker). Appended to the
     /// argv AFTER `--model M` and BEFORE `-p @file` (see `spawn_argv`) — so
     /// a caller can reach CLI flags agentflow does not model (`--max-turns`,
@@ -117,6 +133,7 @@ impl Default for Worker {
             api_key_env: None,
             enabled: true,
             cli: "pi".to_string(),
+            output: default_output(),
             args: Vec::new(),
         }
     }
@@ -260,6 +277,15 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
             return Err(format!(
                 "worker '{}': args entries must be non-empty strings",
                 w.name
+            ));
+        }
+        // The output mode is a closed vocabulary — a typo ("jsn") must
+        // not silently disable token capture: fail at load time, naming
+        // the worker and the accepted values.
+        if w.output != "text" && w.output != "json" {
+            return Err(format!(
+                "worker '{}': output must be one of [text, json] (got '{}')",
+                w.name, w.output
             ));
         }
         if !wnames.insert(w.name.as_str()) {

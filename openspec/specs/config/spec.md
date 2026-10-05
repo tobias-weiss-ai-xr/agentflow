@@ -43,6 +43,8 @@ THEN both parse and rank deterministically (CRITICAL > HIGH > number-ranked).
 
 `af` SHALL load a `workers.json` file of the form `{ "defaults": {...}, "workers": [...] }`. Each worker SHALL support `name`, `provider`, `model`, `api_base`, `enabled`, and `args` — an array of extra agent-CLI arguments in which an absent field means an empty list. Validation SHALL reject duplicate worker names, a config with zero enabled workers, and any `args` entry that is an empty string (naming the worker). `args` entries SHALL be passed through to the agent CLI verbatim — agentflow never interprets or whitelists them (CLI-agnostic, ADR-1) — appended to the agent argv AFTER `--model` and BEFORE the `-p @file` prompt handoff, so a caller can reach CLI flags agentflow does not model (or override an earlier flag) while the prompt file always stays last.
 
+Each worker SHALL also support `output` — the agent CLI's output mode: `"text"` (the default when the field is absent) or `"json"`. `"text"` keeps the legacy behaviour exactly: no extra argv entry, the raw stdout/stderr stream in the task log, and no token capture (`Receipt.tokens` stays `None`). `"json"` spawns the CLI with `--mode json` (placed with the built-in flags, before the worker's own `args` and never after the `-p @file` handoff), parses the JSON Lines transcript defensively (non-JSON lines and unknown event types are ignored; parsing never panics), takes the usage from the LAST event that carries one, writes a human-readable rendering of the transcript to the task log instead of raw JSON Lines, and records that total in the attempt receipt's `tokens`. A transcript that yields no usage at all (a crash, a truncation, a CLI that ignores the flag) SHALL leave the attempt otherwise unchanged with `tokens: None` — missing telemetry never fails an attempt. Any other `output` value SHALL be rejected at load time with an error naming the worker and the accepted values.
+
 #### Scenario: valid workers load
 
 WHEN a `workers.json` with two enabled workers is loaded
@@ -64,6 +66,24 @@ THEN the agent CLI receives those entries in its argv after the built-in `--mode
 GIVEN a worker whose `args` array contains an empty string
 WHEN `workers.json` is loaded
 THEN loading fails with an error naming the worker.
+
+#### Scenario: output defaults to text
+
+GIVEN a worker that omits `output`
+WHEN it dispatches
+THEN the agent argv carries no `--mode` entry, the raw agent output lands in the task log, and the attempt receipt records no token count (`tokens: None`).
+
+#### Scenario: json output mode captures token usage
+
+GIVEN a worker with `output: "json"` whose agent CLI emits a JSON Lines transcript whose final events carry a usage object
+WHEN a task dispatches on that worker and the attempt completes
+THEN the attempt receipt's `tokens` carries the transcript's final `totalTokens`, and the task log contains the rendered assistant text (with other activity compact) and no raw JSON Lines.
+
+#### Scenario: unknown output value is rejected
+
+GIVEN a worker declaring `output: "jsn"`
+WHEN `workers.json` is loaded
+THEN loading fails with an error naming the worker and the accepted values (`text`, `json`).
 
 ### Requirement: Environment overrides
 

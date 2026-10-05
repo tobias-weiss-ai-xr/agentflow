@@ -64,6 +64,7 @@ mod tests {
     fn worker(name: &str) -> Worker {
         Worker {
             name: name.to_string(),
+            output: "text".into(),
             args: Vec::new(),
             ..Default::default()
         }
