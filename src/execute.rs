@@ -279,6 +279,9 @@ Files you are allowed to modify:
 Acceptance criteria:
 {{ACCEPTANCE}}
 
+Acceptance gate command (run verbatim to verify this task):
+{{ACCEPT_CMD}}
+
 Work on TASK_ID only. Do not touch files outside the allowed scope.
 When done, make sure the acceptance criteria hold and your changes are
 committed on the current branch."#;
@@ -289,8 +292,12 @@ fn render_prompt(
     worker: &Worker,
     context: Option<&str>,
 ) -> String {
-    let template =
-        fs::read_to_string(&st.prompt_file).unwrap_or_else(|_| DEFAULT_PROMPT.to_string());
+    // A configured template wins; if it is unreadable/missing we fall back
+    // to the built-in DEFAULT_PROMPT (which carries every placeholder).
+    let custom = fs::read_to_string(&st.prompt_file).ok();
+    let template = custom
+        .as_deref()
+        .unwrap_or(DEFAULT_PROMPT);
     let scope = if task.scope.is_empty() {
         "*".to_string()
     } else {
@@ -300,20 +307,84 @@ fn render_prompt(
         .acceptance_prose
         .clone()
         .unwrap_or_else(|| "(declared acceptance gate command)".to_string());
+    // The EXACT shell command the acceptance gate will run (gate.rs) — the
+    // agent must see it verbatim, not a prose paraphrase.
+    let accept_cmd = task
+        .accept
+        .clone()
+        .unwrap_or_else(|| "(no acceptance gate command — manual task)".to_string());
     let map = [
         ("{{TASK_ID}}", task.id.as_str()),
         ("{{TASK_TITLE}}", task.title.as_str()),
         ("{{SCOPE}}", &scope),
         ("{{ACCEPTANCE}}", &acceptance),
+        ("{{ACCEPT_CMD}}", &accept_cmd),
         ("{{MODEL}}", worker.model.as_str()),
         ("{{PROVIDER}}", worker.provider.as_str()),
     ];
-    let mut out = template;
+    let mut out = template.to_string();
     for (k, v) in map {
         out = out.replace(k, v);
     }
+    out = strip_scope_markers(&out);
+
+    // Hardening: a configured template that omits a placeholder would
+    // silently drop the agent's file scope or acceptance gate (the exact
+    // failure mode of the stray foreign template removed in f961ffe). Warn
+    // on stderr and append the missing sections so scope/acceptance — and
+    // the verbatim gate command — can never be silently dropped.
+    if let Some(tpl) = &custom {
+        let missing = |ph: &str| !tpl.contains(ph);
+        if missing("{{SCOPE}}") {
+            eprintln!(
+                "af: warning: prompt template {} omits {{{{SCOPE}}}} — appending file scope",
+                st.prompt_file.display()
+            );
+            out.push_str(&format!("\n\n## File scope (auto-appended)\n{scope}\n"));
+        }
+        if missing("{{ACCEPTANCE}}") {
+            eprintln!(
+                "af: warning: prompt template {} omits {{{{ACCEPTANCE}}}} — appending acceptance criteria",
+                st.prompt_file.display()
+            );
+            out.push_str(&format!(
+                "\n\n## Acceptance criteria (auto-appended)\n{acceptance}\n"
+            ));
+        }
+        if missing("{{ACCEPT_CMD}}") {
+            eprintln!(
+                "af: warning: prompt template {} omits {{{{ACCEPT_CMD}}}} — appending gate command",
+                st.prompt_file.display()
+            );
+            out.push_str(&format!(
+                "\n\n## Acceptance gate command (auto-appended)\n{accept_cmd}\n"
+            ));
+        }
+    }
+
     if let Some(ctx) = context {
         out.push_str(ctx);
+    }
+    out
+}
+
+/// Remove the literal `{{#SCOPE}}` / `{{/SCOPE}}` conditional markers from
+/// a rendered prompt — they are template punctuation, not agent-visible
+/// content, and used to leak verbatim into the rendered text. Lines that
+/// consist solely of a marker are dropped entirely; inline occurrences are
+/// replaced with the empty string. A trailing newline is preserved.
+fn strip_scope_markers(rendered: &str) -> String {
+    let mut out = rendered
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            t != "{{#SCOPE}}" && t != "{{/SCOPE}}"
+        })
+        .map(|l| l.replace("{{#SCOPE}}", "").replace("{{/SCOPE}}", ""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if rendered.ends_with('\n') {
+        out.push('\n');
     }
     out
 }
@@ -478,6 +549,102 @@ b.md"
         assert!(out.contains("test -f done"));
         assert!(out.contains("gpt-x/openai"));
         assert!(out.contains("attempt 1: boom"), "context appended");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn settings_with_prompt_file(prompt_file: PathBuf) -> Settings {
+        let mut st = Settings::from_env();
+        st.prompt_file = prompt_file;
+        st
+    }
+
+    #[test]
+    fn prompt_includes_accept_command() {
+        let task = crate::config::Task {
+            id: "G1".into(),
+            title: "gate task".into(),
+            scope: vec!["src/lib.rs".into()],
+            accept: Some("cargo test --all-features --locked".into()),
+            ..Default::default()
+        };
+        // Default template (configured prompt file does not exist).
+        let st = settings_with_prompt_file(PathBuf::from("no-such-default-template.md"));
+        let out = render_prompt(&st, &task, &worker(None), None);
+        assert!(
+            out.contains("cargo test --all-features --locked"),
+            "default prompt must embed the task's exact accept gate command"
+        );
+        // Custom template using the {{ACCEPT_CMD}} placeholder.
+        let dir = std::env::temp_dir().join(format!("af-accept-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let tpl = dir.join("tpl.md");
+        std::fs::write(&tpl, "run this: {{ACCEPT_CMD}}\n").unwrap();
+        let out = render_prompt(
+            &settings_with_prompt_file(tpl.clone()),
+            &task,
+            &worker(None),
+            None,
+        );
+        assert!(
+            out.contains("cargo test --all-features --locked"),
+            "custom template must embed the task's exact accept gate command"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn render_prompt_strips_scope_conditional_markers() {
+        let task = crate::config::Task {
+            id: "S1".into(),
+            title: "strip markers".into(),
+            scope: vec!["a.rs".into()],
+            accept: Some("true".into()),
+            ..Default::default()
+        };
+        // DEFAULT_PROMPT itself contains the markers — they must not survive.
+        assert!(DEFAULT_PROMPT.contains("{{#SCOPE}}"));
+        let st = settings_with_prompt_file(PathBuf::from("no-such-default-template.md"));
+        let out = render_prompt(&st, &task, &worker(None), None);
+        assert!(!out.contains("{{#SCOPE}}"), "opening marker stripped");
+        assert!(!out.contains("{{/SCOPE}}"), "closing marker stripped");
+        assert!(out.contains("Files you are allowed to modify:"));
+        assert!(out.contains("a.rs"), "scope content survives the strip");
+    }
+
+    #[test]
+    fn render_prompt_appends_missing_scope_and_acceptance_for_custom_template() {
+        let dir = std::env::temp_dir().join(format!("af-missing-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        // Template carries NO {{SCOPE}}, {{ACCEPTANCE}} or {{ACCEPT_CMD}} —
+        // the f961ffe failure mode: placeholders silently unsubstituted.
+        let tpl = dir.join("bare.md");
+        std::fs::write(&tpl, "Task {{TASK_ID}}: {{TASK_TITLE}}\n").unwrap();
+        let task = crate::config::Task {
+            id: "M1".into(),
+            title: "missing placeholders".into(),
+            scope: vec!["src/one.rs".into(), "src/two.rs".into()],
+            accept: Some("cargo test --test cli".into()),
+            acceptance_prose: Some("cli suite green".into()),
+            ..Default::default()
+        };
+        let out = render_prompt(
+            &settings_with_prompt_file(tpl.clone()),
+            &task,
+            &worker(None),
+            None,
+        );
+        assert!(
+            out.contains("src/one.rs\nsrc/two.rs"),
+            "scope appended even though template omits {{SCOPE}}"
+        );
+        assert!(
+            out.contains("cli suite green"),
+            "acceptance appended even though template omits {{ACCEPTANCE}}"
+        );
+        assert!(
+            out.contains("cargo test --test cli"),
+            "gate command appended even though template omits {{ACCEPT_CMD}}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
