@@ -104,6 +104,23 @@ pub struct Receipt {
     pub error: Option<String>,
 }
 
+/// Outcome recorded for an attempt lost because the orchestrator itself died
+/// mid-attempt: no agent result, no gate result, and an unknown duration.
+pub const OUTCOME_INTERRUPTED: &str = "interrupted";
+
+impl Receipt {
+    /// Does this outcome count as a verdict on the WORKER's reliability?
+    ///
+    /// [`OUTCOME_INTERRUPTED`] is NOT a verdict: the attempt was lost when
+    /// the orchestrator itself died (no agent result, no gate result), so it
+    /// says nothing about the worker. Every trust statistic must exclude it
+    /// from the numerator AND the denominator — only `merged` and `failed`
+    /// are worker verdicts.
+    pub fn counts_as_verdict(&self) -> bool {
+        self.outcome != OUTCOME_INTERRUPTED
+    }
+}
+
 /// The persistence interface every agentflow backend must provide.
 ///
 /// A `StateStore` owns one directory and is responsible for two things:
