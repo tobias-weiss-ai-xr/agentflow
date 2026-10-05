@@ -112,6 +112,7 @@ fn worker_json(max_attempts: u32) -> String {
 /// the attempt fails with an "out of scope" reason naming the offending path,
 /// and the change is never merged into the base repo.
 // spec: scheduling/scope-enforcement-on-agent-edits
+// spec: scheduling/scope-enforcement-on-agent-edits#out-of-scope-edit-fails-before-merge
 #[test]
 fn out_of_scope_edit_fails_the_attempt() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -146,6 +147,7 @@ fn out_of_scope_edit_fails_the_attempt() {
 }
 
 /// Happy path guard: an in-scope edit is still merged and the task is Done.
+// spec: scheduling/scope-enforcement-on-agent-edits#in-scope-edit-still-merges
 #[test]
 fn in_scope_edit_is_merged() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -167,6 +169,39 @@ fn in_scope_edit_is_merged() {
     assert!(
         f.repo.join("in_scope.txt").exists(),
         "in-scope change must be merged into the base repo"
+    );
+
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+}
+
+/// A task that declares NO scope accepts every changed file (scheduling
+/// spec): the agent's edit — to a file no entry names — still passes scope
+/// enforcement and merges.
+// spec: scheduling/scope-enforcement-on-agent-edits#empty-scope-allows-any-file
+#[test]
+fn empty_scope_accepts_any_edited_file() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"no declared scope","accept":"{g}"}} ] }}"#,
+            g = gate_cmd("any_file.txt")
+        ),
+        &worker_json(1),
+    );
+    std::env::set_var("FAKE_AGENT_TOUCH", "any_file.txt");
+
+    let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
+    assert_eq!(
+        code, 0,
+        "no declared scope ⇒ every changed file is accepted"
+    );
+
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Done);
+    assert!(
+        f.repo.join("any_file.txt").exists(),
+        "the unscoped edit merged into the base repo"
     );
 
     std::env::remove_var("FAKE_AGENT_TOUCH");
