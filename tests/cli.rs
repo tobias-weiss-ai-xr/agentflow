@@ -14,13 +14,17 @@ struct Cli {
 
 impl Cli {
     fn new() -> Cli {
+        Cli::new_with_tasks(TASKS)
+    }
+
+    fn new_with_tasks(tasks: &str) -> Cli {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("af-cli-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let config_dir = dir.join("config");
         std::fs::create_dir_all(&config_dir).unwrap();
-        std::fs::write(config_dir.join("tasks.json"), TASKS).unwrap();
+        std::fs::write(config_dir.join("tasks.json"), tasks).unwrap();
         std::fs::write(config_dir.join("workers.json"), WORKERS).unwrap();
         Cli { dir }
     }
@@ -208,4 +212,57 @@ fn dry_run_prints_plan_without_spawning_agents() {
     assert_eq!(code, 0);
     assert!(out.contains("Dry run"));
     assert!(out.contains("A"));
+}
+
+#[test]
+fn dry_run_lists_every_task_with_depth_and_readiness() {
+    // A (depth 0), C (depth 0), B deps A (depth 1): the plan must show ALL
+    // tasks — including blocked ones — with depth and readiness columns.
+    let tasks = r#"{ "tasks": [
+        { "id": "A", "title": "a", "deps": [], "accept": "true" },
+        { "id": "B", "title": "b", "deps": ["A"], "accept": "true" },
+        { "id": "C", "title": "c", "deps": [], "accept": "true" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    let (code, out) = cli.af(&["run", "--dry-run"]);
+    assert_eq!(code, 0);
+    for id in ["A", "B", "C"] {
+        assert!(out.contains(id), "task {id} missing from plan: {out}");
+    }
+    assert!(out.contains("DEPTH"), "depth column header: {out}");
+    assert!(out.contains("READINESS"), "readiness column header: {out}");
+    assert!(out.contains("ready"), "A and C ready: {out}");
+    assert!(
+        out.contains("blocked by A"),
+        "B must name its pending dep: {out}"
+    );
+    // Wave order: depth-0 roots (A, C) listed before depth-1 B.
+    let pos_a = out
+        .find("A ")
+        .or_else(|| out.find("A\n"))
+        .unwrap_or(usize::MAX);
+    let pos_b = out.find("B ").unwrap_or(usize::MAX);
+    let pos_c = out.find("C ").unwrap_or(usize::MAX);
+    assert!(pos_a < pos_b, "A (depth 0) before B (depth 1): {out}");
+    assert!(pos_c < pos_b, "C (depth 0) before B (depth 1): {out}");
+    assert!(out.contains("2 ready now"), "summary counts ready: {out}");
+}
+
+#[test]
+fn dry_run_reflects_persisted_state_in_readiness() {
+    // A done from a previous run → B becomes ready; terminal states surface
+    // as done/failed instead of silently disappearing from the plan.
+    let tasks = r#"{ "tasks": [
+        { "id": "A", "title": "a", "deps": [], "accept": "true" },
+        { "id": "B", "title": "b", "deps": ["A"], "accept": "true" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    cli.seed_done_task("A");
+    let (code, out) = cli.af(&["run", "--dry-run"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("A"), "done A still listed: {out}");
+    assert!(
+        out.contains("done") && !out.contains("blocked by A"),
+        "A shown as done, B unblocked: {out}"
+    );
 }
