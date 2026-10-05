@@ -219,6 +219,7 @@ fn execute_attempt(
                 &wt_path,
                 &ctx.st.gate_env,
                 Duration::from_secs(ctx.cfg.defaults.accept_timeout_s),
+                task.gate_replay,
             );
             out_lines = gate_out.combined();
             if !out_lines.is_empty() {

@@ -74,6 +74,12 @@ af validate [--worker NAME]
 | `acceptance_prose` | Natural-language success criteria (injected into the prompt) |
 | `manual` | Skip the acceptance gate (manual sign-off) |
 | `priority` | Tie-breaker when multiple tasks are ready |
+| `gate_replay` | Whether the gate is replay-safe (default `true`); `false` = side effects |
+
+Replay contract: the `accept` command MUST be idempotent; declare
+`gate_replay: false` for a gate with side effects — an interrupted such gate
+is settled as failed instead of re-run. The gate process receives the
+decision in `TF_GATE_REPLAY` (`1`/`0`).
 
 ## Worker schema (`config/workers.json`)
 
