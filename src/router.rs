@@ -1,11 +1,24 @@
 //! Router: measured worker selection (ADR-12). Replays receipts into
 //! per-worker (wins, total) stats; picks free workers by UCB1
-//! (`mean + sqrt(2·ln(N+1)/(n+1))`), ties broken in config order — so fresh
-//! state reproduces the old first-free behavior exactly.
+//! (`mean + sqrt(2·ln(N+1)/(n+1))`). A strictly higher score always wins;
+//! a score tie goes to the worker with the cheaper DECLARED cost basis when
+//! the two are comparable (see [`crate::cost`]), otherwise to config order —
+//! so fresh state with no declared bases reproduces the old first-free
+//! behavior exactly.
 
 use crate::config::Worker;
+use crate::cost::{self, Basis};
 use crate::state::Receipt;
+use std::cmp::Ordering;
 use std::collections::HashMap;
+
+/// Tie tolerance for the score comparison: two scores whose difference is
+/// at most this are a TIE, not a strict win. This is a numerical tie
+/// tolerance — the score is a floating-point sum, so "identical" stats can
+/// still differ in the last bits — and it is NOT a tuning knob: widening it
+/// would let a cheaper worker displace a measurably better one, which is
+/// exactly what this tie-break must never do.
+const SCORE_TIE_EPSILON: f64 = 1e-9;
 
 #[derive(Debug, Default)]
 pub struct Router {
@@ -38,22 +51,48 @@ impl Router {
             .map(|(w, n)| *w as f64 / *n as f64)
     }
 
-    /// UCB1 pick among eligible (free) workers. Deterministic: first
-    /// eligible worker wins ties (config order at the call site).
+    /// UCB1 pick among eligible (free) workers. Deterministic. A STRICTLY
+    /// higher score always wins: measured reliability must outrank a
+    /// declared expense assumption, and cost-per-task is confounded by task
+    /// difficulty (the hard work goes to the trusted worker), so a cost
+    /// term in the score itself would penalise a worker for being given
+    /// the hard tasks and starve it — a self-reinforcing bias. Cost is a
+    /// tie-break ONLY: when a candidate's score ties the incumbent within
+    /// [`SCORE_TIE_EPSILON`], the CHEAPER of the two (by declared cost
+    /// basis, [`cost::compare`]) wins; bases that are not comparable (one
+    /// priced and one sized, or either declaring nothing) never trigger a
+    /// swap, so config order remains the final tie-break.
     pub fn pick<'a, I: IntoIterator<Item = &'a Worker>>(&self, eligible: I) -> Option<&'a Worker> {
         let n_total: u64 = self.stats.values().map(|(_, n)| n).sum();
-        let mut best: Option<(f64, &Worker)> = None;
+        let mut best: Option<(f64, Option<Basis>, &Worker)> = None;
         for w in eligible {
             let (wins, n) = self.stats.get(&w.name).copied().unwrap_or((0, 0));
             let mean = wins as f64 / n.max(1) as f64;
             let explore = (2.0 * (n_total as f64 + 1.0).ln() / (n as f64 + 1.0)).sqrt();
             let score = mean + explore;
-            // strictly-greater keeps the FIRST maximum (config order)
-            if best.is_none_or(|(s, _)| score > s) {
-                best = Some((score, w));
+            // Declared cost basis, consulted ONLY on a tie.
+            let w_basis = cost::basis(w.params_b, w.price_per_mtok_usd);
+            match best {
+                // First candidate becomes the incumbent; a strictly-greater
+                // score still replaces it unconditionally (measured trust
+                // outranks a declared expense assumption).
+                None => best = Some((score, w_basis, w)),
+                Some((s, _, _)) if score > s => best = Some((score, w_basis, w)),
+                // Tie within the tolerance: keep whichever is CHEAPER, but
+                // only when `compare` says the candidate is strictly less —
+                // `None` (incomparable bases) or `Equal` keeps the incumbent,
+                // so config order remains the final tie-break and a price is
+                // never converted into a parameter count.
+                Some((s, s_basis, _))
+                    if (score - s).abs() <= SCORE_TIE_EPSILON
+                        && cost::compare(w_basis, s_basis) == Some(Ordering::Less) =>
+                {
+                    best = Some((score, w_basis, w));
+                }
+                _ => {}
             }
         }
-        best.map(|(_, w)| w)
+        best.map(|(_, _, w)| w)
     }
 }
 
