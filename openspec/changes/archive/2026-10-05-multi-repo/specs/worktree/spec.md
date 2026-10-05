@@ -1,6 +1,6 @@
 # Delta: worktree
 
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Worktrees target the task's repository
 

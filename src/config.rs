@@ -56,6 +56,12 @@ impl Priority {
     }
 }
 
+/// Serde default for `Task::gate_replay`: the flag is opt-out — tasks that
+/// omit it parse as `true` (the gate is assumed replay-safe).
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Task {
@@ -68,6 +74,11 @@ pub struct Task {
     pub manual: bool,
     pub priority: Priority,
     pub repo: String,
+    /// Whether the acceptance gate is replay-safe: re-running `accept` after
+    /// an interruption is allowed. Defaults to `true`; declare `false` for a
+    /// gate with side effects (mirrors pi-durable's `replay: "safe"` marks).
+    #[serde(default = "default_true")]
+    pub gate_replay: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

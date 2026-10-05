@@ -6,16 +6,23 @@
 use crate::config::TaskState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::OpenOptions;
 use std::io;
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TaskStatus {
     pub state: TaskState,
     pub attempts: u32,
     pub last_error: Option<String>,
+    /// Journal: the furthest phase this task's current attempt reached
+    /// (effect sandwich, pi-durable). `None` on legacy state files and
+    /// between attempts — `resume_action` maps it to `RerunAgent`.
+    #[serde(default)]
+    pub phase: Option<AttemptPhase>,
 }
 
 impl Default for TaskStatus {
@@ -24,7 +31,49 @@ impl Default for TaskStatus {
             state: TaskState::Ready,
             attempts: 0,
             last_error: None,
+            phase: None,
         }
+    }
+}
+
+/// One attempt's phase in the effect sandwich (pi-durable journal):
+/// commit intent → perform effect → commit outcome. Persisted at every
+/// boundary so a crashed orchestrator can resume an attempt without
+/// re-running the expensive, non-replayable agent step.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptPhase {
+    /// Worktree created; the agent may be running but nothing durable
+    /// proves it finished. Resume must re-run the agent (safe).
+    #[default]
+    Spawned,
+    /// The agent exited 0 and its change is committed on the attempt
+    /// branch. Never re-invoke the agent after this point.
+    AgentDone,
+    /// The acceptance gate passed. Only the (idempotent) merge remains.
+    GatePassed,
+}
+
+/// How a stale `running` attempt resumes after a crash, derived from its
+/// journaled [`AttemptPhase`] (startup heal in `run.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeAction {
+    /// No durable agent outcome → fresh attempt (agent, gate, merge).
+    RerunAgent,
+    /// Agent outcome is committed → re-run only the acceptance gate, merge.
+    RerunGate,
+    /// Gate already passed → re-run only the merge, idempotently.
+    MergeOnly,
+}
+
+/// Map a journaled phase to the resume plan. `None` (legacy state files,
+/// inter-attempt gap) and `Spawned` both mean "the agent's outcome was
+/// never committed" → the always-safe `RerunAgent`.
+pub fn resume_action(phase: Option<AttemptPhase>) -> ResumeAction {
+    match phase {
+        None | Some(AttemptPhase::Spawned) => ResumeAction::RerunAgent,
+        Some(AttemptPhase::AgentDone) => ResumeAction::RerunGate,
+        Some(AttemptPhase::GatePassed) => ResumeAction::MergeOnly,
     }
 }
 
@@ -49,6 +98,21 @@ pub struct Receipt {
     /// attempts and for legacy receipts.
     #[serde(default)]
     pub error: Option<String>,
+}
+
+/// The persistence interface every agentflow backend must provide.
+///
+/// A `StateStore` owns one directory and is responsible for two things:
+/// atomic status persistence (a torn write must never corrupt the readable
+/// state) and append-only receipts (no two receipts may overwrite one
+/// another). The generic conformance suite in `tests/conformance.rs`
+/// encodes those guarantees so every backend is held to the same contract.
+pub trait StateStore {
+    fn status_file(&self) -> PathBuf;
+    fn load(&self) -> HashMap<String, TaskStatus>;
+    fn save(&self, m: &HashMap<String, TaskStatus>) -> io::Result<()>;
+    fn append_receipt(&self, r: &Receipt) -> io::Result<()>;
+    fn load_receipts(&self) -> Vec<Receipt>;
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +194,96 @@ impl Store {
         out.sort_by_key(|r| r.ts);
         out
     }
+
+    pub fn lock_file(&self) -> PathBuf {
+        self.dir.join(".lock")
+    }
+
+    /// Acquire the single-writer lock for this state dir.
+    ///
+    /// Unlinks `run-state.json` from concurrent `af run` processes: creates
+    /// `<state_dir>/.lock` with O_CREAT|O_EXCL and records this pid. A second
+    /// live owner gets an error; a lock whose pid is dead is reclaimed.
+    pub fn acquire_lock(&self) -> io::Result<LockGuard> {
+        std::fs::create_dir_all(&self.dir)?;
+        let path = self.lock_file();
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut f) => {
+                writeln!(f, "{}", std::process::id())?;
+                Ok(LockGuard {
+                    state_dir: self.dir.clone(),
+                })
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                let existing = std::fs::read_to_string(&path).unwrap_or_default();
+                let pid: u32 = existing.trim().parse().unwrap_or(0);
+                if pid != 0 && pid_alive(pid) {
+                    Err(io::Error::other(format!(
+                        "another af owns this state dir (pid {pid})"
+                    )))
+                } else {
+                    // Stale lock: the owner is gone. Reclaim it.
+                    std::fs::write(&path, format!("{}\n", std::process::id()))?;
+                    Ok(LockGuard {
+                        state_dir: self.dir.clone(),
+                    })
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
+impl StateStore for Store {
+    fn status_file(&self) -> PathBuf {
+        Store::status_file(self)
+    }
+
+    fn load(&self) -> HashMap<String, TaskStatus> {
+        Store::load(self)
+    }
+
+    fn save(&self, m: &HashMap<String, TaskStatus>) -> io::Result<()> {
+        Store::save(self, m)
+    }
+
+    fn append_receipt(&self, r: &Receipt) -> io::Result<()> {
+        Store::append_receipt(self, r)
+    }
+
+    fn load_receipts(&self) -> Vec<Receipt> {
+        Store::load_receipts(self)
+    }
+}
+
+/// Held for the lifetime of a run; releasing it removes `<state_dir>/.lock`.
+#[derive(Debug)]
+pub struct LockGuard {
+    state_dir: PathBuf,
+}
+
+impl LockGuard {
+    pub fn state_dir(&self) -> &PathBuf {
+        &self.state_dir
+    }
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(self.state_dir.join(".lock"));
+    }
+}
+
+/// Liveness check with no extra dependency: `kill -0 <pid>` succeeds only
+/// while the process exists (and we may signal it).
+fn pid_alive(pid: u32) -> bool {
+    std::process::Command::new("sh")
+        .args(["-c", &format!("kill -0 {pid}")])
+        // The probe is expected to fail for stale pids; don't spam stderr.
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 pub fn now_ts() -> u64 {
@@ -163,6 +317,7 @@ mod tests {
                 state: TaskState::Done,
                 attempts: 1,
                 last_error: None,
+                phase: None,
             },
         );
         store.save(&m).unwrap();
@@ -179,6 +334,59 @@ mod tests {
         assert!(std::fs::read_to_string(store.status_file())
             .unwrap()
             .contains("done"));
+    }
+
+    #[test]
+    fn resume_action_maps_every_phase_to_a_resume_plan() {
+        assert_eq!(resume_action(None), ResumeAction::RerunAgent);
+        assert_eq!(
+            resume_action(Some(AttemptPhase::Spawned)),
+            ResumeAction::RerunAgent,
+            "Spawned means no durable agent outcome — safe re-run"
+        );
+        assert_eq!(
+            resume_action(Some(AttemptPhase::AgentDone)),
+            ResumeAction::RerunGate
+        );
+        assert_eq!(
+            resume_action(Some(AttemptPhase::GatePassed)),
+            ResumeAction::MergeOnly
+        );
+    }
+
+    #[test]
+    fn phase_persists_snake_case_and_legacy_files_load_without_it() {
+        let dir = tmpdir();
+        let store = Store::new(dir.clone());
+        let mut m = HashMap::new();
+        m.insert(
+            "A".to_string(),
+            TaskStatus {
+                state: TaskState::Running,
+                attempts: 1,
+                last_error: None,
+                phase: Some(AttemptPhase::AgentDone),
+            },
+        );
+        store.save(&m).unwrap();
+        let raw = std::fs::read_to_string(store.status_file()).unwrap();
+        assert!(
+            raw.contains("\"agent_done\""),
+            "phase must serialize as snake_case: {raw}"
+        );
+        assert_eq!(store.load()["A"].phase, Some(AttemptPhase::AgentDone));
+
+        // Legacy state file (written before the journal existed) has no
+        // `phase` key — it must still load, as None (= RerunAgent).
+        std::fs::write(
+            store.status_file(),
+            r#"{ "A": { "state": "running", "attempts": 1, "last_error": null } }"#,
+        )
+        .unwrap();
+        let s = &store.load()["A"];
+        assert_eq!(s.state, TaskState::Running);
+        assert_eq!(s.phase, None, "missing phase key defaults to None");
+        assert_eq!(resume_action(s.phase), ResumeAction::RerunAgent);
     }
 
     #[test]

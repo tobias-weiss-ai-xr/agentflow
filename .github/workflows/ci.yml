@@ -11,8 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all-targets
         # E2E uses the bundled example_agent + a scratch git repo; no network,
         # no LLM keys required.
@@ -26,6 +29,7 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - run: cargo llvm-cov --workspace --show-missing-lines  # text report + uncovered lines
+      - run: ./scripts/coverage-gate.sh  # ratchet: fails if line coverage < .coverage-min
         # Line/region coverage table in the CI log (Windows toolchains can't
-        # produce it locally — no profiler_builtins).
+        # produce it locally — no profiler_builtins). The line-coverage floor
+        # lives in .coverage-min (single source of truth) and may only be raised.
