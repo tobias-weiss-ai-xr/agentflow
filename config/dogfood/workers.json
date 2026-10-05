@@ -1,0 +1,29 @@
+{
+  "_meta": { "project": "agentflow-dogfood" },
+  "defaults": {
+    "accept_timeout_s": 900,
+    "max_attempts": 2,
+    "retry_delay_s": 15,
+    "agent_timeout_s": 1800
+  },
+  "workers": [
+    {
+      "name": "opencode-go",
+      "provider": "opencode-go",
+      "model": "deepseek-v4-flash",
+      "api_base": "",
+      "api_key_env": "",
+      "enabled": true,
+      "cli": "pi"
+    },
+    {
+      "name": "zai",
+      "provider": "zai",
+      "model": "glm-5.2",
+      "api_base": "",
+      "api_key_env": "",
+      "enabled": true,
+      "cli": "pi"
+    }
+  ]
+}

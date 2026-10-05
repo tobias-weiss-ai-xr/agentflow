@@ -1,0 +1,64 @@
+{
+  "_meta": {
+    "project": "agentflow-dogfood"
+  },
+  "tasks": [
+    {
+      "id": "af-clippy-clean",
+      "title": "Make `cargo clippy --all-targets` emit zero warnings (8 currently: derived impl in config.rs, map_or in router.rs, needless refs in run.rs, unit let in subprocess.rs, unused import/var + field-assign-outside-init + false-equality in tests/cli.rs)",
+      "deps": [],
+      "scope": [
+        "src/config.rs",
+        "src/router.rs",
+        "src/run.rs",
+        "src/subprocess.rs",
+        "src/",
+        "tests/cli.rs"
+      ],
+      "accept": "cargo clippy --all-targets --message-format short 2>&1 | grep -cE '^[^ ].*warning' | grep -q '^0$'",
+      "acceptance_prose": "Fix every clippy warning in the lib, bins, and tests so `cargo clippy --all-targets` reports zero warnings. Prefer applying the suggested fix (derive the impl, use Option::map_or, drop needless `&`, drop unit `let`, remove unused import/var, use field init shorthand, use `!x` instead of `x == false`). Do not change behavior and do not disable lints with allow attributes unless unavoidable. Keep all existing tests passing.",
+      "manual": false,
+      "priority": 1
+    },
+    {
+      "id": "af-parallel-e2e",
+      "title": "Add an E2E test that proves parallel multi-worker dispatch: two independent tasks run concurrently on two distinct workers and both merge",
+      "deps": [],
+      "scope": [
+        "tests/e2e.rs",
+        "tests/"
+      ],
+      "accept": "cargo test --test e2e -- --list 2>&1 | grep -qi parallel && cargo test --test e2e 2>&1 | grep -qE '0 failed'",
+      "acceptance_prose": "Add a new test in tests/e2e.rs (e.g. `parallel_multi_worker_dispatch`) that: creates two independent tasks A and B (no deps), configures TWO workers w1 w2 (both `cli` = CARGO_BIN_EXE_example_agent) with max_parallel=2, starts the run, and asserts that at some point both A and B were dispatched to different workers before either completed. Use a FAKE_AGENT_TOUCH/FAKE_AGENT_OUT mechanism or a sleep/backoff so the two agents overlap in time, proving concurrency. The run must exit 0 and both tasks reach Done. Respect the shared ENV_GUARD mutex and the fixture() signature.",
+      "manual": false,
+      "priority": 2
+    },
+    {
+      "id": "af-dryrun-depth",
+      "title": "Make `af run --dry-run` list every task with its DAG depth and readiness (not only the first ready batch)",
+      "deps": [],
+      "scope": [
+        "src/run.rs",
+        "src/scheduler.rs",
+        "src/main.rs"
+      ],
+      "accept": "cargo test 2>&1 | grep -qE '0 failed' && D=$(mktemp -d) && printf '{\"tasks\":[{\"id\":\"ZZ-A\",\"title\":\"a\",\"accept\":\"true\"},{\"id\":\"ZZ-B\",\"title\":\"b\",\"deps\":[\"ZZ-A\"],\"accept\":\"true\"}]}' > $D/t.json && printf '{\"defaults\":{\"accept_timeout_s\":10,\"max_attempts\":1},\"workers\":[{\"name\":\"w\",\"provider\":\"o\",\"model\":\"m\",\"enabled\":true,\"cli\":\"true\"}]}' > $D/w.json && ./target/debug/af run --dry-run --tasks $D/t.json --workers $D/w.json 2>&1 | grep -q 'ZZ-B' && rm -rf $D",
+      "acceptance_prose": "Improve `af run --dry-run` so it prints ALL tasks in dependency order, each annotated with its DAG depth and READY/BLOCKED/DONE readiness, instead of only the single batch that is ready right now. Keep the existing text output shape recognizable (still show worker assignment and scope for ready tasks). Add or update a unit/e2e test asserting the dry-run output mentions more than just the first ready task. All 77 existing tests must still pass.",
+      "manual": false,
+      "priority": 3
+    },
+    {
+      "id": "af-readme-dogfood",
+      "title": "Add a short 'Dogfooding / parallel workers' section to README showing a full parallel 2-repo/2-worker example invocation and how trust routing picks workers",
+      "deps": [],
+      "scope": [
+        "README.md",
+        "docs/"
+      ],
+      "accept": "grep -qiE 'dogfood|parallel worker|af run --worker' README.md",
+      "acceptance_prose": "Add a concise README subsection demonstrating running parallel tasks across two workers (two entries in workers.json), including the `af run` invocation and a note that `af cost` shows per-worker trust. Keep it factual and consistent with the existing worker schema table. No dependency changes.",
+      "manual": false,
+      "priority": 4
+    }
+  ]
+}

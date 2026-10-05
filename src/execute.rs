@@ -295,9 +295,7 @@ fn render_prompt(
     // A configured template wins; if it is unreadable/missing we fall back
     // to the built-in DEFAULT_PROMPT (which carries every placeholder).
     let custom = fs::read_to_string(&st.prompt_file).ok();
-    let template = custom
-        .as_deref()
-        .unwrap_or(DEFAULT_PROMPT);
+    let template = custom.as_deref().unwrap_or(DEFAULT_PROMPT);
     let scope = if task.scope.is_empty() {
         "*".to_string()
     } else {

@@ -1,0 +1,55 @@
+{
+  "_meta": { "project": "research-runner" },
+  "tasks": [
+    {
+      "id": "rr-cleanup",
+      "title": "Housekeeping: rm stale distributed_fetch.py.bak, pin requirements.txt, add LICENSE (MIT, this repo has none), tidy .gitignore",
+      "deps": [],
+      "scope": ["distributed_fetch.py.bak", "requirements.txt", "LICENSE", ".gitignore"],
+      "accept": "test ! -e distributed_fetch.py.bak && test -f LICENSE && grep -qE 'pyyaml>=|requests>=' requirements.txt",
+      "acceptance_prose": "Remove the backup file distributed_fetch.py.bak. Pin requirements.txt so each dep has a >= version bound. Add an MIT LICENSE file. Keep .gitignore tidy.",
+      "manual": false,
+      "priority": 1
+    },
+    {
+      "id": "rr-refactor",
+      "title": "Split monolithic distributed_fetch.py (666 lines) into a package under distributed_fetch/ while preserving the CLI exactly",
+      "deps": ["rr-cleanup"],
+      "scope": ["distributed_fetch.py", "distributed_fetch/", "run.sh", "merge_distributed.py"],
+      "accept": "python3 distributed_fetch.py --help >/dev/null 2>&1 && python3 merge_distributed.py --help >/dev/null 2>&1 && python3 -m py_compile distributed_fetch/__init__.py 2>/dev/null || test -d distributed_fetch",
+      "acceptance_prose": "Restructure distributed_fetch.py into a package (e.g. distributed_fetch/ with modules for config, balancing, hosts, fetchers, cli) WITHOUT changing the CLI flags or exit behavior. run.sh must still work unchanged. You may keep a thin distributed_fetch.py entry that invokes the package, or update run.sh accordingly.",
+      "manual": false,
+      "priority": 2
+    },
+    {
+      "id": "rr-flow",
+      "title": "Flow hardening: clearer logging, adaptive 429 backoff, and resume-from-checkpoint in distributed_fetch",
+      "deps": ["rr-refactor"],
+      "scope": ["distributed_fetch/", "distributed_fetch.py"],
+      "accept": "python3 -m py_compile distributed_fetch/*.py 2>/dev/null || python3 -m py_compile distributed_fetch.py; test -f distributed_fetch/__init__.py || test -f distributed_fetch.py",
+      "acceptance_prose": "Improve the fetch loop: structured logging with timestamps, exponential backoff on 429 rate limits, and a checkpoint file so a rerun resumes from where it left off instead of restarting. Keep all existing CLI flags working and default behavior unchanged.",
+      "manual": false,
+      "priority": 3
+    },
+    {
+      "id": "rr-capability",
+      "title": "Add --tag / --per-category CLI wiring for a smoke-host mode that needs no real SSH/network to test",
+      "deps": ["rr-flow"],
+      "scope": ["distributed_fetch/", "distributed_fetch.py", "run.sh", "hosts.yaml"],
+      "accept": "python3 distributed_fetch.py --help 2>&1 | grep -qE -- '--(tag|per-category|smoke)' || python3 distributed_fetch.py --help 2>&1 | grep -q 'per-category'",
+      "acceptance_prose": "Add a 'smoke' host mode (a fake host that uses no SSH, so the pipeline can be exercised offline) and expose --tag for filtering repos/categories. Wire entry points through run.sh. Keep all existing behavior intact; the gate only requires the new flag(s) to appear in --help.",
+      "manual": false,
+      "priority": 4
+    },
+    {
+      "id": "rr-tests",
+      "title": "Add a pytest suite (config parsing, balancing, --split, hosts parsing) for the refactored code",
+      "deps": ["rr-refactor"],
+      "scope": ["tests/", "requirements.txt", "distributed_fetch/", "distributed_fetch.py"],
+      "accept": "python3 -m pytest -q 2>&1 | tail -1 | grep -qE 'passed|failed 0'",
+      "acceptance_prose": "Create a tests/ directory with pytest tests covering: hosts.yaml parsing, repo balancing across hosts, --split mode categorization, and CLI arg validation. Use only local/offline fixtures (no live SSH or API calls). Ensure `python3 -m pytest -q` passes.",
+      "manual": false,
+      "priority": 5
+    }
+  ]
+}

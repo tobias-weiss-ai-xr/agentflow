@@ -320,8 +320,14 @@ fn validate_cycle_exits_nonzero_and_names_the_cycle() {
     let cli = Cli::new_with_tasks(tasks);
     let (code, out) = cli.af(&["validate"]);
     assert_ne!(code, 0, "cyclic config must exit nonzero: {out}");
-    assert!(out.contains("config error"), "surfaced as config error: {out}");
-    assert!(out.contains("dependency cycle"), "error names the cycle: {out}");
+    assert!(
+        out.contains("config error"),
+        "surfaced as config error: {out}"
+    );
+    assert!(
+        out.contains("dependency cycle"),
+        "error names the cycle: {out}"
+    );
     assert!(
         out.contains("A") && out.contains("B"),
         "cycle members reported: {out}"

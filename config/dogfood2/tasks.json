@@ -1,0 +1,55 @@
+{
+  "_meta": { "project": "agentflow-dogfood2" },
+  "tasks": [
+    {
+      "id": "af2-prompt-harden",
+      "title": "Harden prompt rendering in src/execute.rs: inject the exact acceptance gate command as a new {{ACCEPT_CMD}} placeholder, strip literal {{#SCOPE}}/{{/SCOPE}} markers, and warn+append when a custom template omits {{SCOPE}}/{{ACCEPTANCE}}. Add a unit test named `prompt_includes_accept_command` proving the rendered prompt contains the task's real `accept` shell command.",
+      "deps": [],
+      "scope": ["src/execute.rs", "prompts/worker.md"],
+      "accept": "cargo test --quiet 2>&1 | grep -qE '0 failed' && cargo test accept_command 2>&1 | grep -qE '[1-9][0-9]* passed' && ! grep -rqE 'SCOPE_BLOCK|ACCEPT_COMMAND|World-Office' src/ prompts/",
+      "acceptance_prose": "In src/execute.rs, make render_prompt ALWAYS give the agent (a) the file scope and (b) the exact acceptance gate shell command from task.accept (a new {{ACCEPT_CMD}} placeholder). Strip the literal conditional markers {{#SCOPE}} and {{/SCOPE}} that currently leak into the rendered text. If a configured template is missing {{SCOPE}} or {{ACCEPTANCE}}, print a warning to stderr and append the missing sections so scope/acceptance can never be silently dropped again. Add a test named `prompt_includes_accept_command`. Keep all existing tests passing.",
+      "manual": false,
+      "priority": 1
+    },
+    {
+      "id": "af2-clean-cmd",
+      "title": "Add `af clean [--dry-run]` exposing the dead `worktree::clean_all`: remove orphaned worktrees/branches left by crashed runs",
+      "deps": [],
+      "scope": ["src/main.rs", "src/run.rs", "src/worktree.rs", "tests/"],
+      "accept": "cargo build --quiet --bin af && D=$(mktemp -d) && mkdir -p $D/wt/orphan && TF_REPO_DIR=$D TF_STATE_DIR=$D TF_WORKTREE_ROOT=$D/wt ./target/debug/af clean --tasks config/tasks.json.example --workers config/workers.json.example >/dev/null && test ! -d $D/wt/orphan && cargo test --quiet 2>&1 | grep -qE '0 failed'",
+      "acceptance_prose": "Add an `af clean [--dry-run]` subcommand that deletes orphaned worktrees/branches under TF_WORKTREE_ROOT (wire up the existing but unused `worktree::clean_all` and/or `worktree::heal`). With --dry-run it prints what WOULD be removed and changes nothing; without it, it removes them and exits 0. Update the USAGE string in main.rs. Add at least one test proving an orphan worktree dir is gone after clean. All existing tests must still pass.",
+      "manual": false,
+      "priority": 2
+    },
+    {
+      "id": "af2-status-json",
+      "title": "Fix `af status --json`: the README claims a JSON status board but `af status` ignores --json and prints the human table",
+      "deps": ["af2-clean-cmd"],
+      "scope": ["src/main.rs", "src/run.rs", "tests/"],
+      "accept": "cargo build --quiet --bin af && ./target/debug/af status --json --tasks config/tasks.json.example --workers config/workers.json.example 2>/dev/null | python3 -c 'import json,sys; json.load(sys.stdin)' && cargo test --quiet 2>&1 | grep -qE '0 failed'",
+      "acceptance_prose": "Make `af status --json` emit valid, machine-parseable JSON by reusing run::status_json (currently `af status` always prints the human board even with --json). JSON must include each task's id/state/attempts. Plain `af status` must keep printing the human board. Add a test asserting `status --json` parses as JSON. All existing tests must pass.",
+      "manual": false,
+      "priority": 3
+    },
+    {
+      "id": "af2-validate-cmd",
+      "title": "Add `af validate`: pre-flight config check that reports cycles/duplicate ids/unknown workers and exits 0 valid / nonzero invalid, without running tasks",
+      "deps": ["af2-status-json"],
+      "scope": ["src/main.rs", "src/config.rs", "tests/"],
+      "accept": "cargo build --quiet --bin af && D=$(mktemp -d) && printf '{\"tasks\":[{\"id\":\"A\",\"title\":\"a\",\"deps\":[\"B\"],\"accept\":\"true\"},{\"id\":\"B\",\"title\":\"b\",\"deps\":[\"A\"],\"accept\":\"true\"}]}' > $D/bad.json && printf '{\"workers\":[{\"name\":\"w\",\"provider\":\"o\",\"model\":\"m\",\"enabled\":true,\"cli\":\"true\"}]}' > $D/w.json && ./target/debug/af validate --tasks config/tasks.json.example --workers config/workers.json.example >/dev/null && if ./target/debug/af validate --tasks $D/bad.json --workers $D/w.json >/dev/null 2>&1; then exit 1; fi && cargo test --quiet 2>&1 | grep -qE '0 failed'",
+      "acceptance_prose": "Add an `af validate` subcommand that loads and validates the tasks/workers config WITHOUT dispatching anything, prints any warnings, and exits 0 when valid / nonzero (printing the error) when invalid. It must surface config::load errors such as dependency cycles, duplicate ids, and no-enabled-workers. Add tests for both the valid and the cyclic-invalid case. Update the USAGE string. All existing tests must pass.",
+      "manual": false,
+      "priority": 4
+    },
+    {
+      "id": "af2-cli-docs",
+      "title": "Keep README honest: document `af clean`, `af validate`, and `af status --json` in the CLI block and feature list",
+      "deps": ["af2-clean-cmd", "af2-status-json", "af2-validate-cmd", "af2-prompt-harden"],
+      "scope": ["README.md", "docs/"],
+      "accept": "grep -qE 'af clean' README.md && grep -qE 'af validate' README.md && grep -qE 'af status \\[--json\\]' README.md",
+      "acceptance_prose": "Update the README.md CLI block to list `af clean [--dry-run]`, `af validate`, and `af status [--json]`. Keep the existing style/table format. No code changes.",
+      "manual": false,
+      "priority": 5
+    }
+  ]
+}

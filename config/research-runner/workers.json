@@ -1,0 +1,19 @@
+{
+  "defaults": {
+    "accept_timeout_s": 300,
+    "max_attempts": 2,
+    "retry_delay_s": 10,
+    "agent_timeout_s": 1800
+  },
+  "workers": [
+    {
+      "name": "opencode-go",
+      "provider": "opencode-go",
+      "model": "deepseek-v4-flash",
+      "api_base": "",
+      "api_key_env": "",
+      "enabled": true,
+      "cli": "pi"
+    }
+  ]
+}
