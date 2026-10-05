@@ -113,13 +113,22 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Emit a realistic pi-style `--mode json` JSON Lines transcript on stdout:
-/// one JSON object per line, the assistant text split across two
-/// `text_delta` chunks (char-boundary safe), one tool call, a PARTIAL usage
-/// on the streaming events and the full/final usage on `message_end` /
-/// `turn_end` / `agent_end` (identical totals — the authoritative number is
-/// the last one seen).
+/// Emit a realistic pi-style `--mode json` JSON Lines transcript on stdout.
 fn emit_json_transcript(text: &str, total: u64) {
+    for event in json_transcript_events(text, total) {
+        println!("{event}");
+    }
+}
+
+/// The events `emit_json_transcript` prints, split out so the parser's own
+/// test suite can round-trip them through `agentflow::transcript::parse`:
+/// one JSON object per line, the assistant text split across two
+/// `text_delta` chunks (char-boundary safe), a thinking block and a tool call
+/// WITH their streaming chunks, the tool's result as a `toolResult` message,
+/// a PARTIAL usage on the streaming events and the full/final usage on
+/// `message_end` / `turn_end` / `agent_end` (identical totals — the
+/// authoritative number is the last one seen).
+fn json_transcript_events(text: &str, total: u64) -> Vec<serde_json::Value> {
     let usage = |t: u64| {
         serde_json::json!({
             "input": t.saturating_sub(2),
@@ -139,23 +148,95 @@ fn emit_json_transcript(text: &str, total: u64) {
         .map(|(i, _)| i)
         .unwrap_or(text.len());
     let (a, b) = text.split_at(mid);
-    let events = [
+    vec![
         serde_json::json!({"type": "session", "sessionId": "fake-session"}),
+        serde_json::json!({"type": "message_start", "message": {"role": "user", "content": [{"type": "text", "text": "<task prompt>"}]}}),
+        serde_json::json!({"type": "message_end", "message": {"role": "user", "content": [{"type": "text", "text": "<task prompt>"}]}}),
+        serde_json::json!({"type": "message_start", "message": {"role": "assistant", "content": []}}),
+        // A thinking block: start + chunks + end. The chunks must NOT become
+        // log lines (one real tool call produced 110 of them).
+        serde_json::json!({"type": "message_update", "assistantMessageEvent": {"type": "thinking_start", "contentIndex": 0}}),
+        serde_json::json!({"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "Let me "}}),
+        serde_json::json!({"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "inspect the worktree."}}),
+        serde_json::json!({"type": "message_update", "assistantMessageEvent": {"type": "thinking_end", "contentIndex": 0, "content": "Let me inspect the worktree."}}),
+        // A tool call: start + argument chunks + the finished call.
+        serde_json::json!({"type": "message_update", "assistantMessageEvent": {"type": "toolcall_start", "contentIndex": 1}}),
+        serde_json::json!({"type": "message_update", "assistantMessageEvent": {"type": "toolcall_delta", "contentIndex": 1, "delta": "{\"command\":"}}),
+        serde_json::json!({"type": "message_update", "assistantMessageEvent": {"type": "toolcall_delta", "contentIndex": 1, "delta": "\"git status\"}"}}),
+        serde_json::json!({"type": "message_update", "assistantMessageEvent": {"type": "toolcall_end", "contentIndex": 1,
+            "toolCall": {"type": "toolCall", "id": "c1", "name": "bash", "arguments": {"command": "git status"}}}}),
+        serde_json::json!({"type": "message_end", "message": {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "Let me inspect the worktree."},
+            {"type": "toolCall", "name": "bash"}], "usage": usage(partial)}}),
+        // The tool runs; its RESULT comes back as a `toolResult` message.
+        serde_json::json!({"type": "tool_execution_start", "toolCallId": "c1", "toolName": "bash", "args": {"command": "git status"}}),
+        serde_json::json!({"type": "tool_execution_end", "toolCallId": "c1", "toolName": "bash",
+            "result": {"content": [{"type": "text", "text": "stub tool output"}]}, "isError": false}),
+        serde_json::json!({"type": "message_end", "message": {"role": "toolResult", "content": [{"type": "text", "text": "stub tool output"}]}}),
+        serde_json::json!({"type": "turn_end", "usage": usage(partial)}),
+        // Turn 2: the assistant's answer, streamed in chunks then finalized.
         serde_json::json!({"type": "message_start", "message": {"role": "assistant", "content": []}}),
         serde_json::json!({"type": "message_update", "usage": usage(partial),
-            "assistantMessageEvent": {"type": "tool_call", "toolCallId": "c1", "title": "inspect worktree"}}),
+            "assistantMessageEvent": {"type": "text_start", "contentIndex": 0}}),
         serde_json::json!({"type": "message_update", "usage": usage(partial),
             "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": a}}),
         serde_json::json!({"type": "message_update", "usage": usage(partial),
             "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": b}}),
+        serde_json::json!({"type": "message_update", "usage": usage(partial),
+            "assistantMessageEvent": {"type": "text_end", "contentIndex": 0, "content": text}}),
         serde_json::json!({"type": "message_end", "message": {"role": "assistant",
             "content": [{"type": "text", "text": text}], "provider": "example", "model": "stub",
             "usage": usage(total), "stopReason": "stop"}}),
         serde_json::json!({"type": "turn_end", "usage": usage(total)}),
         serde_json::json!({"type": "agent_end", "messages": [], "usage": usage(total), "willRetry": false}),
         serde_json::json!({"type": "agent_settled"}),
-    ];
-    for line in events {
-        println!("{line}");
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The stub is the transcript parser's fixture: emit → parse must
+    /// round-trip. This is what proves the JSON the stub prints is the same
+    /// shape the parser was built against, so an e2e `af cost` showing
+    /// tokens can only mean the real path works.
+    #[test]
+    fn the_json_fixture_round_trips_through_the_transcript_parser() {
+        let stream: String = json_transcript_events("done", 4242)
+            .iter()
+            .map(|e| format!("{e}\n"))
+            .collect();
+        let t = agentflow::transcript::parse(&stream);
+        // The final total, not the streaming partial.
+        assert_eq!(t.usage.map(|u| u.total_tokens), Some(4242));
+        // Rendered as prose for a human, with roles kept honest.
+        assert!(t.rendered.contains("user: <task prompt>"), "{}", t.rendered);
+        assert!(t.rendered.contains("assistant: done"), "{}", t.rendered);
+        // The tool call and its output, without the streaming chunks.
+        assert!(
+            t.rendered.contains("[tool] bash: git status"),
+            "{}",
+            t.rendered
+        );
+        assert!(t.rendered.contains("stub tool output"), "{}", t.rendered);
+        for chunk in ["thinking_delta", "toolcall_delta", "text_delta"] {
+            assert!(!t.rendered.contains(chunk), "{}", t.rendered);
+        }
+    }
+
+    /// A multi-byte summary must split at a char boundary, not mid-codepoint.
+    #[test]
+    fn the_fixture_splits_multibyte_text_without_panicking() {
+        let stream: String = json_transcript_events("fertig \u{2713} \u{2713}", 10)
+            .iter()
+            .map(|e| format!("{e}\n"))
+            .collect();
+        let t = agentflow::transcript::parse(&stream);
+        assert!(
+            t.rendered.contains("assistant: fertig \u{2713} \u{2713}"),
+            "{}",
+            t.rendered
+        );
     }
 }

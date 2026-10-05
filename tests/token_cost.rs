@@ -244,9 +244,31 @@ fn json_transcript_yields_tokens_and_a_readable_log() {
         log.contains(&format!("assistant: {ASSISTANT_TEXT}")),
         "the rendered assistant text must be in the log: {log}"
     );
+    // The whole point of the rendering: the finished tool call is named (with
+    // its informative argument), its output follows, and the streaming chunks
+    // that dominate a real stream are NOT rendered one line each.
     assert!(
-        log.contains("[tool_call] inspect worktree"),
-        "tool activity stays visible in compact form: {log}"
+        log.contains("[tool] bash: git status"),
+        "the tool call is rendered with its name and argument: {log}"
+    );
+    assert!(
+        log.contains("[toolResult]") && log.contains("stub tool output"),
+        "the tool's output stays visible: {log}"
+    );
+    for chunk in [
+        "thinking_delta",
+        "toolcall_delta",
+        "text_delta",
+        "thinking_start",
+    ] {
+        assert!(
+            !log.contains(chunk),
+            "streaming chunk {chunk} must not be rendered per-event: {log}"
+        );
+    }
+    assert!(
+        log.contains("[thinking] Let me inspect the worktree."),
+        "thinking is summarized, not streamed: {log}"
     );
     assert!(
         log.contains(EXPECTED_USAGE_LINE),
