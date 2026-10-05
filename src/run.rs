@@ -270,6 +270,16 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
             println!("{}", board_of(cfg, &status));
             return 0;
         }
+        // Cost ceiling (r8-budget-cap): measured fresh from the receipts on
+        // every round so the meter sees prior runs and restarts too. 0
+        // disables the ceiling entirely — the legacy behaviour.
+        let measured = if st.max_wall_clock_s == 0 {
+            0.0
+        } else {
+            consumed_wall_clock_s(&store.load_receipts(), &in_scope)
+        };
+        let over_budget = wall_clock_budget_exhausted(st, measured);
+
         let running_ids: Vec<String> = running.lock().unwrap().keys().cloned().collect();
         if running_ids.is_empty() {
             // Nothing in flight: progress is possible only if something is
@@ -279,6 +289,26 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                 .into_iter()
                 .filter(|t| in_scope.iter().any(|s| s.id == t.id))
                 .count();
+            // Budget stop TERMINATES here: a ready-but-undispatched task
+            // would otherwise keep the "progress is possible" check happy
+            // forever, spinning the loop. Completion above already won, so
+            // reaching this point means work genuinely remains.
+            if over_budget && ready_in_scope > 0 {
+                let not_started = in_scope
+                    .iter()
+                    .filter(|t| {
+                        matches!(
+                            status.get(&t.id).map(|s| &s.state),
+                            None | Some(TaskState::Ready)
+                        )
+                    })
+                    .count();
+                eprintln!(
+                    "wall-clock budget exhausted: spent {measured:.1}s of {}s cap; {not_started} in-scope task(s) not started",
+                    st.max_wall_clock_s
+                );
+                return 3;
+            }
             if ready_in_scope == 0 {
                 let blocked = scheduler::find_deadlock_in(cfg, &status, &[], &in_scope)
                     .unwrap_or_else(|| in_scope.iter().map(|t| t.id.clone()).collect());
@@ -291,8 +321,9 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
             }
         }
 
-        // Dispatch a round.
-        if running.lock().unwrap().len() < max_parallel {
+        // Dispatch a round — never while the ceiling is exhausted: attempts
+        // already in flight are allowed to finish, only NEW ones are blocked.
+        if !over_budget && running.lock().unwrap().len() < max_parallel {
             let running_now = running.lock().unwrap().keys().cloned().collect::<Vec<_>>();
             let ready = scheduler::ready_tasks(cfg, &status, &running_now, max_attempts);
             for t in ready {
@@ -777,6 +808,18 @@ pub fn dry_run(cfg: &Config, st: &Settings) -> i32 {
             }
         );
     }
+    // Budget (r8-budget-cap): surface an exhausted ceiling in the plan too —
+    // dry-run still creates nothing and still exits 0.
+    if st.max_wall_clock_s > 0 {
+        let in_scope: Vec<&crate::config::Task> = cfg.tasks.iter().collect();
+        let measured = consumed_wall_clock_s(&store.load_receipts(), &in_scope);
+        if wall_clock_budget_exhausted(st, measured) {
+            println!(
+                "  BUDGET: spent {measured:.1}s of {}s cap (TF_MAX_WALL_CLOCK_S) — a run would stop before dispatching new attempts",
+                st.max_wall_clock_s
+            );
+        }
+    }
     println!("  ({ready_now} ready now; nothing was created or changed)");
     0
 }
@@ -923,6 +966,25 @@ fn select_receipts<'a>(receipts: &'a [Receipt], filter: &CostFilter) -> Vec<&'a 
         window.sort_by_key(|r| r.ts);
     }
     window
+}
+
+/// Campaign budget meter (r8-budget-cap): the wall-clock seconds already
+/// consumed by the IN-SCOPE tasks — read through the same loader and the
+/// same window selection `af cost` uses, so the enforced ceiling is exactly
+/// the TOTAL that report shows. The receipts are the persisted counter
+/// (they survive restarts), so no second field has to be kept in sync.
+fn consumed_wall_clock_s(receipts: &[Receipt], in_scope: &[&crate::config::Task]) -> f64 {
+    select_receipts(receipts, &CostFilter::default())
+        .into_iter()
+        .filter(|r| in_scope.iter().any(|t| t.id == r.task))
+        .map(|r| r.wall_clock_s)
+        .sum()
+}
+
+/// Is the campaign's measured wall-clock spend at or above its ceiling?
+/// `max_wall_clock_s == 0` disables the ceiling (unlimited, legacy).
+fn wall_clock_budget_exhausted(st: &Settings, measured: f64) -> bool {
+    st.max_wall_clock_s > 0 && measured >= st.max_wall_clock_s as f64
 }
 
 /// Stable grouping key for a failed attempt's reason: the first line of
@@ -1212,6 +1274,7 @@ mod tests {
             prompt_file: PathBuf::new(),
             agent_timeout_s: 3600,
             agent_stall_s: 0,
+            max_wall_clock_s: 0,
             sandbox_cmd: vec![],
         }
     }

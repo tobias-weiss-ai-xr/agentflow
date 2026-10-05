@@ -95,6 +95,7 @@ fn fixture(
         prompt_file: dir.join("no-template.md"),
         agent_timeout_s,
         agent_stall_s,
+        max_wall_clock_s: 0,
         sandbox_cmd: vec![],
     };
     Fixture { dir, repo, cfg, st }
