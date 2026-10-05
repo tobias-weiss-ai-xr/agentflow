@@ -66,6 +66,8 @@ mod tests {
             name: name.to_string(),
             output: "text".into(),
             args: Vec::new(),
+            params_b: None,
+            price_per_mtok_usd: None,
             ..Default::default()
         }
     }

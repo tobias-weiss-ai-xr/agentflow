@@ -668,6 +668,8 @@ mod tests {
             api_key_env: api_key_env.map(str::to_string),
             output: "text".into(),
             args: Vec::new(),
+            params_b: None,
+            price_per_mtok_usd: None,
             ..Default::default()
         }
     }
@@ -871,6 +873,8 @@ model {{MODEL}}/{{PROVIDER}}
             cli: "c".into(),
             output: "text".into(),
             args: Vec::new(),
+            params_b: None,
+            price_per_mtok_usd: None,
             ..Default::default()
         };
         let out = render_prompt(

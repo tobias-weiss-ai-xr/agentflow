@@ -126,7 +126,7 @@ impl Drop for Cli {
 
 const TASKS: &str = r#"{ "tasks": [ { "id": "A", "title": "t", "scope": ["DONE.txt"], "accept": "test -f DONE.txt" } ] }"#;
 const WORKERS: &str = r#"{ "defaults": { "max_attempts": 1, "accept_timeout_s": 10 },
-    "workers": [ { "name": "w1", "provider": "openai", "model": "gpt-4o", "enabled": true, "cli": "unused" } ] }"#;
+    "workers": [ { "name": "w1", "provider": "openai", "model": "gpt-4o", "params_b": 8, "enabled": true, "cli": "unused" } ] }"#;
 
 #[test]
 fn help_and_version_exit_zero() {
@@ -793,7 +793,7 @@ fn config_task_schema_loads_validates_and_warns() {
     .unwrap();
     std::fs::write(
         config_dir.join("workers.json"),
-        r#"{ "workers": [ { "name": "w1", "provider": "p", "model": "m", "enabled": true } ] }"#,
+        r#"{ "workers": [ { "name": "w1", "provider": "p", "model": "m", "params_b": 8, "enabled": true } ] }"#,
     )
     .unwrap();
     let cfg = config::load(
@@ -1046,6 +1046,8 @@ fn ucb1_selection_matches_the_spec_scenarios() {
         name: name.to_string(),
         output: "text".into(),
         args: Vec::new(),
+        params_b: None,
+        price_per_mtok_usd: None,
         ..Default::default()
     };
 

@@ -121,6 +121,18 @@ pub struct Worker {
     /// files keep working unchanged).
     #[serde(default)]
     pub args: Vec<String>,
+    /// Model size in BILLIONS of parameters — an operator-DECLARED proxy
+    /// for expense, used when the provider reports no price. Absent =
+    /// neutral (no opinion), so an existing workers.json keeps working
+    /// unchanged. This is a declared assumption, NOT vendor data:
+    /// agentflow never guesses a model's size from its name.
+    #[serde(default)]
+    pub params_b: Option<f64>,
+    /// Real price in USD per MILLION tokens, when the operator knows it.
+    /// A declared price beats the `params_b` proxy. Also a declared
+    /// assumption, not vendor data; absent = neutral.
+    #[serde(default)]
+    pub price_per_mtok_usd: Option<f64>,
 }
 
 impl Default for Worker {
@@ -135,6 +147,8 @@ impl Default for Worker {
             cli: "pi".to_string(),
             output: default_output(),
             args: Vec::new(),
+            params_b: None,
+            price_per_mtok_usd: None,
         }
     }
 }
@@ -245,6 +259,14 @@ pub fn load(tasks_path: &Path, workers_path: &Path) -> Result<Config, String> {
     })
 }
 
+/// A declared cost-basis number is usable only when finite and strictly
+/// positive (the same predicate `crate::cost::is_usable` expresses): a NaN
+/// or non-positive weight would silently defeat cost comparison, which is
+/// why an unusable declaration is a load error rather than a warning.
+fn cost_basis_is_usable(v: f64) -> bool {
+    v.is_finite() && v > 0.0
+}
+
 /// Returns warnings (non-fatal) or a hard error.
 fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
     let mut warnings = Vec::new();
@@ -306,6 +328,32 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
         }
         if w.enabled {
             enabled += 1;
+        }
+        // Declared cost basis: an UNUSABLE declared value (not finite, or
+        // <= 0) is a hard error naming the worker and the field — a NaN or
+        // non-positive weight would silently defeat cost comparison.
+        // Absent is fine (neutral, warned below).
+        for (field, value) in [
+            ("params_b", &w.params_b),
+            ("price_per_mtok_usd", &w.price_per_mtok_usd),
+        ] {
+            if let Some(v) = value {
+                if !cost_basis_is_usable(*v) {
+                    return Err(format!(
+                        "worker \"{}\": {field} must be a finite positive number",
+                        w.name
+                    ));
+                }
+            }
+        }
+        // No declared basis at all: one warning per worker, so `af
+        // validate`'s warning count reflects the neutral estimate. Only
+        // ENABLED workers warn — a disabled worker is never dispatched.
+        if w.enabled && w.params_b.is_none() && w.price_per_mtok_usd.is_none() {
+            warnings.push(format!(
+                "worker \"{}\" has no cost basis (params_b or price_per_mtok_usd): cost estimates will be neutral for it",
+                w.name
+            ));
         }
     }
     if enabled == 0 {

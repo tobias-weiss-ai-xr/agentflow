@@ -370,6 +370,161 @@ fn disabled_worker_loads_but_is_not_selectable() {
     );
 }
 
+/// A worker's cost basis is DECLARED by the operator, never inferred:
+/// `params_b` (billions of parameters — a proxy for expense) and
+/// `price_per_mtok_usd` (real USD per million tokens; beats the proxy)
+/// are optional, absent = neutral, and a workers.json that never
+/// mentions them loads byte-for-byte unchanged.
+// spec: config/worker-schema-loading#cost-basis-is-declared-and-optional
+#[test]
+fn worker_cost_basis_is_declared_and_defaults_to_neutral() {
+    let d = fresh_dir("cost-basis");
+
+    // One worker declares BOTH fields; the other declares NEITHER.
+    let (tasks, workers) = write_config(
+        &d,
+        ONE_TASK,
+        r#"{ "workers": [
+            {"name":"big","provider":"p","model":"m","params_b":235,"price_per_mtok_usd":1.25},
+            {"name":"plain","provider":"p","model":"m"}
+        ] }"#,
+    );
+    let cfg = load(&tasks, &workers).expect("declared cost basis loads");
+    let big = cfg
+        .workers
+        .iter()
+        .find(|w| w.name == "big")
+        .expect("big worker present");
+    assert_eq!(big.params_b, Some(235.0), "params_b survives loading");
+    assert_eq!(
+        big.price_per_mtok_usd,
+        Some(1.25),
+        "price_per_mtok_usd survives loading"
+    );
+    let plain = cfg
+        .workers
+        .iter()
+        .find(|w| w.name == "plain")
+        .expect("plain worker present");
+    assert_eq!(plain.params_b, None, "absent params_b => neutral (None)");
+    assert_eq!(
+        plain.price_per_mtok_usd, None,
+        "absent price_per_mtok_usd => neutral (None)"
+    );
+
+    // The struct Default agrees: a constructed worker starts neutral.
+    let w = Worker::default();
+    assert_eq!(w.params_b, None);
+    assert_eq!(w.price_per_mtok_usd, None);
+
+    // An OLD workers.json that never mentions the fields still loads
+    // unchanged — and its worker is neutral, exactly as before.
+    let (old_t, old_w) = write_config(&d.join("legacy"), ONE_TASK, ONE_WORKER);
+    let old = load(&old_t, &old_w).expect("legacy workers.json keeps loading");
+    assert_eq!(old.workers.len(), 1);
+    assert_eq!(old.workers[0].params_b, None);
+    assert_eq!(old.workers[0].price_per_mtok_usd, None);
+}
+
+/// A declared value that is not usable (not finite, or <= 0) is a CONFIG
+/// ERROR naming the worker and the field — a NaN or non-positive weight
+/// would silently defeat cost comparison. (JSON cannot spell NaN, so the
+/// file-reachable shapes are 0 and negatives; the finite guard also
+/// covers programmatic NaN/infinity.)
+// spec: config/worker-schema-loading#unusable-cost-basis-values-are-rejected
+#[test]
+fn unusable_cost_basis_is_rejected_naming_worker_and_field() {
+    let d = fresh_dir("cost-basis-bad");
+    for (label, workers_body) in [
+        (
+            "params_b zero",
+            r#"{ "workers": [{"name":"zai","provider":"p","model":"m","params_b":0}] }"#,
+        ),
+        (
+            "params_b negative",
+            r#"{ "workers": [{"name":"zai","provider":"p","model":"m","params_b":-3}] }"#,
+        ),
+        (
+            "price zero",
+            r#"{ "workers": [{"name":"zai","provider":"p","model":"m","price_per_mtok_usd":0}] }"#,
+        ),
+        (
+            "price negative",
+            r#"{ "workers": [{"name":"zai","provider":"p","model":"m","price_per_mtok_usd":-0.5}] }"#,
+        ),
+    ] {
+        let (tasks, workers) =
+            write_config(&d.join(label.replace(' ', "-")), ONE_TASK, workers_body);
+        let err = load(&tasks, &workers).unwrap_err();
+        assert!(err.contains("zai"), "{label}: names the worker: {err}");
+        assert!(
+            err.contains("params_b") || err.contains("price_per_mtok_usd"),
+            "{label}: names the field: {err}"
+        );
+        assert!(
+            err.contains("finite positive"),
+            "{label}: states the rule: {err}"
+        );
+    }
+
+    // Control: usable declarations (a declared price, a declared size)
+    // load cleanly — only UNUSABLE values are rejected.
+    let (tasks, workers) = write_config(
+        &d.join("good"),
+        ONE_TASK,
+        r#"{ "workers": [{"name":"zai","provider":"p","model":"m","params_b":8,"price_per_mtok_usd":0.25}] }"#,
+    );
+    assert!(load(&tasks, &workers).is_ok(), "usable declarations load");
+}
+
+/// An ENABLED worker declaring neither basis warns exactly once (cost
+/// estimates will be neutral for it); a fully-declared worker does not,
+/// and neither does a DISABLED bare worker — it is never dispatched.
+// spec: config/worker-schema-loading#missing-cost-basis-warns
+#[test]
+fn missing_cost_basis_warns_once_for_enabled_workers_only() {
+    let d = fresh_dir("cost-basis-warn");
+    let (tasks, workers) = write_config(
+        &d,
+        ONE_TASK,
+        r#"{ "workers": [
+            {"name":"bare","provider":"p","model":"m"},
+            {"name":"rich","provider":"p","model":"m","params_b":8},
+            {"name":"priced","provider":"p","model":"m","price_per_mtok_usd":0.25},
+            {"name":"off","provider":"p","model":"m","enabled":false}
+        ] }"#,
+    );
+    let cfg = load(&tasks, &workers).expect("a missing basis warns, never fails");
+    let basis_warnings: Vec<&String> = cfg
+        .warnings
+        .iter()
+        .filter(|w| w.contains("no cost basis"))
+        .collect();
+    assert_eq!(
+        basis_warnings.len(),
+        1,
+        "exactly one warning: {:?}",
+        cfg.warnings
+    );
+    assert!(
+        basis_warnings[0].contains("\"bare\"") && basis_warnings[0].contains("neutral"),
+        "warning names the bare worker: {}",
+        basis_warnings[0]
+    );
+    assert!(
+        !cfg.warnings.iter().any(|w| w.contains("\"rich\"")),
+        "a declared params_b silences the warning"
+    );
+    assert!(
+        !cfg.warnings.iter().any(|w| w.contains("\"priced\"")),
+        "a declared price silences the warning"
+    );
+    assert!(
+        !cfg.warnings.iter().any(|w| w.contains("\"off\"")),
+        "a disabled worker never warns"
+    );
+}
+
 /// `detect_cycle` accepts every acyclic DAG shape the scheduler relies on
 /// (chain, diamond) and rejects a cycle with a message naming a member. A
 /// dep naming a NON-EXISTENT id is not a cycle here; it is rejected when the
