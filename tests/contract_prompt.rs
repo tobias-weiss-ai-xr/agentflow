@@ -37,6 +37,8 @@ fn contract_worker() -> Worker {
         model: "glm-5.2".into(),
         output: "text".into(),
         args: Vec::new(),
+        params_b: None,
+        price_per_mtok_usd: None,
         ..Default::default()
     }
 }

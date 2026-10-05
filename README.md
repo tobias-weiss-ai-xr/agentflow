@@ -144,8 +144,9 @@ decision in `TF_GATE_REPLAY` (`1`/`0`).
 
 `defaults` (`accept_timeout_s`, `max_attempts`, `retry_delay_s`, `agent_timeout_s`)
 plus a `workers` list: `name`, `provider`, `model`, `api_base`, `api_key_env`,
-`enabled`, `cli` (agent CLI binary; default `pi`). Each worker runs at most one
-task at a time.
+`enabled`, `cli` (agent CLI binary; default `pi`), and the optional
+cost-basis declarations `params_b` / `price_per_mtok_usd` (below). Each
+worker runs at most one task at a time.
 
 `retry_delay_s` (default `0`, strictly opt-in) is the backoff between
 attempts of the SAME task: after a failed attempt that will be retried,
@@ -161,6 +162,20 @@ Tasks accept an optional `repo` field: `""` (default) or `"main"` target the
 main repo (`TF_REPO_DIR`); other names must appear in `repos.json` (next to
 tasks.json or via `--repos`/`TF_REPOS_JSON`) — e.g.
 `{"repos": {"docs": "../docs-site"}}`. Unknown names warn and fall back.
+
+Two optional fields let a campaign DECLARE how expensive each worker is —
+they are the operator's declaration, used only when the provider reports no
+price (agentflow never guesses a model's size from its name):
+
+- `params_b` — model size in billions of parameters, a proxy for expense.
+- `price_per_mtok_usd` — real price in USD per million tokens, when the
+  operator knows it; a declared price beats the `params_b` proxy.
+
+Both absent = neutral (no opinion), so an existing workers.json keeps
+working unchanged. A declared value must be finite and positive — otherwise
+loading fails with an error naming the worker and the field — and an
+enabled worker declaring neither field gets a one-line warning at load time
+(cost estimates will be neutral for it); a disabled worker never warns.
 
 ## Sandboxing
 

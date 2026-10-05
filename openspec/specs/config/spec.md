@@ -45,6 +45,8 @@ THEN both parse and rank deterministically (CRITICAL > HIGH > number-ranked).
 
 Each worker SHALL also support `output` — the agent CLI's output mode: `"text"` (the default when the field is absent) or `"json"`. `"text"` keeps the legacy behaviour exactly: no extra argv entry, the raw stdout/stderr stream in the task log, and no token capture (`Receipt.tokens` stays `None`). `"json"` spawns the CLI with `--mode json` (placed with the built-in flags, before the worker's own `args` and never after the `-p @file` handoff), parses the JSON Lines transcript defensively (non-JSON lines and unknown event types are ignored; parsing never panics), takes the usage from the LAST event that carries one, writes a human-readable rendering of the transcript to the task log instead of raw JSON Lines, and records that total in the attempt receipt's `tokens`. A transcript that yields no usage at all (a crash, a truncation, a CLI that ignores the flag) SHALL leave the attempt otherwise unchanged with `tokens: None` — missing telemetry never fails an attempt. Any other `output` value SHALL be rejected at load time with an error naming the worker and the accepted values.
 
+Each worker SHALL also support two optional cost-basis fields — operator DECLARATIONS used only when the provider reports no price (agentflow never guesses a model's size from its name; these are assumptions, not vendor data): `params_b` (model size in billions of parameters, a proxy for expense) and `price_per_mtok_usd` (real price in USD per million tokens; a declared price beats the `params_b` proxy). Both absent SHALL mean neutral (no opinion), so a workers.json that never mentions the fields loads unchanged. A declared value that is not finite or not strictly positive SHALL be rejected at load time with an error naming the worker and the field. An ENABLED worker declaring neither field SHALL produce exactly one warning (cost estimates will be neutral for it); a disabled worker SHALL NOT warn — it is never dispatched.
+
 #### Scenario: valid workers load
 
 WHEN a `workers.json` with two enabled workers is loaded
@@ -84,6 +86,24 @@ THEN the attempt receipt's `tokens` carries the transcript's final `totalTokens`
 GIVEN a worker declaring `output: "jsn"`
 WHEN `workers.json` is loaded
 THEN loading fails with an error naming the worker and the accepted values (`text`, `json`).
+
+#### Scenario: cost basis is declared and optional
+
+GIVEN a workers.json where one worker declares `params_b` and `price_per_mtok_usd` and another declares neither
+WHEN the file is loaded
+THEN the declared values survive loading, the undeclared worker stays neutral (both fields `None`), and a workers.json that never mentions the fields loads unchanged.
+
+#### Scenario: unusable cost basis values are rejected
+
+GIVEN a worker declaring `params_b: 0` or a negative `price_per_mtok_usd`
+WHEN `workers.json` is loaded
+THEN loading fails with an error naming the worker and the field.
+
+#### Scenario: missing cost basis warns
+
+GIVEN an enabled worker that declares neither `params_b` nor `price_per_mtok_usd`
+WHEN `workers.json` is loaded
+THEN loading succeeds with exactly one warning naming that worker, and a worker that declares either field (or is disabled) produces no such warning.
 
 ### Requirement: Environment overrides
 
