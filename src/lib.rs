@@ -7,6 +7,7 @@
 //! See `docs/arc42/` for the architecture documentation.
 
 pub mod config;
+pub mod cost;
 pub mod execute;
 pub mod gate;
 pub mod router;
