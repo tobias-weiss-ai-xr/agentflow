@@ -36,7 +36,7 @@
 //!
 //! Uses only std + the crate; no temp dirs, no new dependencies.
 
-use agentflow::config::{Config, Task, TaskState};
+use agentflow::config::{Config, Priority, Task, TaskState};
 use agentflow::scheduler::{
     compute_depths, find_deadlock, find_deadlock_in, readiness_of, ready_tasks, scope_overlap,
     tasks_overlap, Readiness,
@@ -150,6 +150,45 @@ fn scheduler_readiness_and_dag_contract() {
     assert!(ready_tasks(&cfg, &all_done, &[], 3).is_empty());
     assert_eq!(readiness_of(&cfg.by_id["a"], &all_done, 3), Readiness::Done);
     assert!(find_deadlock(&cfg, &all_done, &[]).is_none());
+}
+
+// spec: scheduling/critical-path-priority#priority-breaks-ties-among-equally-deep-ready-tasks
+#[test]
+fn priority_breaks_ties_among_equally_deep_ready_tasks() {
+    // Half 1: among ready tasks at the SAME dependency depth, the strictly
+    // higher `priority` rank dispatches first — regardless of where the task
+    // sits in the config file. Here `low` is configured first but ranks last,
+    // and `high` is configured last but ranks first.
+    let mut low = task("low", &[]);
+    low.priority = Priority::Str("LOW".into()); // rank -10
+    let mut mid = task("mid", &[]);
+    mid.priority = Priority::Num(5); // rank 5
+    let mut high = task("high", &[]);
+    high.priority = Priority::Str("HIGH".into()); // rank 10
+    let cfg = cfg_of(vec![low, mid, high]);
+    let empty = status_with(&[]);
+    assert_eq!(
+        ids(&ready_tasks(&cfg, &empty, &[], 3)),
+        vec!["high", "mid", "low"],
+        "higher priority rank dispatches first among equal-depth ready tasks"
+    );
+
+    // Half 2: tasks of EQUAL rank keep their original config order (the
+    // documented stable fallback). Numeric and string forms that map to the
+    // same rank count as equal — the tie-break compares rank, not the
+    // representation.
+    let mut first = task("first", &[]);
+    first.priority = Priority::Num(0); // rank 0
+    let mut second = task("second", &[]);
+    second.priority = Priority::Str("MEDIUM".into()); // rank 0
+    let mut third = task("third", &[]);
+    third.priority = Priority::Str("NORMAL".into()); // rank 0
+    let cfg = cfg_of(vec![first, second, third]);
+    assert_eq!(
+        ids(&ready_tasks(&cfg, &empty, &[], 3)),
+        vec!["first", "second", "third"],
+        "equal priority rank preserves the original config order"
+    );
 }
 
 // spec: scheduling/Dependency DAG

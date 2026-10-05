@@ -28,6 +28,12 @@ Tasks with a deeper dependency depth SHALL be dispatched before shallower tasks 
 WHEN A and B are both ready and B has dependents while A has none
 THEN B is dispatched before A.
 
+#### Scenario: priority breaks ties among equally deep ready tasks
+
+GIVEN several ready tasks at the same dependency depth with different `priority` ranks and no scope overlap
+WHEN the scheduler orders them for dispatch
+THEN the higher rank is dispatched first, and tasks with equal rank keep their original order from the config file.
+
 ### Requirement: Scope contention avoidance
 
 When two ready tasks have overlapping `scope` file globs, they SHALL NOT be dispatched concurrently (default `defer`: one waits for the other to finish).
