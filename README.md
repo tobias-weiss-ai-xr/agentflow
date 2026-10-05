@@ -73,6 +73,15 @@ other and with `--task ID` (which narrows the table rows); the TOTAL line
 and the per-worker trust block are always computed over the selected
 receipts only.
 
+The report also ends with a waste section: `WASTED: <seconds>s on <failed>
+of <total> attempt(s) (<pct>%)`, followed by a `WASTED BY REASON` breakdown
+that groups failed attempts by the first line of their `error` field
+(trimmed, truncated to 48 characters, and `unknown` when the receipt has no
+error). Like the TOTAL line and the trust block, the waste figures are
+computed over the same window-selected receipts, so `--last` / `--since`
+narrow the waste alongside the rest of the report; a window whose receipts
+contain no failures reports `0.0s` and omits the reason breakdown.
+
 ## Task schema (`config/tasks.json`)
 
 | Field | Description |
