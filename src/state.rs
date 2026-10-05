@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -188,31 +188,7 @@ impl Store {
     pub fn save(&self, m: &HashMap<String, TaskStatus>) -> io::Result<()> {
         std::fs::create_dir_all(&self.dir)?;
         let data = serde_json::to_vec_pretty(m).map_err(io::Error::other)?;
-        let tmp = self.temp_file();
-        let installed = std::fs::File::create(&tmp)
-            .and_then(|mut f| {
-                // fsync before rename: a power loss cannot install a
-                // truncated or empty ledger.
-                f.write_all(&data)?;
-                f.sync_all()
-            })
-            .and_then(|_| std::fs::rename(&tmp, self.status_file()));
-        if installed.is_err() {
-            // Never leak a partial temp file for the next process to guess at.
-            let _ = std::fs::remove_file(&tmp);
-        }
-        installed
-    }
-
-    /// Unique temp path for one save: the pid separates processes, the
-    /// process-global atomic sequence separates concurrent threads. No two
-    /// writers ever share it (unlike the old `tmp{pid}`, which every thread
-    /// in the process truncated and interleaved).
-    fn temp_file(&self) -> PathBuf {
-        static SEQ: AtomicU64 = AtomicU64::new(0);
-        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        self.dir
-            .join(format!("run-state.json.tmp{}.{}", std::process::id(), seq))
+        atomic_write(&self.dir, "run-state.json", &data)
     }
 
     pub fn log_dir(&self) -> PathBuf {
@@ -230,37 +206,62 @@ impl Store {
     pub fn append_receipt(&self, r: &Receipt) -> io::Result<()> {
         std::fs::create_dir_all(self.receipt_dir())?;
         let data = serde_json::to_vec_pretty(r).map_err(io::Error::other)?;
-        let path = self
-            .receipt_dir()
-            // Nanos in the name: fast retries can land in the same second
-            // (task-attempt-ts would otherwise overwrite, losing receipts).
-            .join(format!(
-                "{}-{}-{}-{}x.json",
-                r.task,
-                r.attempt,
-                r.ts,
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.subsec_nanos())
-                    .unwrap_or(0)
-            ));
-        std::fs::write(path, data)
+        // Nanos in the name: fast retries can land in the same second
+        // (task-attempt-ts would otherwise overwrite, losing receipts). The
+        // `.json` suffix marks a COMPLETE receipt; `atomic_write` installs it
+        // through a non-`.json` temp file while the bytes are in flight.
+        let name = format!(
+            "{}-{}-{}-{}x.json",
+            r.task,
+            r.attempt,
+            r.ts,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        );
+        atomic_write(&self.receipt_dir(), &name, &data)
     }
 
     /// All receipts across runs (sorted by timestamp), for `af cost`.
+    ///
+    /// Read-only path: unreadable `.json` receipts are dropped from the
+    /// displayed history. Use [`Store::load_receipts_checked`] to see them.
     pub fn load_receipts(&self) -> Vec<Receipt> {
+        self.load_receipts_checked().0
+    }
+
+    /// Read every `.json` receipt, returning the valid receipts (sorted by
+    /// `ts`) and one human-readable message per unreadable `.json` file.
+    ///
+    /// Only `.json` files are considered at all: an interrupted atomic write
+    /// leaves `<final-name>.tmp-<pid>-<counter>`, which is structurally
+    /// incapable of being counted as a phantom receipt. A corrupt receipt is
+    /// history, not a fatal error — it is reported by name, never allowed to
+    /// block a campaign.
+    pub fn load_receipts_checked(&self) -> (Vec<Receipt>, Vec<String>) {
         let mut out = Vec::new();
+        let mut problems = Vec::new();
         if let Ok(rd) = std::fs::read_dir(self.receipt_dir()) {
             for e in rd.flatten() {
-                if let Ok(s) = std::fs::read_to_string(e.path()) {
-                    if let Ok(r) = serde_json::from_str::<Receipt>(&s) {
-                        out.push(r);
-                    }
+                let path = e.path();
+                // A leftover temp file (`<name>.json.tmp-...`) is not `.json`
+                // and can never be mistaken for a completed receipt.
+                if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                    continue;
+                }
+                let name = e.file_name().to_string_lossy().into_owned();
+                match std::fs::read_to_string(&path) {
+                    Ok(s) => match serde_json::from_str::<Receipt>(&s) {
+                        Ok(r) => out.push(r),
+                        Err(err) => problems.push(format!("unreadable receipt {name}: {err}")),
+                    },
+                    Err(err) => problems.push(format!("unreadable receipt {name}: {err}")),
                 }
             }
         }
         out.sort_by_key(|r| r.ts);
-        out
+        (out, problems)
     }
 
     pub fn lock_file(&self) -> PathBuf {
@@ -352,6 +353,36 @@ fn pid_alive(pid: u32) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// Process-global sequence: distinguishes every temp path this process ever
+/// creates, so concurrent writers (threads) never share one.
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Atomically install `data` at `<dir>/<name>`.
+///
+/// Writes a UNIQUE temp file in the SAME directory (so the final rename is
+/// atomic), fsyncs it, then renames it over the final path. The temp name is
+/// deliberately NOT `*.json` — it is `<name>.tmp-<pid>-<counter>` — so an
+/// interrupted write can never be mistaken for a receipt. The temp file is
+/// removed if the write or the rename fails.
+fn atomic_write(dir: &Path, name: &str, data: &[u8]) -> io::Result<()> {
+    let final_path = dir.join(name);
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = dir.join(format!("{name}.tmp-{}-{seq}", std::process::id()));
+    let installed = std::fs::File::create(&tmp)
+        .and_then(|mut f| {
+            // fsync before rename: a power loss cannot install a truncated
+            // or empty document.
+            f.write_all(data)?;
+            f.sync_all()
+        })
+        .and_then(|_| std::fs::rename(&tmp, &final_path));
+    if installed.is_err() {
+        // Never leak a partial temp file for the next process to guess at.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    installed
 }
 
 pub fn now_ts() -> u64 {
