@@ -36,7 +36,7 @@ scheduler/status/worktree/dispatch.
 
 ```mermaid
 flowchart TD
-  CLI[af CLI: run/status/api/attach/cost]
+  CLI[af CLI: run/status/api/attach/cost/clean/validate]
   S[Scheduler: DAG, contention, priority, retry, deadlock]
   E[Execute: worktree → agent → gate → merge]
   WT[Worktree manager: git subprocess]

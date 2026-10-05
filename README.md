@@ -28,8 +28,9 @@ providers directly.
 - **Dependency DAG** — `deps` ordering, critical-path priority, deadlock detection
 - **Contention avoidance** — tasks with overlapping `scope` globs are not dispatched concurrently
 - **Retry** — `max_attempts` per task, fresh branch + worktree on every attempt
-- **Self-healing** — atomic JSON state; crash-safe resume; orphan worktree cleanup at startup
-- **Observable** — status board (`--json`), live `attach`, per-task logs, wall-clock cost receipts
+- **Self-healing** — atomic JSON state; crash-safe resume; orphan worktree cleanup at startup, plus `af clean [--dry-run]` to sweep leftovers from crashed runs
+- **Validated config** — `af validate` pre-flights tasks/workers (dependency cycles, duplicate ids, no enabled workers) without dispatching anything
+- **Observable** — status board (`af status [--json]`), live `attach`, per-task logs, wall-clock cost receipts
 - **Sound by construction** — spec → contract → test pyramid (71 tests, incl. E2E against a stub agent + scratch git repos; no network in CI)
 
 ## Quick start
@@ -52,11 +53,13 @@ export TF_STATE_DIR=state
 ## CLI
 
 ```
-af run    [--once] [--dry-run] [--worker NAME] [--task ID] [--poll SECS]
-af status
-af api    status [--json] | results --task ID
+af run [--once] [--dry-run] [--worker NAME] [--task ID] [--poll SECS]
+af status [--json]
+af api status [--json] | results --task ID
 af attach ID
-af cost   [--task ID]
+af cost [--task ID]
+af clean [--dry-run]
+af validate [--worker NAME]
 ```
 
 ## Task schema (`config/tasks.json`)

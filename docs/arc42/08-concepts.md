@@ -47,7 +47,8 @@
 ## 8.7 Logging & transparency
 
 - Per-task logs → `state/logs/<task>.log`; `af attach <task>` tails live.
-- Status board is human (`--status`) and machine (`api status --json`) readable.
+- Status board is human (`af status`) and machine (`af status --json` / `af api status --json`) readable.
+- `af validate` pre-flights config (cycles, duplicate ids, unknown workers) without dispatching; `af clean [--dry-run]` sweeps orphaned worktrees/branches from crashed runs.
 
 ## 8.8 Sandboxing the agent child (ADR-10)
 
