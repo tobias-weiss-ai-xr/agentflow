@@ -857,3 +857,369 @@ pub fn results(cfg: &Config, st: &Settings, id: &str) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Task, WorkerDefaults};
+    use crate::state::Receipt;
+    use std::collections::BTreeMap;
+    use std::process::Command;
+
+    // --- hermetic fixtures -------------------------------------------------
+
+    /// Unique per-test base directory. Tests derive their repo/state/worktree
+    /// paths from this, so parallel tests never share a parent and cannot
+    /// delete each other's scratch state.
+    fn unique_base(tag: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("af-run-{tag}-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn git_cmd(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn scratch_repo() -> PathBuf {
+        let base = unique_base("repo");
+        let dir = base.join("repo");
+        std::fs::create_dir_all(&dir).unwrap();
+        git_cmd(&dir, &["init", "-b", "main"]);
+        // Repo-local identity: af's merge commits need one and parallel tests
+        // must not race on the process environment.
+        git_cmd(&dir, &["config", "user.name", "af test"]);
+        git_cmd(&dir, &["config", "user.email", "af@test"]);
+        std::fs::write(dir.join("f.txt"), "base\n").unwrap();
+        git_cmd(&dir, &["add", "."]);
+        git_cmd(&dir, &["commit", "-m", "init"]);
+        dir
+    }
+
+    fn cleanup(repo: &Path) {
+        if let Some(base) = repo.parent() {
+            let _ = std::fs::remove_dir_all(base);
+        }
+    }
+
+    fn task(id: &str) -> Task {
+        Task {
+            id: id.into(),
+            title: format!("task {id}"),
+            accept: Some("true".into()),
+            ..Default::default()
+        }
+    }
+
+    fn cfg_with(tasks: Vec<Task>) -> Config {
+        let by_id = tasks.iter().map(|t| (t.id.clone(), t.clone())).collect();
+        Config {
+            tasks,
+            workers: vec![],
+            defaults: WorkerDefaults::default(),
+            by_id,
+            repos: BTreeMap::new(),
+            warnings: vec![],
+        }
+    }
+
+    fn settings(state_dir: PathBuf) -> Settings {
+        Settings {
+            repo_dir: state_dir.join("repo"),
+            worktree_root: state_dir.join("worktrees"),
+            state_dir,
+            max_parallel: 1,
+            branch_prefix: "tf".into(),
+            poll_secs: 1,
+            gate_env: vec![],
+            tasks_file: PathBuf::new(),
+            workers_file: PathBuf::new(),
+            prompt_file: PathBuf::new(),
+            agent_timeout_s: 3600,
+            sandbox_cmd: vec![],
+        }
+    }
+
+    fn running(attempts: u32, phase: Option<AttemptPhase>) -> TaskStatus {
+        TaskStatus {
+            state: TaskState::Running,
+            attempts,
+            last_error: None,
+            phase,
+        }
+    }
+
+    // --- git helpers -------------------------------------------------------
+
+    #[test]
+    fn branch_exists_and_merged_into_head_track_git_state() {
+        let repo = scratch_repo();
+        assert!(
+            !branch_exists(&repo, "tf/T1"),
+            "branch absent before creation"
+        );
+        assert!(!branch_merged_into_head(&repo, "tf/T1"));
+
+        git_cmd(&repo, &["checkout", "-b", "tf/T1"]);
+        std::fs::write(repo.join("f.txt"), "feature\n").unwrap();
+        git_cmd(&repo, &["commit", "-am", "feature work"]);
+        assert!(
+            branch_exists(&repo, "tf/T1"),
+            "branch visible after creation"
+        );
+
+        git_cmd(&repo, &["checkout", "main"]);
+        assert!(
+            !branch_merged_into_head(&repo, "tf/T1"),
+            "feature branch is not an ancestor of main before merge"
+        );
+        git_cmd(&repo, &["merge", "--no-ff", "tf/T1", "-m", "merge tf/T1"]);
+        assert!(
+            branch_merged_into_head(&repo, "tf/T1"),
+            "feature branch is an ancestor of HEAD after merge"
+        );
+
+        cleanup(&repo);
+    }
+
+    #[test]
+    fn merge_commit_in_base_matches_only_this_tasks_af_merge_commit() {
+        let repo = scratch_repo();
+        assert!(!merge_commit_in_base(&repo, "T1"));
+
+        // A sibling task's af merge commit must not satisfy T1.
+        git_cmd(
+            &repo,
+            &["commit", "--allow-empty", "-m", "af: T2 — other work"],
+        );
+        assert!(!merge_commit_in_base(&repo, "T1"));
+        assert!(merge_commit_in_base(&repo, "T2"));
+
+        // T1's own merge commit is detected — the crash-after-merge window
+        // where cleanup already deleted the branch but the work is in base.
+        git_cmd(
+            &repo,
+            &["commit", "--allow-empty", "-m", "af: T1 — do the thing"],
+        );
+        assert!(merge_commit_in_base(&repo, "T1"));
+
+        cleanup(&repo);
+    }
+
+    // --- status board / JSON ----------------------------------------------
+
+    #[test]
+    fn board_of_shows_every_task_state_attempts_and_blanks_missing_error() {
+        let cfg = cfg_with(vec![task("A"), task("B"), task("C")]);
+        let mut status = HashMap::new();
+        status.insert(
+            "A".into(),
+            TaskStatus {
+                state: TaskState::Done,
+                attempts: 3,
+                last_error: None,
+                phase: None,
+            },
+        );
+        status.insert(
+            "B".into(),
+            TaskStatus {
+                state: TaskState::Failed,
+                attempts: 2,
+                last_error: Some("boom".into()),
+                phase: None,
+            },
+        );
+        let board = board_of(&cfg, &status);
+
+        let cells = |id: &str| -> Vec<String> {
+            board
+                .lines()
+                .find(|l| l.split_whitespace().next() == Some(id))
+                .unwrap_or_else(|| panic!("no row for {id} in:\n{board}"))
+                .split_whitespace()
+                .map(str::to_string)
+                .collect()
+        };
+        // Done row shows its attempt count and leaves LAST ERROR blank.
+        assert_eq!(cells("A"), ["A", "Done", "3"]);
+        // Failed row shows the error text.
+        assert_eq!(cells("B"), ["B", "Failed", "2", "boom"]);
+        // A task absent from the status map renders as the Ready default.
+        assert_eq!(cells("C"), ["C", "Ready", "0"]);
+    }
+
+    #[test]
+    fn status_json_serializes_task_fields_from_the_store() {
+        let base = unique_base("json");
+        let st = settings(base.clone());
+        let cfg = cfg_with(vec![task("A"), task("B")]);
+        let mut status = HashMap::new();
+        status.insert(
+            "A".into(),
+            TaskStatus {
+                state: TaskState::Failed,
+                attempts: 2,
+                last_error: Some("nope".into()),
+                phase: None,
+            },
+        );
+        Store::new(st.state_dir.clone()).save(&status).unwrap();
+
+        let out = status_json(&cfg, &st);
+        let v: serde_json::Value = serde_json::from_str(&out).expect("status_json is valid JSON");
+        assert_eq!(v["A"]["id"], "A");
+        assert_eq!(v["A"]["state"], "failed");
+        assert_eq!(v["A"]["attempts"], 2);
+        assert_eq!(v["A"]["last_error"], "nope");
+        // Absent task falls back to the defaults.
+        assert_eq!(v["B"]["state"], "ready");
+        assert_eq!(v["B"]["attempts"], 0);
+        assert!(v["B"]["last_error"].is_null());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // --- startup heal / resume --------------------------------------------
+
+    #[test]
+    fn heal_stale_attempt_reruns_unproven_agents_from_ready() {
+        let base = unique_base("heal-reset");
+        let st = settings(base.clone());
+        let cfg = cfg_with(vec![task("A"), task("B")]);
+        let mut status = HashMap::new();
+        // None (legacy file / inter-attempt gap) and Spawned (no durable agent
+        // outcome) both resume as a fresh attempt — never a gate/merge resume.
+        status.insert("A".into(), running(1, None));
+        status.insert("B".into(), running(2, Some(AttemptPhase::Spawned)));
+
+        heal_stale_attempt(&cfg, &st, &mut status, "A", 3);
+        heal_stale_attempt(&cfg, &st, &mut status, "B", 3);
+
+        for id in ["A", "B"] {
+            let s = &status[id];
+            assert_eq!(s.state, TaskState::Ready, "{id} rewound to ready");
+            assert_eq!(s.phase, None, "{id} journals from Spawned again");
+            assert_eq!(
+                s.last_error.as_deref(),
+                Some("previous run interrupted"),
+                "{id} records why it was rewound"
+            );
+        }
+        assert_eq!(status["A"].attempts, 1, "attempt count is preserved");
+        assert_eq!(status["B"].attempts, 2);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn heal_stale_attempt_agent_done_merges_without_rerunning_agent() {
+        let repo = scratch_repo();
+        let base = repo.parent().unwrap().to_path_buf();
+        // The agent's durable work: a commit on the attempt branch.
+        git_cmd(&repo, &["checkout", "-b", "tf/T1"]);
+        std::fs::write(repo.join("f.txt"), "agent work\n").unwrap();
+        git_cmd(&repo, &["commit", "-am", "agent work"]);
+        git_cmd(&repo, &["checkout", "main"]);
+
+        let mut st = settings(base.join("state"));
+        st.repo_dir = repo.clone();
+        let cfg = cfg_with(vec![task("T1")]);
+        let mut status = HashMap::new();
+        status.insert("T1".into(), running(1, Some(AttemptPhase::AgentDone)));
+
+        heal_stale_attempt(&cfg, &st, &mut status, "T1", 3);
+
+        // MergeOnly-of-GatePassed: gate re-run, merge landed, no agent re-run.
+        assert_eq!(status["T1"].state, TaskState::Done);
+        assert_eq!(status["T1"].phase, Some(AttemptPhase::GatePassed));
+        assert_eq!(status["T1"].last_error, None);
+        assert_eq!(
+            std::fs::read_to_string(repo.join("f.txt")).unwrap(),
+            "agent work\n",
+            "the committed agent work reached the base branch"
+        );
+        assert!(
+            !branch_exists(&repo, "tf/T1"),
+            "branch consumed by the merge"
+        );
+
+        cleanup(&repo);
+    }
+
+    #[test]
+    fn mark_resumed_failure_is_terminal_only_at_max_attempts() {
+        let mut status = HashMap::new();
+        status.insert("A".into(), running(3, Some(AttemptPhase::GatePassed)));
+        status.insert("B".into(), running(1, Some(AttemptPhase::GatePassed)));
+
+        mark_resumed_failure(&mut status, "A", 3, "resumed acceptance gate failed");
+        mark_resumed_failure(&mut status, "B", 3, "resumed acceptance gate failed");
+
+        assert_eq!(
+            status["A"].state,
+            TaskState::Failed,
+            "max attempts is terminal"
+        );
+        assert_eq!(status["B"].state, TaskState::Ready, "below max retries");
+        assert_eq!(status["A"].phase, None, "next attempt restarts at Spawned");
+        assert_eq!(
+            status["A"].last_error.as_deref(),
+            Some("resumed acceptance gate failed")
+        );
+    }
+
+    // --- cost --------------------------------------------------------------
+
+    #[test]
+    fn cost_aggregates_wall_clock_and_filters_by_task() {
+        let base = unique_base("cost");
+        let st = settings(base.clone());
+        let cfg = cfg_with(vec![task("A"), task("B")]);
+        let store = Store::new(st.state_dir.clone());
+        let receipt = |task: &str, wall: f64, outcome: &str| Receipt {
+            task: task.into(),
+            attempt: 1,
+            worker: "w1".into(),
+            model: "m".into(),
+            wall_clock_s: wall,
+            tokens: None,
+            ts: 1,
+            outcome: outcome.into(),
+            error: None,
+        };
+        store.append_receipt(&receipt("A", 10.0, "merged")).unwrap();
+        store.append_receipt(&receipt("A", 5.5, "failed")).unwrap();
+        store.append_receipt(&receipt("B", 2.0, "merged")).unwrap();
+
+        let all = cost(&cfg, &st, None);
+        assert!(all.contains("TOTAL: 17.5s across 3 receipt(s)"), "{all}");
+
+        let only_a = cost(&cfg, &st, Some("A"));
+        assert!(
+            only_a.contains("TOTAL: 15.5s across 3 receipt(s)"),
+            "{only_a}"
+        );
+        assert!(
+            !only_a
+                .lines()
+                .any(|l| l.split_whitespace().next() == Some("B")),
+            "task B is filtered out:\n{only_a}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
