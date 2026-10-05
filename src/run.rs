@@ -300,24 +300,43 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
 pub fn dry_run(cfg: &Config, st: &Settings) -> i32 {
     let depths = scheduler::compute_depths(cfg).unwrap_or_default();
     let status = Store::new(st.state_dir.clone()).load();
-    let ready = scheduler::ready_tasks(cfg, &status, &[], cfg.defaults.max_attempts);
+    // Full plan, not just the first ready batch: every task in dispatch-wave
+    // order (depth ascending, then config order) with its readiness, so a
+    // deep DAG is visible end-to-end before anything is dispatched.
+    let mut indexed: Vec<(usize, &crate::config::Task)> = cfg.tasks.iter().enumerate().collect();
+    indexed.sort_by(|(ia, a), (ib, b)| {
+        let da = depths.get(&a.id).copied().unwrap_or(0);
+        let db = depths.get(&b.id).copied().unwrap_or(0);
+        da.cmp(&db).then(ia.cmp(ib))
+    });
+    let worker = cfg
+        .workers
+        .iter()
+        .find(|w| w.enabled)
+        .map(|w| w.name.as_str())
+        .unwrap_or("-");
     println!(
         "Dry run — dispatch plan ({} tasks, {} workers):",
         cfg.tasks.len(),
         cfg.workers.len()
     );
-    for t in &ready {
+    println!(
+        "  {:<12} {:<5} {:<24} {:<8} SCOPE",
+        "TASK", "DEPTH", "READINESS", "WORKER"
+    );
+    let max_attempts = cfg.defaults.max_attempts;
+    let mut ready_now = 0usize;
+    for (_, t) in &indexed {
         let depth = depths.get(&t.id).copied().unwrap_or(0);
-        let worker = cfg
-            .workers
-            .iter()
-            .find(|w| w.enabled)
-            .map(|w| w.name.as_str())
-            .unwrap_or("-");
+        let readiness = scheduler::readiness_of(t, &status, max_attempts);
+        if readiness == scheduler::Readiness::Ready {
+            ready_now += 1;
+        }
         println!(
-            "  {:<12} depth={}  worker={}  scope={}",
+            "  {:<12} {:<5} {:<24} {:<8} {}",
             t.id,
             depth,
+            readiness.label(),
             worker,
             if t.scope.is_empty() {
                 "*".to_string()
@@ -326,10 +345,7 @@ pub fn dry_run(cfg: &Config, st: &Settings) -> i32 {
             }
         );
     }
-    println!(
-        "  ({} tasks ready now; nothing was created or changed)",
-        ready.len()
-    );
+    println!("  ({ready_now} ready now; nothing was created or changed)");
     0
 }
 

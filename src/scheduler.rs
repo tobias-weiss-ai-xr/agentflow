@@ -109,6 +109,75 @@ pub fn ready_tasks(
     indexed.into_iter().map(|(_, t)| t.clone()).collect()
 }
 
+/// Why a task is (or is not) dispatchable right now — the *static* half of
+/// `ready_tasks` (persisted state + deps + retry budget). In-flight state and
+/// scope contention are the live loop's concern and are not modelled here.
+/// Used by `af run --dry-run` so the plan shows every task, not just the
+/// first ready batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Readiness {
+    /// Dispatchable as soon as a worker frees up (deps done, budget left).
+    Ready,
+    /// Waiting on these deps (not yet `done` — possibly absent from config).
+    Blocked(Vec<String>),
+    /// Already merged in a previous run.
+    Done,
+    /// Terminal failure in a previous run.
+    Failed,
+    /// Attempt budget exhausted (`attempts` of `max_attempts`).
+    Exhausted(u32, u32),
+    /// Persisted `running` from an interrupted run; `af run` self-heals it.
+    StaleRunning,
+}
+
+impl Readiness {
+    /// Human-readable value for the dry-run READINESS column.
+    pub fn label(&self) -> String {
+        match self {
+            Readiness::Ready => "ready".to_string(),
+            Readiness::Blocked(deps) => format!("blocked by {}", deps.join(",")),
+            Readiness::Done => "done".to_string(),
+            Readiness::Failed => "failed".to_string(),
+            Readiness::Exhausted(n, max) => format!("exhausted {n}/{max}"),
+            Readiness::StaleRunning => "running (stale)".to_string(),
+        }
+    }
+}
+
+/// Classify one task against the persisted status map. Consistent with
+/// `ready_tasks(.., running = [])`: every `Ready` here would be dispatched
+/// in the first round of a real run (the reverse does not hold for
+/// `StaleRunning` residue, which the live loop heals before dispatch).
+pub fn readiness_of(
+    t: &Task,
+    status: &HashMap<String, TaskStatus>,
+    max_attempts: u32,
+) -> Readiness {
+    let st = status.get(&t.id).cloned().unwrap_or_default();
+    match st.state {
+        TaskState::Done => Readiness::Done,
+        TaskState::Failed => Readiness::Failed,
+        TaskState::Running => Readiness::StaleRunning,
+        TaskState::Ready => {
+            if st.attempts >= max_attempts {
+                Readiness::Exhausted(st.attempts, max_attempts)
+            } else {
+                let pending: Vec<String> = t
+                    .deps
+                    .iter()
+                    .filter(|d| !matches!(status.get(*d).map(|s| &s.state), Some(TaskState::Done)))
+                    .cloned()
+                    .collect();
+                if pending.is_empty() {
+                    Readiness::Ready
+                } else {
+                    Readiness::Blocked(pending)
+                }
+            }
+        }
+    }
+}
+
 /// Deadlock: no running tasks and every remaining (non-done) task is `failed`
 /// or depends (transitively) on a failed task. Returns the blocked task ids.
 pub fn find_deadlock(
@@ -338,6 +407,87 @@ mod tests {
             find_deadlock(&cfg, &status, &[]).is_some(),
             "absent dep must block → deadlock"
         );
+    }
+
+    #[test]
+    fn readiness_classifies_every_task_state() {
+        let cfg = tasks0(); // A, B(deps A), C
+        let ready = readiness_of(&cfg.by_id["A"], &HashMap::new(), 3);
+        assert_eq!(ready, Readiness::Ready);
+        assert_eq!(ready.label(), "ready");
+
+        // B waits on A: blocked, naming the pending dep only.
+        let blocked = readiness_of(&cfg.by_id["B"], &HashMap::new(), 3);
+        assert_eq!(blocked, Readiness::Blocked(vec!["A".to_string()]));
+        assert_eq!(blocked.label(), "blocked by A");
+
+        let done_st = status_of(&[("A", TaskState::Done)]);
+        assert_eq!(readiness_of(&cfg.by_id["A"], &done_st, 3), Readiness::Done);
+        assert_eq!(readiness_of(&cfg.by_id["B"], &done_st, 3), Readiness::Ready);
+
+        let failed_st = status_of(&[("A", TaskState::Failed)]);
+        assert_eq!(
+            readiness_of(&cfg.by_id["A"], &failed_st, 3),
+            Readiness::Failed
+        );
+        assert_eq!(
+            readiness_of(&cfg.by_id["B"], &failed_st, 3),
+            Readiness::Blocked(vec!["A".to_string()]),
+            "dep failed ≠ done: B still blocked"
+        );
+    }
+
+    #[test]
+    fn readiness_blocked_lists_only_pending_deps() {
+        let cfg = cfg_with(
+            r#"{ "tasks": [
+                {"id":"A","title":"a","accept":"true"},
+                {"id":"B","title":"b","accept":"true"},
+                {"id":"C","title":"c","deps":["A","B"],"accept":"true"}
+            ]}"#,
+            r#"{ "workers": [{"name":"w1","provider":"p","model":"m"}]}"#,
+        );
+        let status = status_of(&[("A", TaskState::Done)]);
+        let r = readiness_of(&cfg.by_id["C"], &status, 3);
+        assert_eq!(r, Readiness::Blocked(vec!["B".to_string()]));
+        assert_eq!(r.label(), "blocked by B");
+    }
+
+    #[test]
+    fn readiness_marks_exhausted_and_stale_running() {
+        let cfg = tasks0();
+        let mut exhausted = status_of(&[("A", TaskState::Ready)]);
+        exhausted.get_mut("A").unwrap().attempts = 3;
+        let r = readiness_of(&cfg.by_id["A"], &exhausted, 3);
+        assert_eq!(r, Readiness::Exhausted(3, 3));
+        assert_eq!(r.label(), "exhausted 3/3");
+
+        let stale = status_of(&[("A", TaskState::Running)]);
+        assert_eq!(
+            readiness_of(&cfg.by_id["A"], &stale, 3),
+            Readiness::StaleRunning
+        );
+    }
+
+    #[test]
+    fn readiness_agrees_with_ready_tasks_when_idle() {
+        // Property: with nothing in flight, every task readiness_of calls
+        // Ready is exactly a task ready_tasks (running = []) would dispatch.
+        let cfg = tasks0();
+        let mut status = status_of(&[("A", TaskState::Done), ("C", TaskState::Failed)]);
+        status.get_mut("C").unwrap().attempts = 3;
+        let dispatchable: Vec<String> = ready_tasks(&cfg, &status, &[], 3)
+            .iter()
+            .map(|t| t.id.clone())
+            .collect();
+        let classified: Vec<String> = cfg
+            .tasks
+            .iter()
+            .filter(|t| readiness_of(t, &status, 3) == Readiness::Ready)
+            .map(|t| t.id.clone())
+            .collect();
+        assert_eq!(dispatchable, classified);
+        assert_eq!(classified, vec!["B".to_string()]);
     }
 
     #[test]
