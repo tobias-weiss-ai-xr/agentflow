@@ -107,6 +107,9 @@ fn worker_json(max_attempts: u32) -> String {
 }
 
 /// Gate exit-0 after agent writes DONE.txt → merged to main, all done.
+// spec: lifecycle/execute-pipeline
+// spec: scheduling/dependency-dag
+// spec: worktree/worktree-lifecycle
 #[test]
 fn happy_path_dependency_and_merge() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -143,6 +146,8 @@ fn happy_path_dependency_and_merge() {
 }
 
 /// Failed attempts get receipts too — the routing substrate (ADR-12).
+// spec: state/cost-receipts
+// spec: lifecycle/prompt-rendering
 #[test]
 fn failed_attempts_get_failed_receipts() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -171,6 +176,8 @@ fn failed_attempts_get_failed_receipts() {
 }
 
 /// Agent exits non-zero → task fails after max_attempts, nothing merged.
+// spec: lifecycle/execute-pipeline
+// spec: scheduling/deadlock-detection
 #[test]
 fn agent_failure_fails_task() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -191,6 +198,7 @@ fn agent_failure_fails_task() {
 }
 
 /// Agent succeeds but gate fails → task fails, nothing merged.
+// spec: lifecycle/execute-pipeline
 #[test]
 fn gate_failure_fails_task() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -212,6 +220,7 @@ fn gate_failure_fails_task() {
 }
 
 /// --dry-run changes nothing.
+// spec: cli/run-commands
 #[test]
 fn dry_run_changes_nothing() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -255,6 +264,7 @@ fn status_json_after_run() {
 }
 
 /// Retry: agent always fails, max_attempts=2 → exactly 2 attempts, then Failed.
+// spec: scheduling/retry-with-fresh-branch
 #[test]
 fn retry_runs_up_to_max_attempts() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -274,6 +284,7 @@ fn retry_runs_up_to_max_attempts() {
 }
 
 /// Self-heal: a stale `running` entry from a dead process is reset and run.
+// spec: state/resume-and-self-heal
 #[test]
 fn self_heals_stale_running_state() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -337,6 +348,7 @@ fn task_filter_completes_without_running_others() {
 }
 
 /// --task naming a task that waits on out-of-scope deps → clean deadlock, no hang.
+// spec: scheduling/deadlock-detection
 #[test]
 fn task_filter_on_dependent_task_deadlocks_cleanly() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -393,6 +405,9 @@ fn unknown_worker_filter_fails_fast() {
 
 /// Sandbox layer 1: the agent child sees ONLY the dispatched worker's
 /// api key (+ passthrough) — not other secrets from the orchestrator env.
+/// The same probe also pins the git hygiene pairs every agent child gets.
+// spec: sandbox/agent-environment-allowlist
+// spec: sandbox/git-hygiene-for-agent-children
 #[test]
 fn agent_env_is_allowlisted() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -416,7 +431,8 @@ fn agent_env_is_allowlisted() {
     std::env::set_var("FAKE_AGENT_ENV", &probe);
     std::env::set_var(
         "FAKE_AGENT_ENV_NAMES",
-        "AF_TEST_KEY,AF_TEST_LEAK,AF_TEST_EXTRA",
+        "AF_TEST_KEY,AF_TEST_LEAK,AF_TEST_EXTRA,\
+         GIT_TERMINAL_PROMPT,GIT_CONFIG_COUNT,GIT_CONFIG_KEY_0,GIT_CONFIG_VALUE_0",
     );
     // The probe vars must ride the passthrough — they are not in the default
     // allowlist (which is exactly the behavior under test).
@@ -438,6 +454,17 @@ fn agent_env_is_allowlisted() {
         env_txt.contains("AF_TEST_LEAK=<unset>"),
         "foreign secret stripped: {env_txt}"
     );
+    // Git hygiene (sandbox spec): no credential prompts, no stored helpers.
+    assert!(
+        env_txt.contains("GIT_TERMINAL_PROMPT=0"),
+        "terminal prompt disabled: {env_txt}"
+    );
+    assert!(
+        env_txt.contains("GIT_CONFIG_COUNT=1")
+            && env_txt.contains("GIT_CONFIG_KEY_0=credential.helper")
+            && env_txt.contains("GIT_CONFIG_VALUE_0=\n"),
+        "empty credential.helper injected via GIT_CONFIG_*: {env_txt}"
+    );
     for k in [
         "AF_TEST_KEY",
         "AF_TEST_LEAK",
@@ -452,6 +479,7 @@ fn agent_env_is_allowlisted() {
 
 /// Multi-repo (ADR-11): A on repo `main`, B on repo `auxrepo` (deps: A) — each
 /// task's worktree/branch/merge lands in its own repo.
+// spec: worktree/worktrees-target-the-task-s-repository
 #[test]
 fn multi_repo_campaign_merges_into_each_repo() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -505,6 +533,7 @@ fn multi_repo_campaign_merges_into_each_repo() {
 }
 
 /// Unknown repo name: warn + fall back to the default repo, run completes.
+// spec: config/per-task-repo-resolution-with-compat-fallback
 #[test]
 fn unknown_repo_warns_and_falls_back() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -536,6 +565,8 @@ fn unknown_repo_warns_and_falls_back() {
 /// dispatcher would finish A before ever dispatching B. The agents sleep a fixed
 /// `FAKE_AGENT_SLEEP_MS` so the concurrent-running window is comfortably long
 /// enough to observe. Each worker then merges a distinct `{model}.txt` artifact.
+// spec: scheduling/scope-contention-avoidance
+// spec: worktree/merge-serialization
 #[test]
 fn parallel_multi_worker_dispatch_runs_concurrently_and_merges() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -679,5 +710,215 @@ fn task_on_broken_repo_fails_cleanly() {
     assert!(
         err.contains("not a git repository"),
         "reason surfaced: {err}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Spec-coverage gap tests (see docs/spec-traceability.md).
+// ---------------------------------------------------------------------------
+
+/// The single subprocess helper every child runs through: output captured,
+/// hard timeout enforced (the child is killed, not awaited), and results
+/// classified by exit code — success / non-zero / timeout / missing binary.
+// spec: lifecycle/subprocess-execution-contract
+#[test]
+fn subprocess_helper_times_out_and_classifies() {
+    use agentflow::subprocess::{self, CmdKind, EnvMode};
+    use std::time::Duration;
+
+    let args = |v: &[&str]| -> Vec<String> { v.iter().map(|s| s.to_string()).collect() };
+
+    // Success: exit 0, stdout captured.
+    let out = subprocess::run(
+        "git",
+        &args(&["--version"]),
+        None,
+        &[],
+        EnvMode::Inherit,
+        Duration::from_secs(30),
+    );
+    assert!(out.passed(), "git --version must succeed");
+    assert!(
+        out.stdout.contains("git version"),
+        "stdout captured: {}",
+        out.stdout
+    );
+
+    #[cfg(unix)]
+    {
+        // Non-zero exit classified by code.
+        let out = subprocess::run(
+            "sh",
+            &args(&["-c", "exit 7"]),
+            None,
+            &[],
+            EnvMode::Inherit,
+            Duration::from_secs(30),
+        );
+        assert_eq!(out.kind, CmdKind::NonZero);
+        assert_eq!(out.code, Some(7));
+
+        // Hard timeout: a child exceeding it is killed promptly — the
+        // helper returns Timeout instead of waiting out the sleep.
+        let start = std::time::Instant::now();
+        let out = subprocess::run(
+            "sh",
+            &args(&["-c", "sleep 30"]),
+            None,
+            &[],
+            EnvMode::Inherit,
+            Duration::from_millis(300),
+        );
+        assert_eq!(out.kind, CmdKind::Timeout, "timeout kills the child");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "must not wait out the child's full 30s sleep"
+        );
+    }
+
+    // Missing binary classified Missing (never a hang or a panic).
+    let out = subprocess::run(
+        "af-no-such-binary-xyz",
+        &[],
+        None,
+        &[],
+        EnvMode::Inherit,
+        Duration::from_secs(5),
+    );
+    assert_eq!(out.kind, CmdKind::Missing);
+}
+
+/// Sandbox wrapper hook (sandbox spec): `TF_SANDBOX_CMD` is a command prefix
+/// prepended to the agent argv. A wrapper script records the argv it was
+/// invoked with and exits 0 without creating the gate's file — the attempt
+/// fails the gate, but the recording proves the wrapper ran first. (The
+/// unset-wrapper case is a no-op, proven by every other test in this file:
+/// agents are invoked directly and their work merges.)
+// spec: sandbox/sandbox-wrapper-hook
+#[cfg(unix)]
+#[test]
+fn sandbox_wrapper_cmd_is_prepended_to_agent_argv() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let mut f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"wrapped","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+
+    let wrapper = f.dir.join("wrap.sh");
+    let argv_file = f.dir.join("argv.txt");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\nexit 0\n",
+            argv_file.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    f.st.sandbox_cmd = vec![wrapper.to_string_lossy().to_string()];
+
+    // The wrapper exits 0 but never creates DONE.txt → the gate fails the
+    // attempt (max_attempts=1) → run exits 2. That is expected: this test
+    // asserts the argv, not a merge.
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 2);
+
+    let argv = std::fs::read_to_string(&argv_file).expect("wrapper recorded its argv");
+    let mut lines = argv.lines();
+    let first = lines.next().unwrap_or_default();
+    assert_eq!(
+        first, AGENT,
+        "child argv starts with the wrapper, then the agent CLI: {argv}"
+    );
+    assert!(
+        argv.contains("-p"),
+        "agent args ride along after the wrapper: {argv}"
+    );
+}
+
+/// Startup self-heal spans all repositories (worktree spec): a stale
+/// worktree dir + branch belonging to repo `aux` is removed even though the
+/// default repo is a different one, and the run continues cleanly.
+// spec: worktree/self-heal-spans-all-repositories
+#[test]
+fn self_heal_removes_stale_worktrees_across_repos() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"x","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+
+    // Second scratch repo `aux` with a REAL stale worktree (branch tf/OLD)
+    // at the orchestrator's worktree root — residue of a dead attempt.
+    let auxrepo = f.dir.join("auxrepo");
+    std::fs::create_dir_all(&auxrepo).unwrap();
+    git(&auxrepo, &["init", "-b", "main"]);
+    git(&auxrepo, &["commit", "--allow-empty", "-m", "init"]);
+    let stale_wt = f.st.worktree_root.join("OLD");
+    git(
+        &auxrepo,
+        &[
+            "worktree",
+            "add",
+            stale_wt.to_string_lossy().as_ref(),
+            "-b",
+            "tf/OLD",
+        ],
+    );
+    assert!(stale_wt.exists(), "stale worktree seeded");
+
+    // repos.json registers both repos; reload so cfg picks it up.
+    let config_dir = f.dir.join("config");
+    std::fs::write(
+        config_dir.join("repos.json"),
+        format!(
+            r#"{{"repos": {{"main": "{}", "aux": "{}"}}}}"#,
+            f.repo.to_string_lossy().replace('\\', "\\\\"),
+            auxrepo.to_string_lossy().replace('\\', "\\\\")
+        ),
+    )
+    .unwrap();
+    let cfg = config::load(
+        &config_dir.join("tasks.json"),
+        &config_dir.join("workers.json"),
+    )
+    .unwrap();
+    let cfg = config::Config {
+        repos: agentflow::config::load_repos(&config_dir.join("repos.json")).unwrap(),
+        ..cfg
+    };
+
+    // Task A already finished in a previous run: the next startup only
+    // self-heals (remove the orphan, delete its branch) and exits 0.
+    std::fs::create_dir_all(&f.st.state_dir).unwrap();
+    std::fs::write(
+        f.st.state_dir.join("run-state.json"),
+        r#"{ "A": { "state": "done", "attempts": 1, "last_error": null } }"#,
+    )
+    .unwrap();
+    assert_eq!(run::run_loop(&cfg, &f.st, &RunOptions::default()), 0);
+
+    assert!(
+        !stale_wt.exists(),
+        "stale worktree removed even though it belongs to repo `aux`"
+    );
+    let out = std::process::Command::new("git")
+        .args(["branch", "--list", "tf/OLD"])
+        .current_dir(&auxrepo)
+        .output()
+        .expect("git must be available");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+        "aux's stale branch tf/OLD deleted"
     );
 }

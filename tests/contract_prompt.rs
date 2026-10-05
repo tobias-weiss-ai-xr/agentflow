@@ -85,6 +85,7 @@ fn assert_prompt_contract(path: &str, out: &str, scope_paths: &[&str]) {
     );
 }
 
+// spec: lifecycle/prompt-rendering
 #[test]
 fn every_render_path_contains_scope_and_accept_cmd() {
     let worker = contract_worker();
