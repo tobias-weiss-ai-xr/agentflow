@@ -524,6 +524,122 @@ fn unknown_repo_warns_and_falls_back() {
     );
 }
 
+/// Parallel multi-worker dispatch (scheduling spec: disjoint scope dispatches
+/// in parallel): two INDEPENDENT tasks run CONCURRENTLY on two DISTINCT
+/// workers and both merge to main.
+///
+/// Concurrency is proven from the orchestrator's OWN persisted state: while
+/// `run_loop` runs on a background thread we poll `run-state.json` and record
+/// that task A and task B are BOTH in the `running` state at the same instant.
+/// Only the real parallel dispatcher (2 free workers, max_parallel=2, disjoint
+/// scopes) can ever hold two tasks running simultaneously — a one-slot
+/// dispatcher would finish A before ever dispatching B. The agents sleep a fixed
+/// `FAKE_AGENT_SLEEP_MS` so the concurrent-running window is comfortably long
+/// enough to observe. Each worker then merges a distinct `{model}.txt` artifact.
+#[test]
+fn parallel_multi_worker_dispatch_runs_concurrently_and_merges() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [
+                {{"id":"A","title":"alpha","scope":["alpha.txt"],"accept":"{ga}"}},
+                {{"id":"B","title":"beta","scope":["beta.txt"],"accept":"{gb}"}}
+            ] }}"#,
+            ga = gate_cmd("alpha.txt"),
+            gb = gate_cmd("beta.txt"),
+        ),
+        // Two ENABLED workers with distinct models (distinct output files).
+        &format!(
+            r#"{{ "defaults": {{ "max_attempts": 1, "accept_timeout_s": 10 }},
+                 "workers": [
+                    {{"name":"w1","provider":"p","model":"alpha","enabled":true,"cli":"{agent}"}},
+                    {{"name":"w2","provider":"p","model":"beta","enabled":true,"cli":"{agent}"}}
+                 ] }}"#,
+            agent = AGENT.replace('\\', "\\\\")
+        ),
+    );
+    // The stub knobs must ride the sandbox env allowlist (ADR-10); the
+    // fixture's default passthrough does not include them, so override it.
+    std::env::set_var(
+        "TF_AGENT_ENV_PASSTHROUGH",
+        "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_TOUCH_FROM_MODEL,FAKE_AGENT_SLEEP_MS",
+    );
+    std::env::set_var("FAKE_AGENT_TOUCH_FROM_MODEL", "1");
+    std::env::set_var("FAKE_AGENT_SLEEP_MS", "1200");
+
+    // Drive the orchestrator on a background thread so we can watch the
+    // persisted state from this thread while it runs.
+    let cfg = f.cfg.clone();
+    let st = f.st.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<i32>();
+    std::thread::spawn(move || {
+        let code = run::run_loop(&cfg, &st, &RunOptions::default());
+        let _ = tx.send(code);
+    });
+
+    // CONCURRENT: poll the persisted state until BOTH tasks are running at the
+    // same instant. A serial dispatcher can never satisfy this.
+    let store = Store::new(f.st.state_dir.clone());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let mut saw_concurrent = false;
+    while std::time::Instant::now() < deadline {
+        let m = store.load();
+        let a_running = m
+            .get("A")
+            .map(|s| s.state == TaskState::Running)
+            .unwrap_or(false);
+        let b_running = m
+            .get("B")
+            .map(|s| s.state == TaskState::Running)
+            .unwrap_or(false);
+        if a_running && b_running {
+            saw_concurrent = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    let code = rx
+        .recv_timeout(std::time::Duration::from_secs(40))
+        .expect("run completed");
+    assert_eq!(code, 0, "run_loop must exit 0 (all done)");
+    assert!(
+        saw_concurrent,
+        "A and B were never observed running simultaneously (parallel dispatch required)"
+    );
+
+    // Both tasks Done; both distinct artifacts merged to main.
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Done);
+    assert_eq!(st["B"].state, TaskState::Done);
+    assert!(f.repo.join("alpha.txt").exists(), "A merged (alpha.txt)");
+    assert!(f.repo.join("beta.txt").exists(), "B merged (beta.txt)");
+
+    // DISTINCT workers: one receipt per merged task, spread across w1 and w2.
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    assert_eq!(receipts.len(), 2, "one receipt per merged task");
+    let wa = receipts
+        .iter()
+        .find(|r| r.task == "A")
+        .map(|r| r.worker.as_str())
+        .unwrap();
+    let wb = receipts
+        .iter()
+        .find(|r| r.task == "B")
+        .map(|r| r.worker.as_str())
+        .unwrap();
+    assert_ne!(wa, wb, "A and B ran on different workers (got {wa} / {wb})");
+    assert!(
+        (wa == "w1" && wb == "w2") || (wa == "w2" && wb == "w1"),
+        "unexpected workers: {wa} / {wb}"
+    );
+    // No leftover worktrees for either task.
+    assert!(!f.st.worktree_root.join("A").exists());
+    assert!(!f.st.worktree_root.join("B").exists());
+}
+
 /// Task on a repo that exists on disk but is not a git repo: the attempt
 /// fails cleanly (worktree error arm), task goes Failed with the reason.
 #[test]
