@@ -4,7 +4,7 @@
 //! outcome.
 
 use crate::config::{Config, Settings, Worker};
-use crate::state::{now_ts, Receipt, Store};
+use crate::state::{now_ts, AttemptPhase, Receipt, Store};
 use crate::{gate, worktree};
 use std::fs;
 use std::io::Write;
@@ -130,6 +130,23 @@ fn failure_context(receipts: &[Receipt], task_id: &str, attempt: u32) -> Option<
     Some(out)
 }
 
+/// Effect-sandwich journal (pi-durable): persist one attempt-phase boundary
+/// for `id` so a crashed run can resume without re-running the expensive,
+/// non-replayable agent step.
+///
+/// Writes ONLY this task's entry via load-modify-save on the Store (atomic
+/// temp+rename). The orchestrator process is the single writer (per-state-dir
+/// lock), so the small race window is only against sibling attempt threads'
+/// boundary writes and the run loop's whole-map saves — both atomic renames,
+/// so a losing write is superseded whole, never torn. Worst case one stale
+/// boundary survives a crash, which `resume_action` maps to a safe re-run
+/// (e.g. gate re-runs instead of merge-only). Never the reverse.
+fn record_phase(ctx: &ExecCtx, id: &str, phase: AttemptPhase) {
+    let mut m = ctx.store.load();
+    m.entry(id.to_string()).or_default().phase = Some(phase);
+    let _ = ctx.store.save(&m);
+}
+
 fn execute_attempt(
     ctx: &ExecCtx,
     worker: &Worker,
@@ -149,6 +166,10 @@ fn execute_attempt(
         Err(e) => return Outcome::Failed(e),
     };
     let wt_path = wt.path.clone();
+    // Effect sandwich, boundary 1 (commit intent BEFORE the effect): the
+    // attempt is live — worktree ready, agent about to spawn. A crash from
+    // here resumes as RerunAgent (the agent's outcome is not durable yet).
+    record_phase(ctx, id, AttemptPhase::Spawned);
 
     let mut log = fs::OpenOptions::new()
         .create(true)
@@ -209,6 +230,10 @@ fn execute_attempt(
                 .unwrap_or_else(|| "-".into())
         ));
     }
+    // Effect sandwich, boundary 2 (commit outcome AFTER the effect): the
+    // agent exited 0 and its change is committed on the attempt branch.
+    // From here on, a resume must NEVER re-invoke the agent.
+    record_phase(ctx, id, AttemptPhase::AgentDone);
 
     // 3) Acceptance gate (skipped for manual tasks).
     if !task.manual {
@@ -236,6 +261,10 @@ fn execute_attempt(
                     gate_out.combined().trim()
                 ));
             }
+            // Effect sandwich, boundary 3 (commit outcome AFTER the gate
+            // effect): only the merge remains — resume re-runs it
+            // idempotently without touching agent or gate.
+            record_phase(ctx, id, AttemptPhase::GatePassed);
         }
     }
 
