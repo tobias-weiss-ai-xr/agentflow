@@ -51,13 +51,10 @@ const UNMAPPED: &[(&str, &str)] = &[
 /// with a reason each. Same rules as `UNMAPPED`: an explicit, shrinking
 /// allowlist capped at 3 entries — never a way to paper over a scenario
 /// that has an obvious test.
-const UNMAPPED_SCENARIOS: &[(&str, &str)] = &[(
-    "state/cost-receipts#cost-aggregates-receipts",
-    "the scenario's `af cost --last` window flag is not shipped (the CLI \
-         supports plain `af cost` and `--task ID` only); aggregation itself \
-         is pinned by cost_prints_table_and_task_filter. Ship `--last`, then \
-         mark that test and drop this entry",
-)];
+const UNMAPPED_SCENARIOS: &[(&str, &str)] = &[
+    // (currently empty: every scenario in openspec/specs has at least
+    //  one referencing test)
+];
 
 /// One `### Requirement:` heading parsed from a spec file.
 #[derive(Debug, Clone, PartialEq, Eq)]

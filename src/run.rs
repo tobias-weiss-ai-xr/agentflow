@@ -6,7 +6,7 @@ use crate::execute::{self, ExecCtx, Outcome};
 use crate::gate;
 use crate::router::Router;
 use crate::scheduler;
-use crate::state::{resume_action, AttemptPhase, ResumeAction, Store, TaskStatus};
+use crate::state::{resume_action, AttemptPhase, Receipt, ResumeAction, Store, TaskStatus};
 use crate::subprocess::{self, EnvMode};
 use crate::worktree;
 use std::collections::HashMap;
@@ -737,22 +737,129 @@ pub fn status_json(cfg: &Config, st: &Settings) -> String {
     serde_json::to_string_pretty(&serde_json::Value::Object(map)).unwrap_or_default()
 }
 
-/// `af cost`: aggregate receipts (wall-clock truth, ADR-9).
-pub fn cost(cfg: &Config, st: &Settings, task_filter: Option<&str>) -> String {
+/// Selection window for `af cost` (spec: state/cost-receipts — "aggregate
+/// receipts (last run, since date, or per task)"). The three fields
+/// compose: `since` keeps only receipts at/after the instant, `last` then
+/// keeps only each task's most recent surviving receipt, and `task`
+/// narrows the table rows. With every field unset the report covers every
+/// loaded receipt — byte-identical to the pre-window-flag `af cost`.
+#[derive(Debug, Clone, Default)]
+pub struct CostFilter {
+    pub task: Option<String>,
+    pub last: bool,
+    pub since: Option<u64>,
+}
+
+/// Parse a `--since` value: a bare unix timestamp (`1700000000`) or a
+/// `YYYY-MM-DD` date, interpreted as UTC midnight of that day. The result
+/// is the inclusive lower bound for [`Receipt::ts`].
+pub fn parse_since(value: &str) -> Result<u64, String> {
+    let v = value.trim();
+    if let Ok(ts) = v.parse::<u64>() {
+        return Ok(ts);
+    }
+    let bad = || format!("cannot parse '{value}' as a unix timestamp or YYYY-MM-DD date");
+    let parts: Vec<&str> = v.split('-').collect();
+    let (y, m, d) = match parts.as_slice() {
+        [y, m, d] => match (y.parse::<i64>(), m.parse::<u32>(), d.parse::<u32>()) {
+            (Ok(y), Ok(m), Ok(d)) => (y, m, d),
+            _ => return Err(bad()),
+        },
+        _ => return Err(bad()),
+    };
+    if !(1..=12).contains(&m) || d == 0 || d > days_in_month(y, m) {
+        return Err(format!("date {value} is not a valid calendar date"));
+    }
+    let days = days_from_civil(y, m, d);
+    if days < 0 {
+        return Err(format!("date {value} is before the unix epoch"));
+    }
+    Ok(days as u64 * 86_400)
+}
+
+/// Days since 1970-01-01 for a civil (calendar) date — Howard Hinnant's
+/// `days_from_civil`, valid over the whole proleptic Gregorian calendar.
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400; // [0, 399]
+    let mp = (i64::from(m) + 9) % 12; // [0, 11]
+    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146_097 + doe - 719_468
+}
+
+/// Length of month `m` in year `y` (callers validate `m` first; the
+/// catch-all answers 31 for January, March, May, July, August, October,
+/// December — and any month outside 1-12).
+fn days_in_month(y: i64, m: u32) -> u32 {
+    match m {
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(y) => 29,
+        2 => 28,
+        _ => 31,
+    }
+}
+
+fn is_leap_year(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+/// Apply the `--since` / `--last` window to loaded receipts. `since` keeps
+/// receipts with `ts >= since` (applied FIRST, so `--last --since D` means
+/// "the latest attempt per task since D"); `last` keeps, per task, only
+/// the receipt with the greatest `ts` — ties broken by the greater
+/// `attempt` — so retries are never double-counted. The `task` filter is
+/// deliberately NOT applied here: it narrows the table rows only, exactly
+/// as it did before the window flags existed.
+fn select_receipts<'a>(receipts: &'a [Receipt], filter: &CostFilter) -> Vec<&'a Receipt> {
+    let mut window: Vec<&Receipt> = match filter.since {
+        Some(ts) => receipts.iter().filter(|r| r.ts >= ts).collect(),
+        None => receipts.iter().collect(),
+    };
+    if filter.last {
+        // `window` is sorted by `ts` (load_receipts), but ties are broken
+        // by `attempt`, so selection is independent of scan order.
+        let mut latest: HashMap<&str, &Receipt> = HashMap::new();
+        for r in &window {
+            let keep = match latest.get(r.task.as_str()) {
+                Some(cur) => (r.ts, r.attempt) > (cur.ts, cur.attempt),
+                None => true,
+            };
+            if keep {
+                latest.insert(r.task.as_str(), r);
+            }
+        }
+        window = latest.into_values().collect();
+        window.sort_by_key(|r| r.ts);
+    }
+    window
+}
+
+/// `af cost`: aggregate receipts (wall-clock truth, ADR-9). The table rows
+/// honor `filter.task`; the TOTAL line and the per-worker trust block are
+/// computed over the window-selected receipts only — with no window flags
+/// that is every loaded receipt, byte-identical to the legacy report.
+pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
     let store = Store::new(st.state_dir.clone());
     let receipts = store.load_receipts();
+    let selected = select_receipts(&receipts, filter);
     let mut lines = format!(
         "{:<12} {:<9} {:<10} {}",
         "TASK", "ATTEMPTS", "WALL_S", "MODEL"
     );
     let mut total: f64 = 0.0;
     for t in &cfg.tasks {
-        if let Some(f) = task_filter {
-            if t.id != f {
+        if let Some(f) = &filter.task {
+            if &t.id != f {
                 continue;
             }
         }
-        let rs: Vec<_> = receipts.iter().filter(|r| r.task == t.id).collect();
+        let rs: Vec<_> = selected
+            .iter()
+            .copied()
+            .filter(|r| r.task == t.id)
+            .collect();
         let wall: f64 = rs.iter().map(|r| r.wall_clock_s).sum();
         total += wall;
         if !rs.is_empty() {
@@ -768,11 +875,12 @@ pub fn cost(cfg: &Config, st: &Settings, task_filter: Option<&str>) -> String {
     lines.push_str(&format!(
         "\nTOTAL: {:.1}s across {} receipt(s)",
         total,
-        receipts.len()
+        selected.len()
     ));
-    // Per-worker trust (ADR-12): measured win rate from receipt outcomes.
+    // Per-worker trust (ADR-12): measured win rate from the SELECTED
+    // receipt outcomes.
     let mut by_worker: Vec<(String, u64, u64)> = Vec::new();
-    for r in &receipts {
+    for r in &selected {
         let e = by_worker.iter_mut().find(|(n, _, _)| n == &r.worker);
         let won = r.outcome == "merged";
         match e {
@@ -1205,10 +1313,19 @@ mod tests {
         store.append_receipt(&receipt("A", 5.5, "failed")).unwrap();
         store.append_receipt(&receipt("B", 2.0, "merged")).unwrap();
 
-        let all = cost(&cfg, &st, None);
+        // No window flags: byte-identical legacy report — every receipt in
+        // the TOTAL count and the trust block, retries double-counted.
+        let all = cost(&cfg, &st, &CostFilter::default());
         assert!(all.contains("TOTAL: 17.5s across 3 receipt(s)"), "{all}");
 
-        let only_a = cost(&cfg, &st, Some("A"));
+        let only_a = cost(
+            &cfg,
+            &st,
+            &CostFilter {
+                task: Some("A".into()),
+                ..Default::default()
+            },
+        );
         assert!(
             only_a.contains("TOTAL: 15.5s across 3 receipt(s)"),
             "{only_a}"
@@ -1218,6 +1335,246 @@ mod tests {
                 .lines()
                 .any(|l| l.split_whitespace().next() == Some("B")),
             "task B is filtered out:\n{only_a}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn parse_since_accepts_timestamps_and_utc_midnight_dates() {
+        assert_eq!(parse_since("1700000000").unwrap(), 1_700_000_000);
+        assert_eq!(
+            parse_since(" 1700000000 ").unwrap(),
+            1_700_000_000,
+            "surrounding whitespace is tolerated"
+        );
+        assert_eq!(parse_since("1970-01-01").unwrap(), 0, "the epoch");
+        assert_eq!(parse_since("1970-01-02").unwrap(), 86_400);
+        assert_eq!(parse_since("2023-01-01").unwrap(), 1_672_531_200);
+        assert_eq!(
+            parse_since("2024-02-29").unwrap(),
+            1_709_164_800,
+            "leap day"
+        );
+        assert_eq!(
+            parse_since("2000-02-29").unwrap(),
+            951_782_400,
+            "400-year leap"
+        );
+        assert_eq!(
+            parse_since("2024-04-30").unwrap(),
+            1_714_435_200,
+            "30-day month"
+        );
+    }
+
+    #[test]
+    fn parse_since_rejects_garbage_and_impossible_dates() {
+        for bad in [
+            "",
+            "not-a-date",
+            "1700000000x",
+            "2024-1",
+            "2024-13-01",
+            "2024-02-30",
+            "2023-02-29",
+            "1969-12-31",
+            "-1",
+        ] {
+            let err = parse_since(bad).unwrap_err();
+            assert!(
+                bad.is_empty() || err.contains(bad),
+                "error names the bad value: {bad} → {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn cost_last_keeps_the_latest_attempt_per_task_without_double_counting() {
+        let base = unique_base("cost-last");
+        let st = settings(base.clone());
+        let cfg = cfg_with(vec![task("A"), task("B"), task("C")]);
+        let store = Store::new(st.state_dir.clone());
+        let rcpt =
+            |task: &str, attempt: u32, ts: u64, wall: f64, worker: &str, outcome: &str| Receipt {
+                task: task.into(),
+                attempt,
+                worker: worker.into(),
+                model: "m".into(),
+                wall_clock_s: wall,
+                tokens: None,
+                ts,
+                outcome: outcome.into(),
+                error: None,
+            };
+        // A: a failed retry then a merge on another worker. B: a same-ts
+        // tie between attempts 1/2 — the greater attempt must win. C: two
+        // identical (ts, attempt) receipts — exactly one is kept.
+        store
+            .append_receipt(&rcpt("A", 1, 100, 30.0, "w1", "failed"))
+            .unwrap();
+        store
+            .append_receipt(&rcpt("A", 2, 200, 12.0, "w2", "merged"))
+            .unwrap();
+        store
+            .append_receipt(&rcpt("B", 1, 300, 7.0, "w1", "merged"))
+            .unwrap();
+        store
+            .append_receipt(&rcpt("B", 2, 300, 3.0, "w1", "failed"))
+            .unwrap();
+        store
+            .append_receipt(&rcpt("C", 1, 400, 2.0, "w1", "merged"))
+            .unwrap();
+        store
+            .append_receipt(&rcpt("C", 1, 400, 2.0, "w1", "merged"))
+            .unwrap();
+
+        // No flags: legacy totals — every attempt, trust over every receipt.
+        let all = cost(&cfg, &st, &CostFilter::default());
+        assert!(all.contains("TOTAL: 56.0s across 6 receipt(s)"), "{all}");
+        assert!(all.contains(&format!("{:<12} {:<9}", "A", 2)), "{all}");
+        assert!(
+            all.contains(&format!("{:<14} {:<11} {:.2}", "w1", "3/5", 0.60)),
+            "{all}"
+        );
+
+        // --last: ONE receipt per task — greatest ts, ties by greater
+        // attempt — so retries are not double-counted.
+        let last = cost(
+            &cfg,
+            &st,
+            &CostFilter {
+                last: true,
+                ..Default::default()
+            },
+        );
+        assert!(last.contains("TOTAL: 17.0s across 3 receipt(s)"), "{last}");
+        assert!(
+            last.contains(&format!("{:<12} {:<9} {:<10.1}", "A", 1, 12.0)),
+            "{last}"
+        );
+        // B's tie: attempt 2 (3.0s, failed) wins over attempt 1 (7.0s,
+        // merged) — the row AND the trust block prove it.
+        assert!(
+            last.contains(&format!("{:<12} {:<9} {:<10.1}", "B", 1, 3.0)),
+            "{last}"
+        );
+        assert!(
+            !last.contains("30.0"),
+            "A's retry is not double-counted: {last}"
+        );
+        // Trust from the SELECTED receipts only: w1 keeps B@2 (failed) and
+        // C@1 (merged) → 1/2; w2 keeps A's merge → 1/1.
+        assert!(
+            last.contains(&format!("{:<14} {:<11} {:.2}", "w1", "1/2", 0.50)),
+            "{last}"
+        );
+        assert!(
+            last.contains(&format!("{:<14} {:<11} {:.2}", "w2", "1/1", 1.00)),
+            "{last}"
+        );
+
+        // --last composes with --task: rows narrow to A, the window still
+        // spans the latest-per-task selection (legacy count semantics).
+        let last_a = cost(
+            &cfg,
+            &st,
+            &CostFilter {
+                task: Some("A".into()),
+                last: true,
+                ..Default::default()
+            },
+        );
+        assert!(
+            last_a.contains("TOTAL: 12.0s across 3 receipt(s)"),
+            "{last_a}"
+        );
+        assert!(
+            !last_a
+                .lines()
+                .any(|l| l.split_whitespace().next() == Some("B")),
+            "{last_a}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn cost_since_windows_receipts_and_composes_with_last() {
+        let base = unique_base("cost-since");
+        let st = settings(base.clone());
+        let cfg = cfg_with(vec![task("A")]);
+        let store = Store::new(st.state_dir.clone());
+        let rcpt = |attempt: u32, ts: u64, wall: f64, worker: &str, outcome: &str| Receipt {
+            task: "A".into(),
+            attempt,
+            worker: worker.into(),
+            model: "m".into(),
+            wall_clock_s: wall,
+            tokens: None,
+            ts,
+            outcome: outcome.into(),
+            error: None,
+        };
+        store
+            .append_receipt(&rcpt(1, 1_600_000_000, 100.0, "w1", "failed"))
+            .unwrap(); // 2020-09-13
+        store
+            .append_receipt(&rcpt(2, 1_700_000_000, 20.0, "w1", "failed"))
+            .unwrap(); // 2023-11-14
+        store
+            .append_receipt(&rcpt(3, 1_750_000_000, 30.0, "w2", "merged"))
+            .unwrap();
+
+        // Bare timestamp window: older receipts excluded, newer kept.
+        let since = cost(
+            &cfg,
+            &st,
+            &CostFilter {
+                since: Some(1_650_000_000),
+                ..Default::default()
+            },
+        );
+        assert!(
+            since.contains("TOTAL: 50.0s across 2 receipt(s)"),
+            "{since}"
+        );
+        assert!(!since.contains("100.0"), "2020 receipt excluded: {since}");
+        assert!(
+            since.contains(&format!("{:<14} {:<11} {:.2}", "w1", "0/1", 0.00)),
+            "trust reflects the window: {since}"
+        );
+
+        // The bound is inclusive: ts >= since.
+        let edge = cost(
+            &cfg,
+            &st,
+            &CostFilter {
+                since: Some(1_600_000_000),
+                ..Default::default()
+            },
+        );
+        assert!(edge.contains("TOTAL: 150.0s across 3 receipt(s)"), "{edge}");
+
+        // --since --last: the latest attempt per task WITHIN the window.
+        let both = cost(
+            &cfg,
+            &st,
+            &CostFilter {
+                last: true,
+                since: Some(1_650_000_000),
+                ..Default::default()
+            },
+        );
+        assert!(both.contains("TOTAL: 30.0s across 1 receipt(s)"), "{both}");
+        assert!(both.contains(&format!("{:<12} {:<9}", "A", 1)), "{both}");
+        assert!(
+            both.contains(&format!("{:<14} {:<11} {:.2}", "w2", "1/1", 1.00)),
+            "{both}"
+        );
+        assert!(
+            !both.contains("w1"),
+            "w1's windowed-out attempts are gone: {both}"
         );
 
         let _ = std::fs::remove_dir_all(&base);
