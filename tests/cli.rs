@@ -418,6 +418,7 @@ fn cost_since_filters_receipts_by_time() {
 }
 
 // spec: state/cost-receipts
+// spec: cli/cost-report#wasted-spend-surfaces-failed-attempts
 #[test]
 fn cost_report_surfaces_wasted_spend() {
     // Failed attempts must not be invisible: the report totals their

@@ -276,7 +276,8 @@ fn status_json_after_run() {
 }
 
 /// Retry: agent always fails, max_attempts=2 → exactly 2 attempts, then Failed.
-// spec: scheduling/retry-with-fresh-branch
+// spec: scheduling/retry-reuses-verified-agent-work
+// spec: scheduling/retry-reuses-verified-agent-work#attempts-are-bounded-by-max-attempts
 #[test]
 fn retry_runs_up_to_max_attempts() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -1011,11 +1012,12 @@ fn unset_sandbox_wrapper_leaves_the_agent_argv_unchanged() {
 
 /// Retry after a GATE failure (scheduling spec): the gate passes only from
 /// the third attempt on (a counter file in the fixture dir counts gate
-/// runs), so with max_attempts=3 the task is re-queued on fresh attempts and
-/// succeeds on attempt 3 — and the receipts record the exact spec sequence
-/// `failed, failed, merged` (state spec).
-// spec: scheduling/retry-with-fresh-branch
-// spec: scheduling/retry-with-fresh-branch#retry-after-gate-failure
+/// runs). Attempt 2 attaches to the kept branch as a gate-only retry; when
+/// the gate fails again the branch is dropped, so attempt 3 is a fresh
+/// agent run that passes and merges — and the receipts record the exact
+/// spec sequence `failed, failed, merged` (state spec).
+// spec: scheduling/retry-reuses-verified-agent-work
+// spec: scheduling/retry-reuses-verified-agent-work#a-second-gate-failure-falls-back-to-a-fresh-attempt
 // spec: state/cost-receipts#failed-attempts-are-recorded
 #[test]
 fn retry_after_gate_failure_runs_fresh_attempts_until_it_passes() {
@@ -1072,7 +1074,7 @@ fn retry_after_gate_failure_runs_fresh_attempts_until_it_passes() {
 /// (Under the old always-fresh behavior the count was 2: attempt 1's
 /// `cleanup()` ran `git worktree remove --force` + `git branch -D`,
 /// discarding the paid work and re-running the agent for it.)
-// spec: scheduling/retry-with-fresh-branch#retry-after-gate-failure
+// spec: scheduling/retry-reuses-verified-agent-work#gate-failure-retries-only-the-gate
 #[test]
 fn gate_flake_retry_does_not_rerun_the_agent() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -1134,6 +1136,7 @@ fn gate_flake_retry_does_not_rerun_the_agent() {
 /// committed attempt branch — the paid-for work is durable evidence, not
 /// garbage to `git branch -D`. Today's `cleanup()` destroyed both the
 /// worktree and the branch; only the worktree dir may go.
+// spec: scheduling/retry-reuses-verified-agent-work#gate-failure-keeps-the-verified-branch
 // spec: lifecycle/execute-pipeline#gate-failure
 #[test]
 fn gate_failure_keeps_the_agents_committed_branch() {
