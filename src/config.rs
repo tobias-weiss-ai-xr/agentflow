@@ -94,6 +94,17 @@ pub struct Worker {
     pub enabled: bool,
     /// Agent CLI binary name; default `pi`. Passed `--provider/--model/-p @file`.
     pub cli: String,
+    /// Extra arguments for the agent CLI (per worker). Appended to the
+    /// argv AFTER `--model M` and BEFORE `-p @file` (see `spawn_argv`) — so
+    /// a caller can reach CLI flags agentflow does not model (`--max-turns`,
+    /// effort/reasoning settings, `--mode json`, cost/limit flags, …) and
+    /// can override anything the earlier argv set, while the `-p @file`
+    /// prompt handoff always stays last. Passed through VERBATIM — agentflow
+    /// stays CLI-agnostic (ADR-1) and never interprets or whitelists the
+    /// entries. Absent field ⇒ empty vector (existing `workers.json`
+    /// files keep working unchanged).
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 impl Default for Worker {
@@ -106,6 +117,7 @@ impl Default for Worker {
             api_key_env: None,
             enabled: true,
             cli: "pi".to_string(),
+            args: Vec::new(),
         }
     }
 }
@@ -237,6 +249,16 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
         if w.provider.is_empty() || w.model.is_empty() {
             return Err(format!(
                 "worker '{}': provider and model are required",
+                w.name
+            ));
+        }
+        // CLI-agnostic (ADR-1): entries are passed through verbatim, so the
+        // only shape rule is that each is a non-empty string (an empty
+        // entry is near-certainly a config typo, and would surface only as
+        // a confusing agent-CLI error at dispatch time).
+        if w.args.iter().any(|a| a.is_empty()) {
+            return Err(format!(
+                "worker '{}': args entries must be non-empty strings",
                 w.name
             ));
         }

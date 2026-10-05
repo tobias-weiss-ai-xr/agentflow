@@ -35,6 +35,7 @@ fn contract_worker() -> Worker {
         name: "w".into(),
         provider: "zai".into(),
         model: "glm-5.2".into(),
+        args: Vec::new(),
         ..Default::default()
     }
 }

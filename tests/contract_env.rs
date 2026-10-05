@@ -131,6 +131,7 @@ fn worker_with_key_env(key_env: Option<&str>) -> Worker {
         provider: "zai".into(),
         model: "glm-5.2".into(),
         api_key_env: key_env.map(str::to_string),
+        args: Vec::new(),
         ..Default::default()
     }
 }
