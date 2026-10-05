@@ -1059,6 +1059,129 @@ fn retry_after_gate_failure_runs_fresh_attempts_until_it_passes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// THE decisive cost test: a gate FLAKE (fails the first time it runs,
+/// passes the second) must not re-pay the agent. The agent's committed
+/// work is durable on the attempt branch (journal `AgentDone`), so the
+/// retry re-runs ONLY the gate — the agent is never invoked again.
+/// Proof from the task log: `execute_attempt` appends the marker line
+/// `-- agent --` immediately before every agent spawn, and a gate-only
+/// retry never reaches that code — so the count must be exactly 1.
+/// (Under the old always-fresh behavior the count was 2: attempt 1's
+/// `cleanup()` ran `git worktree remove --force` + `git branch -D`,
+/// discarding the paid work and re-running the agent for it.)
+// spec: scheduling/retry-with-fresh-branch#retry-after-gate-failure
+#[test]
+fn gate_flake_retry_does_not_rerun_the_agent() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    // Counter file OUTSIDE the repo (absolute path under a temp dir): it
+    // must survive worktree removal/recreation between attempts.
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("af-e2e-flake-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let count = dir.join("COUNT");
+    let count = count.to_string_lossy().to_string();
+    // The gate fails the first time it runs (n=1), passes from the second on.
+    let flaky_gate = format!(
+        "n=$(cat {count} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {count}; test $n -ge 2"
+    );
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"flake then pass","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = flaky_gate
+        ),
+        &worker_json(3),
+    );
+
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Done);
+    assert_eq!(
+        st["A"].attempts, 2,
+        "gate flaked on attempt 1; attempt 2 was a gate-only retry that passed"
+    );
+    assert!(f.repo.join("DONE.txt").exists(), "agent artifact merged");
+
+    // The agent ran EXACTLY once across both attempts (the gate ran twice).
+    let log = std::fs::read_to_string(f.st.state_dir.join("logs").join("A.log"))
+        .expect("attempt log exists");
+    assert_eq!(
+        log.matches("-- agent --").count(),
+        1,
+        "agent must not re-run on a gate-only retry:\n{log}"
+    );
+    // One receipt per attempt with the real outcomes (routing substrate).
+    let mut receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    receipts.sort_by_key(|r| r.attempt);
+    let outcomes: Vec<&str> = receipts.iter().map(|r| r.outcome.as_str()).collect();
+    assert_eq!(
+        outcomes,
+        vec!["failed", "merged"],
+        "one receipt per attempt"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The data-loss half of the gate-failure bug: an ALWAYS-failing gate
+/// (max_attempts=1) must fail the task (exit 2) but KEEP the agent's
+/// committed attempt branch — the paid-for work is durable evidence, not
+/// garbage to `git branch -D`. Today's `cleanup()` destroyed both the
+/// worktree and the branch; only the worktree dir may go.
+// spec: lifecycle/execute-pipeline#gate-failure
+#[test]
+fn gate_failure_keeps_the_agents_committed_branch() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"gate always blocks","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("NEVER.txt") // demands a file the agent will not create
+        ),
+        &worker_json(1),
+    );
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 2);
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Failed);
+    assert!(st["A"].last_error.as_deref().unwrap_or("").contains("gate"));
+    assert!(!f.repo.join("DONE.txt").exists(), "nothing merged");
+
+    // The attempt branch survives, carrying the agent's commit(s) beyond
+    // the base branch (worktree::branch_exists-equivalent evidence).
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "refs/heads/tf/A"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "branch tf/A must survive a gate failure: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let ahead = std::process::Command::new("git")
+        .args(["rev-list", "--count", "main..tf/A"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    assert!(
+        ahead.status.success()
+            && String::from_utf8_lossy(&ahead.stdout)
+                .trim()
+                .parse::<u64>()
+                .unwrap_or(0)
+                > 0,
+        "branch carries the agent's committed work beyond main: {}{}",
+        String::from_utf8_lossy(&ahead.stdout),
+        String::from_utf8_lossy(&ahead.stderr)
+    );
+    // Only the worktree DIRECTORY is dropped; the branch (the work) stays.
+    assert!(!f.st.worktree_root.join("A").exists());
+}
+
 /// A failed attempt's receipt carries the failure's first line (state
 /// spec): an agent exiting 7 produces `error: Some("agent exited …7…")`.
 // spec: state/cost-receipts#failed-receipt-carries-the-reason

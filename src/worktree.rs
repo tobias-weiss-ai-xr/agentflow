@@ -100,6 +100,82 @@ pub fn remove(repo: &Path, wt: &Worktree) {
     let _ = git(repo, &["branch", "-D", &wt.branch]);
 }
 
+/// Remove ONLY the worktree directory; the branch and its committed work
+/// survive. The gate-failure cleanup: the agent's committed change is the
+/// durable `AgentDone` evidence, so only the checkout is dropped — the
+/// retry re-attaches to the branch via [`attach`] and never re-pays the
+/// agent. Best-effort, never fails the caller.
+pub fn remove_worktree_only(repo: &Path, wt: &Worktree) {
+    let _ = git(
+        repo,
+        &["worktree", "remove", "--force", wt.path.to_str().unwrap()],
+    );
+}
+
+/// Does `branch` exist as a local branch in `repo`?
+pub fn branch_exists(repo: &Path, branch: &str) -> bool {
+    git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .passed()
+}
+
+/// Commits on `branch` not reachable from `base` (`git rev-list --count
+/// base..branch`). Err when git cannot answer (e.g. a missing branch).
+pub fn commits_ahead(repo: &Path, base: &str, branch: &str) -> Result<u64, String> {
+    let out = git(repo, &["rev-list", "--count", &format!("{base}..{branch}")]);
+    if !out.passed() {
+        return Err(format!(
+            "cannot count commits {base}..{branch}: {}",
+            out.combined().trim()
+        ));
+    }
+    out.stdout
+        .trim()
+        .parse::<u64>()
+        .map_err(|e| format!("cannot parse rev-list count for {base}..{branch}: {e}"))
+}
+
+/// Attach a worktree to an EXISTING branch — the gate-only-retry
+/// counterpart of [`create`]: the branch is never deleted or recreated,
+/// because the agent's committed work on it is exactly what the retry must
+/// preserve (a gate failure must not discard paid agent work). Any leftover
+/// dir/registration at `wt_root/<id>` is cleared first so the branch can be
+/// checked out fresh from its own tip.
+pub fn attach(repo: &Path, wt_root: &Path, id: &str, prefix: &str) -> Result<Worktree, String> {
+    if !is_repo(repo) {
+        return Err(format!("{} is not a git repository", repo.display()));
+    }
+    let branch = format!("{prefix}/{id}");
+    let path = wt_root.join(id);
+    if path.exists() {
+        let _ = git(
+            repo,
+            &["worktree", "remove", "--force", path.to_str().unwrap()],
+        );
+        let _ = std::fs::remove_dir_all(&path);
+    }
+    std::fs::create_dir_all(wt_root).map_err(|e| e.to_string())?;
+    // Prune stale registrations (same reason as `create`) so the branch is
+    // free to check out in the new worktree.
+    let _ = git(repo, &["worktree", "prune"]);
+    let out = git(repo, &["worktree", "add", path.to_str().unwrap(), &branch]);
+    if !out.passed() {
+        return Err(format!(
+            "worktree attach failed ({:?}): {}",
+            out.kind,
+            out.combined().trim()
+        ));
+    }
+    Ok(Worktree { path, branch })
+}
+
 /// Serialized merge of `branch` into the repo's current checkout branch.
 /// On conflict: aborts the merge and returns an error (never force-pushes).
 pub fn merge(repo: &Path, branch: &str, locks: &MergeLocks, msg: &str) -> Result<(), String> {
@@ -324,6 +400,94 @@ mod tests {
         assert!(
             wt.path.join(".git").exists(),
             "stale dir cleared, fresh worktree in place"
+        );
+        remove(&repo, &wt);
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    /// The gate-flake reuse contract: after a gate failure the worktree dir
+    /// is dropped but the BRANCH (the agent's committed work) survives, and
+    /// `attach` re-materializes a worktree on that exact branch tip.
+    #[test]
+    fn remove_worktree_only_keeps_the_branch_and_attach_reuses_its_tip() {
+        let repo = scratch_repo();
+        let wt_root = repo.parent().unwrap().join("wt");
+        let wt = create_ok(&repo, &wt_root, "R1");
+        std::fs::write(wt.path.join("f.txt"), "agent work\n").unwrap();
+        git_cmd(&wt.path, &["add", "."]);
+        git_cmd(&wt.path, &["commit", "-m", "agent work"]);
+        let tip = git(&repo, &["rev-parse", &wt.branch]);
+        let tip = tip.stdout.trim().to_string();
+
+        // Gate-failure cleanup: dir gone, branch (and its commit) kept.
+        remove_worktree_only(&repo, &wt);
+        assert!(!wt.path.exists(), "worktree dir removed");
+        assert!(
+            branch_exists(&repo, "tf/R1"),
+            "branch survives the gate failure"
+        );
+        assert_eq!(
+            commits_ahead(&repo, "main", "tf/R1").unwrap(),
+            1,
+            "the committed agent work is beyond the base branch"
+        );
+
+        // The retry attaches to the SAME branch, at the same tip.
+        let wt2 = attach(&repo, &wt_root, "R1", "tf").expect("attach to existing branch");
+        assert_eq!(wt2.branch, "tf/R1");
+        assert_eq!(wt2.path, wt.path);
+        let head = git(&wt2.path, &["rev-parse", "HEAD"]);
+        assert_eq!(
+            head.stdout.trim(),
+            tip,
+            "attached worktree sits on the kept branch tip — no re-created branch"
+        );
+        assert_eq!(
+            std::fs::read_to_string(wt2.path.join("f.txt")).unwrap(),
+            "agent work\n",
+            "the committed agent work is intact"
+        );
+        remove(&repo, &wt2);
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    /// `attach` never invents a branch: without one it fails (and leaves no
+    /// dir behind) — the caller must fall back to a full agent run.
+    #[test]
+    fn attach_fails_and_leaves_no_dir_without_the_branch() {
+        let repo = scratch_repo();
+        let wt_root = repo.parent().unwrap().join("wt");
+        assert!(!branch_exists(&repo, "tf/R2"));
+        assert!(commits_ahead(&repo, "main", "tf/R2").is_err());
+        let err = attach(&repo, &wt_root, "R2", "tf").unwrap_err();
+        assert!(err.contains("worktree attach failed"), "{err}");
+        assert!(!wt_root.join("R2").exists(), "failed attach leaves no dir");
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    /// Durability evidence: a branch carries nothing beyond the base until
+    /// it is committed to (and again nothing once the base contains it).
+    #[test]
+    fn commits_ahead_counts_only_work_beyond_the_base() {
+        let repo = scratch_repo();
+        let wt_root = repo.parent().unwrap().join("wt");
+        let wt = create_ok(&repo, &wt_root, "R3");
+        assert_eq!(
+            commits_ahead(&repo, "main", &wt.branch).unwrap(),
+            0,
+            "fresh branch sits at the base tip — not durable"
+        );
+        std::fs::write(wt.path.join("f.txt"), "work\n").unwrap();
+        git_cmd(&wt.path, &["add", "."]);
+        git_cmd(&wt.path, &["commit", "-m", "work"]);
+        assert_eq!(commits_ahead(&repo, "main", &wt.branch).unwrap(), 1);
+        // Once merged, the branch's work is reachable from the base → 0
+        // again (a consumed attempt is not durable evidence).
+        merge(&repo, &wt.branch, &MergeLocks::new(), "merge R3").unwrap();
+        assert_eq!(
+            commits_ahead(&repo, "main", &wt.branch).unwrap(),
+            0,
+            "merged branch is fully reachable from the base"
         );
         remove(&repo, &wt);
         let _ = std::fs::remove_dir_all(repo.parent().unwrap());

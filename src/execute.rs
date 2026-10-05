@@ -161,10 +161,16 @@ fn execute_attempt(
 
     // Multi-repo (ADR-11): worktree, branch, and merge target the task's repo.
     let repo = ctx.cfg.repo_dir_for(&task, &ctx.st.repo_dir);
-    let wt = match worktree::create(&repo, &ctx.st.worktree_root, id, &ctx.st.branch_prefix) {
-        Ok(w) => w,
-        Err(e) => return Outcome::Failed(e),
-    };
+    // Cost fix (gate flakes must not discard paid agent work): when the
+    // agent's committed work is still durable on the attempt branch — a
+    // previous attempt of this task failed ONLY at the gate — attach to
+    // that branch and re-run just the gate. The agent is never invoked
+    // again for work it already committed.
+    let (wt, reused) =
+        match materialize_worktree(&repo, &ctx.st.worktree_root, id, &ctx.st.branch_prefix) {
+            Ok(w) => w,
+            Err(e) => return Outcome::Failed(e),
+        };
     let wt_path = wt.path.clone();
     // Effect sandwich, boundary 1 (commit intent BEFORE the effect): the
     // attempt is live — worktree ready, agent about to spawn. A crash from
@@ -186,49 +192,56 @@ fn execute_attempt(
         worker.name, worker.model
     ));
 
-    // 1) Render + write prompt.
-    let prompt = {
-        let context = failure_context(&ctx.store.load_receipts(), id, attempt);
-        render_prompt(&ctx.st, &task, worker, context.as_deref())
-    };
-    // Absolute: the prompt path crosses the process boundary into the
-    // agent's cwd (a worktree) — a relative state_dir would point at a
-    // path that doesn't exist there (gitignored state, e.g.).
-    let prompt_path = std::path::absolute(ctx.store.prompt_dir().join(format!("{id}.md")))
-        .unwrap_or_else(|_| ctx.store.prompt_dir().join(format!("{id}.md")));
-    let _ = fs::create_dir_all(ctx.store.prompt_dir());
-    if let Err(e) = fs::write(&prompt_path, &prompt) {
-        cleanup(&repo, &wt);
-        return Outcome::Failed(format!("cannot write prompt: {e}"));
-    }
+    if reused {
+        // Gate-only retry: the agent's committed work on the attempt branch
+        // IS the durable AgentDone evidence (journaled below) — the agent
+        // step is skipped entirely so a gate flake never re-pays for it.
+        append("-- gate-only retry on committed agent work --");
+    } else {
+        // 1) Render + write prompt.
+        let prompt = {
+            let context = failure_context(&ctx.store.load_receipts(), id, attempt);
+            render_prompt(&ctx.st, &task, worker, context.as_deref())
+        };
+        // Absolute: the prompt path crosses the process boundary into the
+        // agent's cwd (a worktree) — a relative state_dir would point at a
+        // path that doesn't exist there (gitignored state, e.g.).
+        let prompt_path = std::path::absolute(ctx.store.prompt_dir().join(format!("{id}.md")))
+            .unwrap_or_else(|_| ctx.store.prompt_dir().join(format!("{id}.md")));
+        let _ = fs::create_dir_all(ctx.store.prompt_dir());
+        if let Err(e) = fs::write(&prompt_path, &prompt) {
+            cleanup(&repo, &wt);
+            return Outcome::Failed(format!("cannot write prompt: {e}"));
+        }
 
-    // 2) Agent CLI (external, OpenAI-compatible): --provider P --model M -p @file
-    let argv = spawn_argv(&ctx.st, worker, &prompt_path);
-    let (agent_cmd, agent_args) = argv.split_first().unwrap();
-    let (env_pairs, env_allow) = agent_env(worker, &|k| std::env::var(k).ok());
-    append("-- agent --");
-    let agent_out = crate::subprocess::run(
-        agent_cmd,
-        agent_args,
-        Some(&wt_path),
-        &env_pairs,
-        crate::subprocess::EnvMode::Allowlist(env_allow),
-        Duration::from_secs(ctx.st.agent_timeout_s),
-    );
-    let mut out_lines = agent_out.combined();
-    if !out_lines.is_empty() {
-        append(&out_lines);
-    }
-    if !agent_out.passed() {
-        cleanup(&repo, &wt);
-        return Outcome::Failed(format!(
-            "agent exited {:?} (code {})",
-            agent_out.kind,
-            agent_out
-                .code
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "-".into())
-        ));
+        // 2) Agent CLI (external, OpenAI-compatible): --provider P --model M -p @file
+        let argv = spawn_argv(&ctx.st, worker, &prompt_path);
+        let (agent_cmd, agent_args) = argv.split_first().unwrap();
+        let (env_pairs, env_allow) = agent_env(worker, &|k| std::env::var(k).ok());
+        append("-- agent --");
+        let agent_out = crate::subprocess::run(
+            agent_cmd,
+            agent_args,
+            Some(&wt_path),
+            &env_pairs,
+            crate::subprocess::EnvMode::Allowlist(env_allow),
+            Duration::from_secs(ctx.st.agent_timeout_s),
+        );
+        let out_lines = agent_out.combined();
+        if !out_lines.is_empty() {
+            append(&out_lines);
+        }
+        if !agent_out.passed() {
+            cleanup(&repo, &wt);
+            return Outcome::Failed(format!(
+                "agent exited {:?} (code {})",
+                agent_out.kind,
+                agent_out
+                    .code
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "-".into())
+            ));
+        }
     }
 
     // 2b) Scope enforcement: the prompt's "do not touch files outside the
@@ -236,7 +249,8 @@ fn execute_attempt(
     // change must stay within `task.scope` (empty scope means any file).
     // Checked BEFORE the durable AgentDone boundary and BEFORE merge, so a
     // violating change can never reach the base branch AND a crash after the
-    // check cannot resume into a merge that skips it.
+    // check cannot resume into a merge that skips it. Runs on BOTH paths —
+    // reused work must re-prove its scope before it can merge.
     {
         let base_branch = match worktree::current_branch(&repo) {
             Ok(b) => b,
@@ -284,12 +298,26 @@ fn execute_attempt(
                 Duration::from_secs(ctx.cfg.defaults.accept_timeout_s),
                 task.gate_replay,
             );
-            out_lines = gate_out.combined();
+            let out_lines = gate_out.combined();
             if !out_lines.is_empty() {
                 append(&out_lines);
             }
             if !gate_out.passed() {
-                cleanup(&repo, &wt);
+                if reused {
+                    // The reused agent work failed the gate a SECOND time:
+                    // drop the branch so the NEXT attempt is a full agent
+                    // run. This bounds the optimisation to at most one
+                    // cheap gate re-run, so genuinely wrong agent work is
+                    // still recoverable.
+                    cleanup(&repo, &wt);
+                } else {
+                    // The agent succeeded and its change is committed
+                    // (AgentDone above); a gate failure may be a flake.
+                    // Remove ONLY the worktree dir — the branch keeps the
+                    // paid-for work durable for a gate-only retry.
+                    append("-- gate failed; keeping committed branch for gate-only retry --");
+                    worktree::remove_worktree_only(&repo, &wt);
+                }
                 return Outcome::Failed(format!(
                     "acceptance gate failed (exit {}): {}",
                     gate_out
@@ -320,6 +348,37 @@ fn execute_attempt(
 
 fn cleanup(repo: &Path, wt: &worktree::Worktree) {
     worktree::remove(repo, wt);
+}
+
+/// Worktree + mode for one attempt. `(wt, true)` = gate-only retry: the
+/// agent's committed work is DURABLE on the attempt branch — the branch
+/// exists AND carries at least one commit beyond the base branch (e.g. a
+/// previous attempt of this task failed only at the gate, whose cleanup
+/// keeps the branch) — so the attempt attaches to that branch and skips
+/// the agent entirely. `(wt, false)` = fresh branch via `worktree::create`
+/// (which drops any stale branch first) — a full agent run, exactly the
+/// pre-retry behavior. A branch that is absent or carries no work beyond
+/// the base is NEVER treated as durable: legitimacy over cleverness, a
+/// missing artifact must not silently skip the agent.
+fn materialize_worktree(
+    repo: &Path,
+    wt_root: &Path,
+    id: &str,
+    prefix: &str,
+) -> Result<(worktree::Worktree, bool), String> {
+    let branch = format!("{prefix}/{id}");
+    let durable = match worktree::current_branch(repo) {
+        Ok(base) => {
+            worktree::branch_exists(repo, &branch)
+                && matches!(worktree::commits_ahead(repo, &base, &branch), Ok(n) if n > 0)
+        }
+        // Cannot even name the base branch → prove nothing, run the agent.
+        Err(_) => false,
+    };
+    if durable {
+        return worktree::attach(repo, wt_root, id, prefix).map(|w| (w, true));
+    }
+    worktree::create(repo, wt_root, id, prefix).map(|w| (w, false))
 }
 
 /// Paths changed on the attempt branch relative to the base branch's
