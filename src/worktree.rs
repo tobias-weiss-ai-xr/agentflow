@@ -202,8 +202,14 @@ mod tests {
     fn scratch_repo() -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("af-wt-{}-{n}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        // Repo lives in a UNIQUE per-test directory so `repo.parent()` is
+        // private to this test. Several worktree tests derive their
+        // `wt_root` from `repo.parent()`; when that was the shared global
+        // temp dir they deleted each other's worktrees concurrently (flaky
+        // CI: `heal`/`clean` removing another test's `wt` entries).
+        let base = std::env::temp_dir().join(format!("af-wt-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("repo");
         std::fs::create_dir_all(&dir).unwrap();
         git_cmd(&dir, &["init", "-b", "main"]);
         // af's own merge commits need an identity; set it repo-locally so
