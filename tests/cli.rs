@@ -164,6 +164,7 @@ fn missing_config_errors_exit_two() {
 }
 
 // spec: cli/status-and-inspection-commands
+// spec: cli/status-and-inspection-commands#json-status
 #[test]
 fn status_and_api_status_render_board() {
     let cli = Cli::new();
@@ -225,6 +226,7 @@ fn api_results_requires_task_flag() {
 }
 
 // spec: cli/status-and-inspection-commands
+// spec: cli/status-and-inspection-commands#attach-tails-log
 #[test]
 fn attach_requires_id_and_tails_log_until_done() {
     let cli = Cli::new();
@@ -322,7 +324,9 @@ fn validate_reports_ok_and_exits_zero() {
 }
 
 // spec: config/task-schema-loading
+// spec: config/task-schema-loading#dependency-cycle-rejected
 // spec: scheduling/dependency-dag
+// spec: scheduling/dependency-dag#cycle-rejected
 #[test]
 fn validate_cycle_exits_nonzero_and_names_the_cycle() {
     let tasks = r#"{ "tasks": [
@@ -347,6 +351,7 @@ fn validate_cycle_exits_nonzero_and_names_the_cycle() {
 }
 
 // spec: config/task-schema-loading
+// spec: config/task-schema-loading#duplicate-id-rejected
 #[test]
 fn validate_duplicate_id_exits_nonzero() {
     let tasks = r#"{ "tasks": [
@@ -360,6 +365,7 @@ fn validate_duplicate_id_exits_nonzero() {
 }
 
 // spec: config/worker-schema-loading
+// spec: config/worker-schema-loading#zero-enabled-workers-rejected
 #[test]
 fn validate_no_enabled_workers_exits_nonzero() {
     let workers =
@@ -370,6 +376,7 @@ fn validate_no_enabled_workers_exits_nonzero() {
     assert!(out.contains("no enabled workers"), "error text: {out}");
 }
 
+// spec: config/task-schema-loading#task-without-gate-and-not-manual-warns
 #[test]
 fn validate_prints_warnings_without_failing() {
     // Gate-less non-manual task: a warning, not a hard error.
@@ -452,6 +459,7 @@ fn dry_run_reflects_persisted_state_in_readiness() {
 // ---------------------------------------------------------------------------
 
 // spec: cli/cost-report
+// spec: cli/cost-report#trust-section-lists-each-worker-with-history
 #[test]
 fn cost_prints_per_worker_trust_section() {
     let cli = Cli::new();
@@ -496,6 +504,8 @@ fn cost_prints_per_worker_trust_section() {
 }
 
 // spec: config/task-schema-loading
+// spec: config/task-schema-loading#valid-config-loads
+// spec: config/task-schema-loading#dangling-dependency-warns
 #[test]
 fn config_task_schema_loads_validates_and_warns() {
     let dir = std::env::temp_dir().join(format!("af-cli-cfg-{}", std::process::id()));
@@ -557,6 +567,7 @@ fn config_task_schema_loads_validates_and_warns() {
 }
 
 // spec: config/worker-schema-loading
+// spec: config/worker-schema-loading#valid-workers-load
 #[test]
 fn config_worker_schema_loads_enabled_workers() {
     let dir = std::env::temp_dir().join(format!("af-cli-workers-{}", std::process::id()));
@@ -599,6 +610,8 @@ fn config_worker_schema_loads_enabled_workers() {
 }
 
 // spec: config/environment-overrides
+// spec: config/environment-overrides#overrides-applied
+// spec: config/environment-overrides#defaults-when-unset
 #[test]
 fn settings_from_env_honors_tf_overrides_and_defaults() {
     // Mutates process-global env; every other test in this binary spawns
@@ -648,6 +661,8 @@ fn settings_from_env_honors_tf_overrides_and_defaults() {
 }
 
 // spec: config/optional-repos-json-defines-named-repositories
+// spec: config/optional-repos-json-defines-named-repositories#missing-repos-json-is-single-repo-mode
+// spec: config/optional-repos-json-defines-named-repositories#relative-repo-paths-resolve-against-the-file
 #[test]
 fn repos_json_is_optional_and_resolves_relative_paths() {
     let dir = std::env::temp_dir().join(format!("af-cli-repos-{}", std::process::id()));
@@ -673,6 +688,7 @@ fn repos_json_is_optional_and_resolves_relative_paths() {
 }
 
 // spec: scheduling/critical-path-priority
+// spec: scheduling/critical-path-priority#deeper-task-first
 #[test]
 fn deeper_ready_task_dispatches_first() {
     use agentflow::scheduler::ready_tasks;
@@ -708,6 +724,7 @@ fn deeper_ready_task_dispatches_first() {
 }
 
 // spec: scheduling/scope-contention-avoidance
+// spec: scheduling/scope-contention-avoidance#overlapping-scope-deferred
 #[test]
 fn overlapping_scope_is_deferred_while_a_sibling_runs() {
     use agentflow::scheduler::ready_tasks;
@@ -749,6 +766,9 @@ fn overlapping_scope_is_deferred_while_a_sibling_runs() {
 }
 
 // spec: scheduling/ucb1-worker-selection
+// spec: scheduling/ucb1-worker-selection#fresh-state-picks-first-configured-worker
+// spec: scheduling/ucb1-worker-selection#unexplored-worker-is-tried-before-a-failing-one
+// spec: scheduling/ucb1-worker-selection#reliable-worker-wins-at-equal-counts
 #[test]
 fn ucb1_selection_matches_the_spec_scenarios() {
     use agentflow::router::Router;
@@ -777,4 +797,161 @@ fn ucb1_selection_matches_the_spec_scenarios() {
         r.record("b", false); // b: 0/3
     }
     assert_eq!(r.pick(pool.iter()).unwrap().name, "a");
+}
+
+// spec: config/task-schema-loading
+// spec: config/task-schema-loading#string-priority-levels-accepted
+#[test]
+fn priority_levels_parse_and_rank_deterministically() {
+    // String levels and plain numbers both parse onto the same typed field.
+    let dir = std::env::temp_dir().join(format!("af-cli-prio-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("tasks.json"),
+        r#"{ "tasks": [
+            { "id": "A", "title": "a", "priority": "HIGH", "accept": "true" },
+            { "id": "B", "title": "b", "priority": 3, "accept": "true" },
+            { "id": "C", "title": "c", "priority": "CRITICAL", "accept": "true" }
+        ] }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("workers.json"),
+        r#"{ "workers": [ { "name": "w1", "provider": "p", "model": "m", "enabled": true } ] }"#,
+    )
+    .unwrap();
+    let cfg = config::load(&dir.join("tasks.json"), &dir.join("workers.json"))
+        .expect("mixed priority levels must load");
+
+    // And they rank deterministically: CRITICAL (20) > HIGH (10) > a
+    // number-ranked task (3).
+    let (a, b, c) = (
+        cfg.by_id["A"].priority.rank(),
+        cfg.by_id["B"].priority.rank(),
+        cfg.by_id["C"].priority.rank(),
+    );
+    assert!(c > a, "CRITICAL outranks HIGH: {c} !> {a}");
+    assert!(a > b, "HIGH outranks a number-ranked task: {a} !> {b}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// spec: config/per-task-repo-resolution-with-compat-fallback
+// spec: config/per-task-repo-resolution-with-compat-fallback#empty-repo-means-the-default-repo
+// spec: config/per-task-repo-resolution-with-compat-fallback#main-falls-back-to-the-default-repo
+#[test]
+fn repo_resolution_empty_and_main_fall_back_to_the_default_repo() {
+    use agentflow::config::Task;
+
+    // No repos.json: single-repo mode, so both "" and "main" resolve to
+    // TF_REPO_DIR and neither warns ("main" is the canonical default name).
+    let dir = std::env::temp_dir().join(format!("af-cli-repores-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("tasks.json"),
+        r#"{ "tasks": [
+            { "id": "A", "title": "a", "repo": "", "accept": "true" },
+            { "id": "B", "title": "b", "repo": "main", "accept": "true" }
+        ] }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("workers.json"),
+        r#"{ "workers": [ { "name": "w1", "provider": "p", "model": "m", "enabled": true } ] }"#,
+    )
+    .unwrap();
+    let cfg = config::load(&dir.join("tasks.json"), &dir.join("workers.json")).unwrap();
+    let default = std::path::PathBuf::from("/default/repo");
+
+    let mk = |repo: &str| Task {
+        id: "t".into(),
+        title: "t".into(),
+        repo: repo.into(),
+        ..Default::default()
+    };
+    assert_eq!(cfg.repo_dir_for(&mk(""), &default), default);
+    assert_eq!(cfg.repo_dir_for(&mk("main"), &default), default);
+    assert!(
+        cfg.repo_warnings(&default).is_empty(),
+        "empty/main must not warn: {:?}",
+        cfg.repo_warnings(&default)
+    );
+
+    // A registered name still wins over the fallback (the resolution order
+    // is name → default, never the reverse).
+    let mut cfg_named = cfg.clone();
+    cfg_named
+        .repos
+        .insert("main".into(), std::path::PathBuf::from("/repos/main"));
+    assert_eq!(
+        cfg_named.repo_dir_for(&mk("main"), &default),
+        std::path::PathBuf::from("/repos/main")
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// spec: scheduling/deadlock-detection
+// spec: scheduling/deadlock-detection#all-tasks-blocked-by-failure
+#[test]
+fn run_deadlocks_when_remaining_tasks_are_blocked_by_failure() {
+    // A real scratch git repo so task A's attempt can create a worktree; the
+    // worker's agent CLI is a missing binary, so A's attempt always fails.
+    // B depends on A → nothing can progress → the run must exit 2 naming B.
+    let tasks = r#"{ "tasks": [
+        { "id": "A", "title": "doomed", "accept": "true" },
+        { "id": "B", "title": "waits on A", "deps": ["A"], "accept": "true" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    let repo = cli.dir.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [
+        vec!["init", "-b", "main"],
+        vec![
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    ] {
+        let out = Command::new("git")
+            .args(&args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let (code, out) = cli.af(&["run"]);
+    assert_eq!(code, 2, "blocked-by-failure run exits 2: {out}");
+    assert!(out.contains("DEADLOCK"), "deadlock is reported: {out}");
+    assert!(
+        out.contains("Blocked:"),
+        "the blocked tasks are listed: {out}"
+    );
+    assert!(out.contains('B'), "B named as blocked: {out}");
+}
+
+// spec: scheduling/deadlock-detection
+// spec: scheduling/deadlock-detection#absent-dependency-is-a-deadlock
+#[test]
+fn run_deadlocks_cleanly_on_absent_dependency() {
+    // A's dep id exists in no loaded config (e.g. merged in from a sibling
+    // file that is not present): the run must exit 2 instead of looping.
+    let tasks =
+        r#"{ "tasks": [ { "id": "A", "title": "a", "deps": ["GHOST"], "accept": "true" } ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    let (code, out) = cli.af(&["run"]);
+    assert_eq!(code, 2, "absent dependency must deadlock cleanly: {out}");
+    assert!(out.contains("DEADLOCK"), "deadlock is reported: {out}");
+    assert!(out.contains('A'), "A named as blocked: {out}");
 }

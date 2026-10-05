@@ -14,6 +14,8 @@ fn tmpdir() -> PathBuf {
 }
 
 // spec: state/single-writer-state-lock
+// spec: state/single-writer-state-lock#lock-is-released-on-drop
+// spec: state/single-writer-state-lock#stale-lock-is-reclaimed
 #[test]
 fn single_writer_lock_is_exclusive() {
     let dir = tmpdir();
@@ -47,4 +49,31 @@ fn single_writer_lock_is_exclusive() {
         .acquire_lock()
         .expect("stale lock (dead pid) must be reclaimed");
     drop(guard3);
+}
+
+/// The spec scenario: a second writer over a locked state dir is rejected
+/// with an error NAMING THE OWNING PID (so the user can go kill it), and
+/// `af run` surfaces that as exit 2 (pinned by the config-error path in
+/// `run_loop`; here we pin the error text itself).
+// spec: state/single-writer-state-lock#second-writer-is-rejected-naming-the-owner
+#[test]
+fn second_lock_rejection_names_the_owning_pid() {
+    let dir = tmpdir();
+    let a = Store::new(dir.clone());
+    let b = Store::new(dir.clone());
+    let _guard = a.acquire_lock().expect("first acquire must succeed");
+
+    let err = b
+        .acquire_lock()
+        .expect_err("second acquire must fail while the first is live");
+    let msg = err.to_string();
+    assert!(
+        msg.contains(&std::process::id().to_string()),
+        "error names the owning pid ({}): {msg}",
+        std::process::id()
+    );
+    assert!(
+        msg.contains("af owns this state dir"),
+        "error says another af owns the dir: {msg}"
+    );
 }

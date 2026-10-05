@@ -108,8 +108,16 @@ fn worker_json(max_attempts: u32) -> String {
 
 /// Gate exit-0 after agent writes DONE.txt → merged to main, all done.
 // spec: lifecycle/execute-pipeline
+// spec: lifecycle/execute-pipeline#happy-path
+// spec: cli/run-commands
+// spec: cli/run-commands#full-run-completes
 // spec: scheduling/dependency-dag
+// spec: scheduling/dependency-dag#dependency-ordering
+// spec: scheduling/deadlock-detection#no-deadlock-while-progress-possible
+// spec: lifecycle/prompt-rendering#first-attempt-has-no-history-block
+// spec: state/cost-receipts#receipt-appended-per-attempt
 // spec: worktree/worktree-lifecycle
+// spec: worktree/worktree-lifecycle#create-and-remove
 #[test]
 fn happy_path_dependency_and_merge() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -148,6 +156,7 @@ fn happy_path_dependency_and_merge() {
 /// Failed attempts get receipts too — the routing substrate (ADR-12).
 // spec: state/cost-receipts
 // spec: lifecycle/prompt-rendering
+// spec: lifecycle/prompt-rendering#retry-prompt-names-the-earlier-failure
 #[test]
 fn failed_attempts_get_failed_receipts() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -177,6 +186,7 @@ fn failed_attempts_get_failed_receipts() {
 
 /// Agent exits non-zero → task fails after max_attempts, nothing merged.
 // spec: lifecycle/execute-pipeline
+// spec: lifecycle/execute-pipeline#agent-failure
 // spec: scheduling/deadlock-detection
 #[test]
 fn agent_failure_fails_task() {
@@ -199,6 +209,7 @@ fn agent_failure_fails_task() {
 
 /// Agent succeeds but gate fails → task fails, nothing merged.
 // spec: lifecycle/execute-pipeline
+// spec: lifecycle/execute-pipeline#gate-failure
 #[test]
 fn gate_failure_fails_task() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -221,6 +232,7 @@ fn gate_failure_fails_task() {
 
 /// --dry-run changes nothing.
 // spec: cli/run-commands
+// spec: cli/run-commands#dry-run-changes-nothing
 #[test]
 fn dry_run_changes_nothing() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -284,7 +296,10 @@ fn retry_runs_up_to_max_attempts() {
 }
 
 /// Self-heal: a stale `running` entry from a dead process is reset and run.
+/// The seeded state file predates the attempt-phase journal (no `phase`
+/// key), so the legacy resume path must re-run the agent from scratch.
 // spec: state/resume-and-self-heal
+// spec: state/attempt-phase-journal#legacy-state-resumes-by-re-running-the-agent
 #[test]
 fn self_heals_stale_running_state() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -407,7 +422,10 @@ fn unknown_worker_filter_fails_fast() {
 /// api key (+ passthrough) — not other secrets from the orchestrator env.
 /// The same probe also pins the git hygiene pairs every agent child gets.
 // spec: sandbox/agent-environment-allowlist
+// spec: sandbox/agent-environment-allowlist#foreign-secrets-are-not-leaked
+// spec: sandbox/agent-environment-allowlist#passthrough-escape-hatch
 // spec: sandbox/git-hygiene-for-agent-children
+// spec: sandbox/git-hygiene-for-agent-children#git-hygiene-pairs-present
 #[test]
 fn agent_env_is_allowlisted() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -480,6 +498,7 @@ fn agent_env_is_allowlisted() {
 /// Multi-repo (ADR-11): A on repo `main`, B on repo `auxrepo` (deps: A) — each
 /// task's worktree/branch/merge lands in its own repo.
 // spec: worktree/worktrees-target-the-task-s-repository
+// spec: worktree/worktrees-target-the-task-s-repository#cross-repo-campaign-lands-in-the-right-repos
 #[test]
 fn multi_repo_campaign_merges_into_each_repo() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -534,6 +553,7 @@ fn multi_repo_campaign_merges_into_each_repo() {
 
 /// Unknown repo name: warn + fall back to the default repo, run completes.
 // spec: config/per-task-repo-resolution-with-compat-fallback
+// spec: config/per-task-repo-resolution-with-compat-fallback#unknown-repo-warns-and-falls-back
 #[test]
 fn unknown_repo_warns_and_falls_back() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -566,7 +586,9 @@ fn unknown_repo_warns_and_falls_back() {
 /// `FAKE_AGENT_SLEEP_MS` so the concurrent-running window is comfortably long
 /// enough to observe. Each worker then merges a distinct `{model}.txt` artifact.
 // spec: scheduling/scope-contention-avoidance
+// spec: scheduling/scope-contention-avoidance#disjoint-scope-dispatches-in-parallel
 // spec: worktree/merge-serialization
+// spec: worktree/merge-serialization#serialized-merges
 #[test]
 fn parallel_multi_worker_dispatch_runs_concurrently_and_merges() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -721,6 +743,7 @@ fn task_on_broken_repo_fails_cleanly() {
 /// hard timeout enforced (the child is killed, not awaited), and results
 /// classified by exit code — success / non-zero / timeout / missing binary.
 // spec: lifecycle/subprocess-execution-contract
+// spec: lifecycle/subprocess-execution-contract#timeout-kills
 #[test]
 fn subprocess_helper_times_out_and_classifies() {
     use agentflow::subprocess::{self, CmdKind, EnvMode};
@@ -795,6 +818,7 @@ fn subprocess_helper_times_out_and_classifies() {
 /// unset-wrapper case is a no-op, proven by every other test in this file:
 /// agents are invoked directly and their work merges.)
 // spec: sandbox/sandbox-wrapper-hook
+// spec: sandbox/sandbox-wrapper-hook#wrapper-prepended
 #[cfg(unix)]
 #[test]
 fn sandbox_wrapper_cmd_is_prepended_to_agent_argv() {
@@ -844,7 +868,9 @@ fn sandbox_wrapper_cmd_is_prepended_to_agent_argv() {
 /// Startup self-heal spans all repositories (worktree spec): a stale
 /// worktree dir + branch belonging to repo `aux` is removed even though the
 /// default repo is a different one, and the run continues cleanly.
+// spec: state/resume-and-self-heal#orphan-worktrees-cleaned
 // spec: worktree/self-heal-spans-all-repositories
+// spec: worktree/self-heal-spans-all-repositories#stale-worktree-is-cleaned-regardless-of-its-repo
 #[test]
 fn self_heal_removes_stale_worktrees_across_repos() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -921,4 +947,260 @@ fn self_heal_removes_stale_worktrees_across_repos() {
         String::from_utf8_lossy(&out.stdout).trim().is_empty(),
         "aux's stale branch tf/OLD deleted"
     );
+}
+
+/// The mirror of `sandbox_wrapper_cmd_is_prepended_to_agent_argv`: with
+/// `TF_SANDBOX_CMD` UNSET the agent argv is unchanged — the child is
+/// invoked as `<agent-cli> --provider … --model … -p @prompt` with no
+/// wrapper prefix. The "agent" is a recording script that logs `$0` and
+/// `$@` so the no-op is observed from the child's own argv.
+// spec: sandbox/sandbox-wrapper-hook#unset-wrapper-is-a-no-op
+#[cfg(unix)]
+#[test]
+fn unset_sandbox_wrapper_leaves_the_agent_argv_unchanged() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let mut f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"unwrapped","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+    assert!(
+        f.st.sandbox_cmd.is_empty(),
+        "fixture must not set a sandbox wrapper for the no-op arm"
+    );
+
+    // The worker's cli is a recording script: it logs $0 and $@, then exits
+    // 0 WITHOUT creating DONE.txt, so the gate fails the attempt — this
+    // test asserts the argv, not a merge.
+    let recorder = f.dir.join("record-argv.sh");
+    let argv_file = f.dir.join("argv.txt");
+    std::fs::write(
+        &recorder,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\" > {}\nexit 0\n",
+            argv_file.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&recorder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    f.cfg.workers[0].cli = recorder.to_string_lossy().to_string();
+
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 2);
+
+    let argv = std::fs::read_to_string(&argv_file).expect("recorder logged its argv");
+    let mut lines = argv.lines();
+    let zeroth = lines.next().unwrap_or_default();
+    assert_eq!(
+        zeroth,
+        recorder.to_string_lossy(),
+        "with no wrapper, argv[0] is the agent CLI itself: {argv}"
+    );
+    assert!(
+        argv.contains("--provider") && argv.contains("-p"),
+        "agent args follow unchanged: {argv}"
+    );
+}
+
+/// Retry after a GATE failure (scheduling spec): the gate passes only from
+/// the third attempt on (a counter file in the fixture dir counts gate
+/// runs), so with max_attempts=3 the task is re-queued on fresh attempts and
+/// succeeds on attempt 3 — and the receipts record the exact spec sequence
+/// `failed, failed, merged` (state spec).
+// spec: scheduling/retry-with-fresh-branch
+// spec: scheduling/retry-with-fresh-branch#retry-after-gate-failure
+// spec: state/cost-receipts#failed-attempts-are-recorded
+#[test]
+fn retry_after_gate_failure_runs_fresh_attempts_until_it_passes() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let dir = std::env::temp_dir().join(format!("af-e2e-retry-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let count = dir.join("GATE_COUNT");
+    let count = count.to_string_lossy().to_string();
+    // The gate fails the first two times it runs (counter < 3), then passes.
+    let flaky_gate = format!(
+        "n=$(cat {count} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {count}; test $n -ge 3"
+    );
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"flaky gate","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = flaky_gate
+        ),
+        &worker_json(3),
+    );
+
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Done);
+    assert_eq!(
+        st["A"].attempts, 3,
+        "gate failed twice, passed on attempt 3"
+    );
+    assert!(f.repo.join("DONE.txt").exists(), "attempt 3 merged");
+
+    // Receipts: one per attempt, outcomes failed/failed/merged in attempt
+    // order (load order is by timestamp, so group by attempt number).
+    let mut receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    receipts.sort_by_key(|r| r.attempt);
+    let outcomes: Vec<&str> = receipts.iter().map(|r| r.outcome.as_str()).collect();
+    assert_eq!(
+        outcomes,
+        vec!["failed", "failed", "merged"],
+        "spec sequence"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A failed attempt's receipt carries the failure's first line (state
+/// spec): an agent exiting 7 produces `error: Some("agent exited …7…")`.
+// spec: state/cost-receipts#failed-receipt-carries-the-reason
+#[test]
+fn failed_receipt_carries_the_failure_reason() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::set_var("FAKE_AGENT_EXIT", "7");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"boom","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 2);
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    assert_eq!(receipts.len(), 1);
+    let err = receipts[0]
+        .error
+        .as_deref()
+        .unwrap_or_else(|| panic!("failed receipt must carry error: {receipts:?}"));
+    assert!(
+        err.contains("agent exited") && err.contains('7'),
+        "error is the failure's first line: {err}"
+    );
+}
+
+/// Restart after a partial run (state spec): task A is already `done` from
+/// a previous process; the restart must NOT re-run A (no new attempt, no
+/// new receipt) and must continue with the remaining task B.
+// spec: state/resume-and-self-heal#restart-continues
+#[test]
+fn restart_after_partial_run_skips_done_and_continues_remaining() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [
+                {{"id":"A","title":"finished earlier","scope":["DONE.txt"],"accept":"{g}"}},
+                {{"id":"B","title":"still to do","deps":["A"],"scope":["B.txt"],"accept":"{gb}"}}
+            ] }}"#,
+            g = gate_cmd("DONE.txt"),
+            gb = gate_cmd("B.txt")
+        ),
+        &worker_json(1),
+    );
+    // Seed the state file as if a previous run finished A and died.
+    std::fs::create_dir_all(&f.st.state_dir).unwrap();
+    std::fs::write(
+        f.st.state_dir.join("run-state.json"),
+        r#"{ "A": { "state": "done", "attempts": 1, "last_error": null } }"#,
+    )
+    .unwrap();
+    // B's agent writes B.txt (the default touch would write DONE.txt).
+    std::env::set_var("FAKE_AGENT_TOUCH", "B.txt");
+
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Done);
+    assert_eq!(st["A"].attempts, 1, "A must not be re-run on restart");
+    assert_eq!(st["B"].state, TaskState::Done, "remaining task continues");
+    // A was never re-dispatched: exactly one receipt exists, and it is B's.
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    assert_eq!(receipts.len(), 1, "only B ran: {receipts:?}");
+    assert_eq!(receipts[0].task, "B");
+    assert!(f.repo.join("B.txt").exists(), "B merged");
+
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+}
+
+/// A merge conflict fails the task branch cleanly (worktree spec): merging
+/// a branch that conflicts with the base branch returns an error naming the
+/// branch, aborts the merge (working tree left clean), and NEVER force-pushes
+/// — the base branch keeps its own change. The failed-task/retry arm is the
+/// same failure path proven by `gate_failure_fails_task`.
+// spec: worktree/merge-serialization#conflict-fails-task
+#[test]
+fn merge_conflict_fails_the_task_branch_cleanly() {
+    use agentflow::worktree::{self, MergeLocks};
+
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("af-e2e-conflict-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let repo = dir.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    // Commits need an identity; keep it local to this scratch repo.
+    let commit_all = |repo: &Path, msg: &str| {
+        git(repo, &["add", "."]);
+        git(
+            repo,
+            &[
+                "-c",
+                "user.name=af test",
+                "-c",
+                "user.email=af@test",
+                "commit",
+                "-m",
+                msg,
+            ],
+        );
+    };
+
+    std::fs::write(repo.join("shared.txt"), "base\n").unwrap();
+    commit_all(&repo, "init");
+
+    // The task branch diverges: same file, different content.
+    let wt_root = dir.join("wt");
+    let wt = worktree::create(&repo, &wt_root, "T", "tf").expect("worktree");
+    std::fs::write(wt.path.join("shared.txt"), "branch change\n").unwrap();
+    commit_all(&wt.path, "task work");
+
+    // The base branch moves the same lines the other way.
+    std::fs::write(repo.join("shared.txt"), "main change\n").unwrap();
+    commit_all(&repo, "base moves on");
+
+    let locks = MergeLocks::new();
+    let err = worktree::merge(&repo, &wt.branch, &locks, "merge T").unwrap_err();
+    assert!(
+        err.contains("merge of tf/T failed"),
+        "error names the conflicting branch: {err}"
+    );
+    // Never force-pushed: main keeps its own version of the file.
+    assert_eq!(
+        std::fs::read_to_string(repo.join("shared.txt")).unwrap(),
+        "main change\n"
+    );
+    // The conflict was aborted, not staged: the working tree is clean.
+    let out = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "",
+        "merge --abort left no conflicted files staged"
+    );
+
+    worktree::remove(&repo, &wt);
+    let _ = std::fs::remove_dir_all(&dir);
 }

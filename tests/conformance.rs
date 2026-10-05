@@ -154,27 +154,62 @@ pub fn conformance_suite<S: StateStore>(make: impl Fn() -> S) {
 }
 
 // spec: state/status-persistence
+// spec: state/status-persistence#torn-write-never-corrupts
 // spec: state/storage-backend-conformance-suite
+// spec: state/storage-backend-conformance-suite#torn-write-never-corrupts
 #[test]
 fn conformance_torn_write_never_corrupts() {
     let dir = tmpdir();
     conformance_suite(move || Store::new(dir.clone()));
 }
 
+// spec: state/storage-backend-conformance-suite#receipts-are-append-only
 #[test]
 fn conformance_append_only_receipts_never_overwrite() {
     let dir = tmpdir();
     conformance_suite(move || Store::new(dir.clone()));
 }
 
+// spec: state/storage-backend-conformance-suite#receipts-order-by-timestamp
 #[test]
 fn conformance_receipts_order_by_timestamp() {
     let dir = tmpdir();
     conformance_suite(move || Store::new(dir.clone()));
 }
 
+// spec: state/storage-backend-conformance-suite#save-round-trips-across-reopen
+// spec: state/storage-backend-conformance-suite#shipped-backend-conforms
 #[test]
 fn conformance_save_roundtrips_across_reopen() {
     let dir = tmpdir();
     conformance_suite(move || Store::new(dir.clone()));
+}
+
+/// Legacy receipts (written before `outcome`/`error` existed) stay loadable
+/// (state spec): a receipts file with neither field deserializes as a
+/// successful pre-routing receipt — outcome `"merged"`, error `None` — so
+/// `af cost` output is unchanged for old state dirs.
+// spec: state/cost-receipts#legacy-receipts-stay-loadable
+// spec: state/cost-receipts#legacy-receipts-parse-with-no-error
+#[test]
+fn legacy_receipts_load_as_merged_with_no_error() {
+    let dir = tmpdir();
+    let receipts = dir.join("receipts");
+    std::fs::create_dir_all(&receipts).unwrap();
+    // Pre-routing shape: task/attempt/worker/model/wall_clock_s/tokens/ts
+    // only — no `outcome`, no `error`.
+    std::fs::write(
+        receipts.join("A-1-0.json"),
+        r#"{"task":"A","attempt":1,"worker":"w1","model":"m","wall_clock_s":1.0,"tokens":null,"ts":0}"#,
+    )
+    .unwrap();
+    let loaded = Store::new(dir.clone()).load_receipts();
+    assert_eq!(loaded.len(), 1, "legacy receipt loads: {loaded:?}");
+    assert_eq!(loaded[0].outcome, "merged", "defaults to merged");
+    assert_eq!(
+        loaded[0].error, None,
+        "no failure reason on legacy receipts"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

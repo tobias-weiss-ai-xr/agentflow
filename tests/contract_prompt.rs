@@ -85,8 +85,10 @@ fn assert_prompt_contract(path: &str, out: &str, scope_paths: &[&str]) {
     );
 }
 
-// spec: lifecycle/prompt-rendering
 // spec: lifecycle/prompt-placeholder-guarantee
+// spec: lifecycle/prompt-placeholder-guarantee#every-render-path-carries-scope-and-gate-command
+// spec: lifecycle/prompt-placeholder-guarantee#no-placeholder-leaks
+// spec: lifecycle/prompt-placeholder-guarantee#empty-scope-renders-the-wildcard
 #[test]
 fn every_render_path_contains_scope_and_accept_cmd() {
     let worker = contract_worker();
@@ -171,6 +173,46 @@ You run as {{MODEL}} on {{PROVIDER}}.
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The prompt-rendering scenario in its own words (lifecycle spec): a task
+/// with a title and acceptance prose dispatches, and the rendered prompt
+/// file contains BOTH — through the built-in default template and a custom
+/// template that carries `{{ACCEPTANCE}}`.
+// spec: lifecycle/prompt-rendering
+// spec: lifecycle/prompt-rendering#template-substitution
+#[test]
+fn rendered_prompt_carries_title_and_acceptance_prose() {
+    const PROSE: &str = "the gate command runs verbatim";
+    let worker = contract_worker();
+    let task = contract_task(); // title + acceptance_prose = PROSE
+    assert_eq!(task.acceptance_prose.as_deref(), Some(PROSE));
+
+    // (a) Missing template file ⇒ built-in DEFAULT_PROMPT.
+    let missing = settings_with_prompt_file(PathBuf::from("no-such-contract-template.md"));
+    let out = render_prompt(&missing, &task, &worker, None);
+    assert!(out.contains(TASK_TITLE), "title substituted: {out}");
+    assert!(out.contains(PROSE), "acceptance prose substituted: {out}");
+
+    // (b) Custom template with the ACCEPTANCE placeholder.
+    let dir = tmpdir("substitution");
+    let full = write_template(
+        &dir,
+        "full.md",
+        "TASK {{TASK_ID}} — {{TASK_TITLE}}\n{{ACCEPTANCE}}\n{{ACCEPT_CMD}}\n{{SCOPE}}\n",
+    );
+    let out = render_prompt(
+        &settings_with_prompt_file(full.clone()),
+        &task,
+        &worker,
+        None,
+    );
+    assert!(out.contains(TASK_TITLE), "title substituted: {out}");
+    assert!(out.contains(PROSE), "acceptance prose substituted: {out}");
+    assert!(!out.contains("{{"), "no placeholder leaks: {out}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// spec: lifecycle/prompt-placeholder-guarantee#hostile-template-is-repaired
 #[test]
 fn hostile_template_is_reported_and_repaired() {
     let worker = contract_worker();

@@ -21,6 +21,8 @@ fn write(dir: &std::path::Path, name: &str, content: &str) -> PathBuf {
 }
 
 // spec: lifecycle/gate-replay-contract
+// spec: lifecycle/gate-replay-contract#gate-replay-defaults-to-true
+// spec: lifecycle/gate-replay-contract#explicit-opt-out-parses
 #[test]
 fn gate_replay_defaults_to_true_and_parses() {
     // 1) Explicit `false` parses as false.
@@ -44,4 +46,34 @@ fn gate_replay_defaults_to_true_and_parses() {
     let workers2 = write(&d2, "workers.json", WORKERS);
     let cfg2 = agentflow::config::load(&tasks2, &workers2).unwrap();
     assert!(cfg2.by_id["A"].gate_replay);
+}
+
+/// The replay decision reaches the gate PROCESS (lifecycle spec): the
+/// acceptance gate observes `TF_GATE_REPLAY` in its own environment — the
+/// literal `"1"` when the task's replay flag is on, `"0"` when it opted
+/// out — so a user-authored gate can detect a resumed/replayed run.
+// spec: lifecycle/gate-replay-contract#replay-decision-reaches-the-gate
+#[cfg(unix)]
+#[test]
+fn replay_decision_reaches_the_gate_environment() {
+    use agentflow::gate::run_accept;
+    use std::time::Duration;
+
+    let d = tmpdir("env-probe");
+    // A gate that prints its own TF_GATE_REPLAY value.
+    let probe = "printf '%s' \"$TF_GATE_REPLAY\"";
+    let on = run_accept(probe, &d, &[], Duration::from_secs(5), true);
+    assert!(
+        on.passed() && on.stdout == "1",
+        "replay on ⇒ gate sees TF_GATE_REPLAY=1 (got {:?})",
+        on.stdout
+    );
+    let off = run_accept(probe, &d, &[], Duration::from_secs(5), false);
+    assert!(
+        off.passed() && off.stdout == "0",
+        "replay off ⇒ gate sees TF_GATE_REPLAY=0 (got {:?})",
+        off.stdout
+    );
+
+    let _ = std::fs::remove_dir_all(&d);
 }

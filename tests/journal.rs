@@ -155,6 +155,7 @@ fn seed_running_state(f: &Fixture, phase: &str) {
 /// A successful attempt leaves a journal: the persisted TaskStatus shows the
 /// attempt reached at least AgentDone (and the task is Done).
 // spec: state/attempt-phase-journal
+// spec: state/attempt-phase-journal#phase-boundaries-persist-at-every-step
 #[test]
 fn journal_records_phase_after_successful_attempt() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -184,6 +185,7 @@ fn journal_records_phase_after_successful_attempt() {
 /// is 1, so an accidental re-dispatch ends the run in exit 2 / Failed), yet
 /// the resumed run exits 0 with the branch's work merged to main.
 // spec: state/resume-and-self-heal
+// spec: state/attempt-phase-journal#crash-after-agent-done-resumes-at-the-gate
 #[test]
 fn resume_from_agent_done_skips_agent() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -220,6 +222,7 @@ fn resume_from_agent_done_skips_agent() {
 
 /// GatePassed resume: only the merge re-runs — exactly one new commit (the
 /// merge), even though the agent would fail the attempt if invoked.
+// spec: state/attempt-phase-journal#crash-after-gate-passed-merges-only
 #[test]
 fn resume_from_gate_passed_merges_only() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -246,6 +249,7 @@ fn resume_from_gate_passed_merges_only() {
 /// happened after the merge (and its cleanup deleted the branch) but before
 /// Done was persisted — record merged, no second merge commit.
 // spec: state/status-persistence
+// spec: state/status-persistence#crash-between-gate-and-merge-recording
 #[test]
 fn merge_only_resume_is_idempotent_when_already_merged() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -272,4 +276,54 @@ fn merge_only_resume_is_idempotent_when_already_merged() {
         before,
         "already merged → record merged without a second merge"
     );
+}
+
+/// The journal's serialization half of `phase boundaries persist at every
+/// step` (state spec): the persisted status file spells the phase in
+/// `snake_case` (`"agent_done"`, `"gate_passed"`) — the exact format the
+/// resume path parses back — and the value survives a save/load round-trip.
+// spec: state/attempt-phase-journal#phase-boundaries-persist-at-every-step
+#[test]
+fn phase_serializes_snake_case_in_persisted_state() {
+    use agentflow::config::TaskState as TS;
+    use std::collections::HashMap;
+
+    let dir = std::env::temp_dir().join(format!("af-journal-ser-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let store = Store::new(dir.clone());
+    let mut m: HashMap<String, agentflow::state::TaskStatus> = HashMap::new();
+    m.insert(
+        "A".to_string(),
+        agentflow::state::TaskStatus {
+            state: TS::Running,
+            attempts: 1,
+            last_error: None,
+            phase: Some(AttemptPhase::AgentDone),
+        },
+    );
+    store.save(&m).expect("save journaled state");
+
+    let raw = std::fs::read_to_string(store.status_file()).unwrap();
+    assert!(
+        raw.contains("\"agent_done\""),
+        "phase must serialize snake_case: {raw}"
+    );
+    assert_eq!(store.load()["A"].phase, Some(AttemptPhase::AgentDone));
+
+    // Same for the later boundary.
+    m.insert(
+        "A".to_string(),
+        agentflow::state::TaskStatus {
+            phase: Some(AttemptPhase::GatePassed),
+            ..m["A"].clone()
+        },
+    );
+    store.save(&m).unwrap();
+    let raw = std::fs::read_to_string(store.status_file()).unwrap();
+    assert!(
+        raw.contains("\"gate_passed\""),
+        "gate boundary serializes snake_case: {raw}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
