@@ -310,9 +310,12 @@ fn self_heals_stale_running_state() {
             r#"{{ "tasks": [ {{"id":"A","title":"x","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
             g = gate_cmd("DONE.txt")
         ),
-        &worker_json(1),
+        &worker_json(2),
     );
-    // Pre-seed the state file as if a previous process died mid-run.
+    // Pre-seed the state file as if a previous process died mid-run. With
+    // the interrupted attempt now consuming budget on heal, the seeded
+    // entry has spent 1 of 2 attempts — one spare slot lets the re-run
+    // complete instead of healing straight to Failed.
     std::fs::create_dir_all(&f.st.state_dir).unwrap();
     std::fs::write(
         f.st.state_dir.join("run-state.json"),
