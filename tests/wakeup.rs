@@ -110,6 +110,7 @@ fn a_finished_task_wakes_the_dispatcher_immediately() {
         workers_file: config_dir.join("workers.json"),
         prompt_file: dir.join("no-template.md"),
         agent_timeout_s: 60,
+        agent_stall_s: 0,
         sandbox_cmd: vec![],
     };
 

@@ -1211,6 +1211,7 @@ mod tests {
             workers_file: PathBuf::new(),
             prompt_file: PathBuf::new(),
             agent_timeout_s: 3600,
+            agent_stall_s: 0,
             sandbox_cmd: vec![],
         }
     }
