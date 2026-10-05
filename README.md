@@ -237,6 +237,25 @@ cargo test        # 71 tests: unit (scheduler DAG, contention, deadlock, state,
 See `docs/arc42/` for the architecture documentation (12 chapters), and
 `openspec/changes/` for the spec-driven change history (spec → contract → test).
 
+## Coverage ratchet
+
+CI enforces a **line-coverage floor** so coverage cannot silently rot. The
+floor lives in a single place — `.coverage-min` (currently `94%`, just below
+the measured 94.19% baseline) — and is checked by `scripts/coverage-gate.sh`, which runs
+`cargo llvm-cov --workspace --fail-under-lines "$MIN"`. A drop below the floor
+fails the build.
+
+Run it locally (requires `cargo-llvm-cov` + `llvm-tools-preview`):
+
+```sh
+./scripts/coverage-gate.sh   # enforces the floor
+```
+
+The threshold is a **ratchet: it may only be RAISED**, never lowered to make a
+red build green. When new untested code legitimately drops coverage, add tests
+for it; only as an explicit, reviewed last resort is the floor itself changed.
+See [`docs/coverage.md`](docs/coverage.md) for the full policy.
+
 ## License
 
 MIT
