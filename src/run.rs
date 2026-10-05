@@ -845,9 +845,22 @@ fn board_of(cfg: &Config, status: &HashMap<String, TaskStatus>) -> String {
 }
 
 /// `af status` / `af api status` (human board).
+///
+/// The status file is loaded loudly by [`Store::load`] already; receipts are
+/// not needed for the board but ARE loaded through the checked loader so a
+/// torn `*.json` receipt surfaces here too (one `warning:` line per file)
+/// instead of staying invisible. History that cannot be parsed never blocks
+/// the command.
 pub fn status_board(cfg: &Config, st: &Settings) -> String {
-    let status = Store::new(st.state_dir.clone()).load();
-    board_of(cfg, &status)
+    let store = Store::new(st.state_dir.clone());
+    let status = store.load();
+    let (_, problems) = store.load_receipts_checked();
+    let mut out = String::new();
+    for p in &problems {
+        out.push_str(&format!("warning: {p}\n"));
+    }
+    out.push_str(&board_of(cfg, &status));
+    out
 }
 
 /// `af api status --json`.
@@ -987,22 +1000,32 @@ fn wall_clock_budget_exhausted(st: &Settings, measured: f64) -> bool {
     st.max_wall_clock_s > 0 && measured >= st.max_wall_clock_s as f64
 }
 
-/// Stable grouping key for a failed attempt's reason: the first line of
-/// `error`, trimmed, truncated to 48 characters; `unknown` when the receipt
-/// carries no `error` (legacy or failed-without-detail).
-fn waste_reason(r: &Receipt) -> String {
+/// Stable grouping key for a failed attempt's CAUSE: the text before the
+/// first `:` in `error`, trimmed, with runs of whitespace collapsed to one
+/// space. The full `error` embeds a LIST of files after the colon, so
+/// truncating the whole string split one cause across several rows and cut
+/// words in half; the prefix groups by cause. An `error` with no colon uses
+/// the whole string; `unknown` when the receipt carries no `error` (legacy
+/// or failed-without-detail) or nothing precedes the colon.
+fn waste_cause(r: &Receipt) -> String {
     match &r.error {
         None => "unknown".to_string(),
-        Some(e) => e
-            .lines()
-            .next()
-            .unwrap_or("")
-            .trim()
-            .chars()
-            .take(48)
-            .collect(),
+        Some(e) => {
+            let head = e.split(':').next().unwrap_or("");
+            let cause = head.split_whitespace().collect::<Vec<_>>().join(" ");
+            if cause.is_empty() {
+                "unknown".to_string()
+            } else {
+                cause
+            }
+        }
     }
 }
+
+/// Per-reason sub-count inside one cause: (full reason, seconds, attempts).
+type ReasonCount = (String, f64, usize);
+/// One aggregated cause row: (cause, seconds, attempts, per-reason sub-counts).
+type CauseAggregate = (String, f64, usize, Vec<ReasonCount>);
 
 /// `af cost`: aggregate receipts (wall-clock truth, ADR-9). The table rows
 /// honor `filter.task`; the TOTAL line and the per-worker trust block are
@@ -1010,12 +1033,20 @@ fn waste_reason(r: &Receipt) -> String {
 /// that is every loaded receipt, byte-identical to the legacy report.
 pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
     let store = Store::new(st.state_dir.clone());
-    let receipts = store.load_receipts();
+    // Checked loader: a torn receipt is reported (one `warning:` line per
+    // unreadable file, naming it and the parse problem) but never blocks the
+    // report — the readable history is still totaled. With no torn files the
+    // output is byte-identical to the legacy report.
+    let (receipts, problems) = store.load_receipts_checked();
     let selected = select_receipts(&receipts, filter);
-    let mut lines = format!(
-        "{:<12} {:<9} {:<10} {}",
-        "TASK", "ATTEMPTS", "WALL_S", "MODEL"
-    );
+    let mut lines = String::new();
+    for p in &problems {
+        lines.push_str(&format!("warning: {p}\n"));
+    }
+    lines.push_str(&format!(
+        "{:<12} {:<9} {:<10} {:<9} {}",
+        "TASK", "ATTEMPTS", "WALL_S", "TOKENS", "MODEL"
+    ));
     let mut total: f64 = 0.0;
     for t in &cfg.tasks {
         if let Some(f) = &filter.task {
@@ -1031,11 +1062,24 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
         let wall: f64 = rs.iter().map(|r| r.wall_clock_s).sum();
         total += wall;
         if !rs.is_empty() {
+            // Sum the tokens actually recorded; legacy receipts (every one
+            // of which carries `None`) show `-` so the legacy report reads
+            // exactly as it did before the column existed.
+            let mut token_sum: Option<u64> = None;
+            for r in &rs {
+                if let Some(t) = r.tokens {
+                    token_sum = Some(token_sum.unwrap_or(0) + t);
+                }
+            }
+            let tokens = token_sum
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| "-".into());
             lines.push_str(&format!(
-                "\n{:<12} {:<9} {:<10.1} {}",
+                "\n{:<12} {:<9} {:<10.1} {:<9} {}",
                 t.id,
                 rs.len(),
                 wall,
+                tokens,
                 rs[0].model
             ));
         }
@@ -1103,25 +1147,58 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
         pct
     ));
     if !failed.is_empty() {
-        let mut by_reason: HashMap<String, (f64, usize)> = HashMap::new();
+        // Primary grouping is by CAUSE (text before the first `:`), never by
+        // the full reason: the reason embeds a file LIST, so two failures of
+        // the same cause used to land in separate rows. Each cause also keeps
+        // its distinct full reasons as an indented sub-count — that is where
+        // the file lists stay visible without fragmenting the total.
+        type SubCounts = HashMap<String, (f64, usize)>;
+        let mut by_cause: HashMap<String, (f64, usize, SubCounts)> = HashMap::new();
         for r in &failed {
-            let e = by_reason.entry(waste_reason(r)).or_insert((0.0, 0));
-            e.0 += r.wall_clock_s;
-            e.1 += 1;
+            let cause = waste_cause(r);
+            let full = r.error.clone().unwrap_or_else(|| "unknown".to_string());
+            let entry = by_cause
+                .entry(cause)
+                .or_insert_with(|| (0.0, 0, HashMap::new()));
+            entry.0 += r.wall_clock_s;
+            entry.1 += 1;
+            let sub = entry.2.entry(full).or_insert((0.0, 0));
+            sub.0 += r.wall_clock_s;
+            sub.1 += 1;
         }
-        let mut rows: Vec<(String, f64, usize)> = by_reason
+        let mut rows: Vec<CauseAggregate> = by_cause
             .into_iter()
-            .map(|(k, (secs, n))| (k, secs, n))
+            .map(|(cause, (secs, n, subs))| {
+                let mut sub_rows: Vec<ReasonCount> = subs
+                    .into_iter()
+                    .map(|(reason, (s, c))| (reason, s, c))
+                    .collect();
+                // Descending seconds; ties broken by the full reason ascending
+                // so the sub-counts are deterministic too.
+                sub_rows.sort_by(|a, b| {
+                    b.1.partial_cmp(&a.1)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.0.cmp(&b.0))
+                });
+                (cause, secs, n, sub_rows)
+            })
             .collect();
-        // Descending seconds; ties broken by the reason string ascending.
+        // Descending seconds; ties broken by the cause string ascending.
         rows.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.0.cmp(&b.0))
         });
         lines.push_str("\nWASTED BY REASON");
-        for (reason, secs, n) in rows {
-            lines.push_str(&format!("\n  {:<28} {:.1}s  ({})", reason, secs, n));
+        for (cause, secs, n, subs) in rows {
+            lines.push_str(&format!("\n  {:<28} {:.1}s  ({})", cause, secs, n));
+            for (reason, rsecs, rn) in subs {
+                // When the error carries no colon the cause IS the full
+                // reason; a sub-row would only repeat the line above.
+                if reason != cause {
+                    lines.push_str(&format!("\n    - {} {:.1}s  ({})", reason, rsecs, rn));
+                }
+            }
         }
     }
     lines
@@ -1634,7 +1711,7 @@ mod tests {
     }
 
     #[test]
-    fn waste_reason_is_first_line_trimmed_truncated_or_unknown() {
+    fn waste_cause_is_text_before_the_first_colon_or_unknown() {
         let r = |error: Option<&str>| Receipt {
             task: "A".into(),
             attempt: 1,
@@ -1647,15 +1724,24 @@ mod tests {
             error: error.map(str::to_string),
         };
         // No error on the receipt → the literal key.
-        assert_eq!(waste_reason(&r(None)), "unknown");
-        // First line only, trimmed.
+        assert_eq!(waste_cause(&r(None)), "unknown");
+        // Text before the first `:`, trimmed, whitespace collapsed: the file
+        // list AFTER the colon is not part of the cause.
         assert_eq!(
-            waste_reason(&r(Some("  gate failed (exit 1): boom\nextra detail"))),
-            "gate failed (exit 1): boom"
+            waste_cause(&r(Some("  gate failed (exit 1): boom\nextra detail"))),
+            "gate failed (exit 1)"
         );
-        // Truncated to a stable 48 characters.
+        assert_eq!(
+            waste_cause(&r(Some(
+                "attempt   edited files out of scope:   src/run.rs, tests/other.rs"
+            ))),
+            "attempt edited files out of scope"
+        );
+        // No colon → the whole (trimmed) string, never truncated mid-word.
         let long = "x".repeat(60);
-        assert_eq!(waste_reason(&r(Some(&long))), "x".repeat(48));
+        assert_eq!(waste_cause(&r(Some(&long))), "x".repeat(60));
+        // Nothing before the colon → the literal key, not an empty row.
+        assert_eq!(waste_cause(&r(Some(": boom"))), "unknown");
     }
 
     #[test]

@@ -100,14 +100,26 @@ other and with `--task ID` (which narrows the table rows); the TOTAL line
 and the per-worker trust block are always computed over the selected
 receipts only.
 
+The table also carries a `TOKENS` column: it sums the `tokens` recorded on
+the selected receipts and shows `-` when they carry none, so a report over
+legacy receipts reads exactly as it did before the column existed.
+
 The report also ends with a waste section: `WASTED: <seconds>s on <failed>
 of <total> attempt(s) (<pct>%)`, followed by a `WASTED BY REASON` breakdown
-that groups failed attempts by the first line of their `error` field
-(trimmed, truncated to 48 characters, and `unknown` when the receipt has no
-error). Like the TOTAL line and the trust block, the waste figures are
-computed over the same window-selected receipts, so `--last` / `--since`
-narrow the waste alongside the rest of the report; a window whose receipts
-contain no failures reports `0.0s` and omits the reason breakdown.
+that groups failed attempts by the CAUSE — the text before the first `:` in
+the `error` field, trimmed (and `unknown` when the receipt has no error).
+Grouping by cause keeps two failures with the same cause but different file
+lists in one row, and never truncates the key mid-word; the distinct full
+reasons remain visible as indented sub-counts. Like the TOTAL line and the
+trust block, the waste figures are computed over the same window-selected
+receipts, so `--last` / `--since` narrow the waste alongside the rest of the
+report; a window whose receipts contain no failures reports `0.0s` and omits
+the reason breakdown.
+
+A receipt file that cannot be parsed (a torn write from an interrupted
+campaign) is reported by name with one `warning:` line — `af cost` and
+`af status` load receipts through the checked loader — and is never allowed
+to block the command: the readable history is still accounted for.
 
 ## Task schema (`config/tasks.json`)
 
