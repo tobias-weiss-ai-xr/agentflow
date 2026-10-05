@@ -110,6 +110,112 @@ The agent CLI executes LLM-directed tool calls, so `af` treats it as untrusted
 Any OpenAI-compatible CLI supporting that shape works. `src/bin/example_agent.rs`
 is a stub agent (writes a file + commits) used by the test suite and CI.
 
+## Dogfooding / parallel workers
+
+agentflow is built to be run *by* agents, and the fastest way to exercise it
+is to dispatch several tasks at once — often across more than one repository —
+to two or more workers. Here is a full two-repo / two-worker campaign.
+
+### `config/repos.json`
+
+```json
+{
+  "repos": {
+    "main": "/abs/path/to/agentflow",
+    "docs":  "/abs/path/to/docs-site"
+  }
+}
+```
+
+### `config/tasks.json`
+
+```json
+{
+  "_meta": { "project": "dogfood" },
+  "tasks": [
+    {
+      "id": "fix-readme",
+      "title": "Document the --repos flag in the README",
+      "repo": "main",
+      "deps": [],
+      "scope": ["README.md"],
+      "accept": "grep -q -- '--repos' README.md",
+      "acceptance_prose": "README documents the --repos flag.",
+      "manual": false
+    },
+    {
+      "id": "fix-docs-index",
+      "title": "Refresh the docs site index page",
+      "repo": "docs",
+      "deps": [],
+      "scope": ["index.md"],
+      "accept": "git diff --stat --exit-code",
+      "acceptance_prose": "Docs index is updated.",
+      "manual": false
+    }
+  ]
+}
+```
+
+### `config/workers.json`
+
+```json
+{
+  "defaults": {
+    "accept_timeout_s": 600,
+    "max_attempts": 3,
+    "retry_delay_s": 30,
+    "agent_timeout_s": 3600
+  },
+  "workers": [
+    { "name": "opus",  "provider": "anthropic", "model": "claude-opus-4", "api_base": "https://api.anthropic.com/v1", "api_key_env": "ANTHROPIC_API_KEY", "enabled": true, "cli": "pi" },
+    { "name": "gpt4o", "provider": "openai",    "model": "gpt-4o",        "api_base": "https://api.openai.com/v1",      "api_key_env": "OPENAI_API_KEY",    "enabled": true, "cli": "pi" }
+  ]
+}
+```
+
+### Invocation
+
+```sh
+export TF_REPO_DIR=/abs/path/to/agentflow
+export TF_STATE_DIR=state
+
+./target/release/af run --dry-run \
+    --tasks config/tasks.json --workers config/workers.json --repos config/repos.json
+./target/release/af run \
+    --tasks config/tasks.json --workers config/workers.json --repos config/repos.json
+./target/release/af status
+./target/release/af cost
+```
+
+`fix-readme` targets repo `main` and `fix-docs-index` targets repo `docs`; they
+have no `deps` between them, so the scheduler treats both as ready at the same
+time. With two idle workers the two tasks dispatch **in parallel** — one in an
+isolated git worktree on `main`, the other on `docs` — each later merging into
+its own repo. Swap in `--task`/`--worker` to pin a single task or worker.
+
+### How trust routing picks workers
+
+Every attempt leaves a **receipt** (worker, model, wall-clock time, outcome).
+On dispatch, the router replays receipts into per-worker `(wins, attempts)`
+stats and, among the currently free workers, picks by **UCB1**:
+
+```
+score(worker) =  mean(worker)  +  sqrt( 2 * ln(N + 1) / (n + 1) )
+                └─ exploitation ┘   └─ exploration bonus ┘
+```
+
+- `mean` = `wins ÷ attempts` — the worker's measured trust rate.
+- `N` = total attempts across all workers; `n` = this worker's attempts.
+
+With no receipts yet, every worker scores `0` (a tie), broken in **config
+order** — the first configured worker (`opus`) takes the first ripe task and
+`gpt4o` takes the second, so both run concurrently. As receipts accumulate, a
+worker that keeps failing lowers its `mean`, while the exploration term gives
+an under-tried (or untried) worker the chance to be routed past it. `af cost`
+shows each worker's live trust rate so you can watch routing adapt between
+campaigns.
+
 ## Testing
 
 ```sh
