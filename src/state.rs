@@ -12,7 +12,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TaskStatus {
     pub state: TaskState,
@@ -51,6 +51,21 @@ pub struct Receipt {
     /// attempts and for legacy receipts.
     #[serde(default)]
     pub error: Option<String>,
+}
+
+/// The persistence interface every agentflow backend must provide.
+///
+/// A `StateStore` owns one directory and is responsible for two things:
+/// atomic status persistence (a torn write must never corrupt the readable
+/// state) and append-only receipts (no two receipts may overwrite one
+/// another). The generic conformance suite in `tests/conformance.rs`
+/// encodes those guarantees so every backend is held to the same contract.
+pub trait StateStore {
+    fn status_file(&self) -> PathBuf;
+    fn load(&self) -> HashMap<String, TaskStatus>;
+    fn save(&self, m: &HashMap<String, TaskStatus>) -> io::Result<()>;
+    fn append_receipt(&self, r: &Receipt) -> io::Result<()>;
+    fn load_receipts(&self) -> Vec<Receipt>;
 }
 
 #[derive(Debug, Clone)]
@@ -169,6 +184,28 @@ impl Store {
             }
             Err(e) => Err(e),
         }
+    }
+}
+
+impl StateStore for Store {
+    fn status_file(&self) -> PathBuf {
+        Store::status_file(self)
+    }
+
+    fn load(&self) -> HashMap<String, TaskStatus> {
+        Store::load(self)
+    }
+
+    fn save(&self, m: &HashMap<String, TaskStatus>) -> io::Result<()> {
+        Store::save(self, m)
+    }
+
+    fn append_receipt(&self, r: &Receipt) -> io::Result<()> {
+        Store::append_receipt(self, r)
+    }
+
+    fn load_receipts(&self) -> Vec<Receipt> {
+        Store::load_receipts(self)
     }
 }
 

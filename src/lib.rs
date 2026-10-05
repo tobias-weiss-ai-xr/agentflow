@@ -17,3 +17,4 @@ pub mod subprocess;
 pub mod worktree;
 
 pub use config::{Config, Settings, Task, TaskState, Worker, WorkerDefaults};
+pub use state::{Receipt, StateStore, Store, TaskStatus};
