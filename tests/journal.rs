@@ -182,6 +182,7 @@ fn journal_records_phase_after_successful_attempt() {
 /// FAKE_AGENT_EXIT=7 makes ANY agent invocation fail the attempt (max_attempts
 /// is 1, so an accidental re-dispatch ends the run in exit 2 / Failed), yet
 /// the resumed run exits 0 with the branch's work merged to main.
+// spec: state/resume-and-self-heal
 #[test]
 fn resume_from_agent_done_skips_agent() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -243,6 +244,7 @@ fn resume_from_gate_passed_merges_only() {
 /// MergeOnly resume is idempotent when the merge already landed: the crash
 /// happened after the merge (and its cleanup deleted the branch) but before
 /// Done was persisted — record merged, no second merge commit.
+// spec: state/status-persistence
 #[test]
 fn merge_only_resume_is_idempotent_when_already_merged() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());

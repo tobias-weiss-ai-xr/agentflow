@@ -153,6 +153,7 @@ pub fn conformance_suite<S: StateStore>(make: impl Fn() -> S) {
     check_save_roundtrips_across_reopen(&make);
 }
 
+// spec: state/status-persistence
 #[test]
 fn conformance_torn_write_never_corrupts() {
     let dir = tmpdir();
