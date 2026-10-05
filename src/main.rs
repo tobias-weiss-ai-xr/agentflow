@@ -15,6 +15,7 @@ USAGE:
   af attach    ID
   af cost      [--task ID]
   af clean     [--dry-run]
+  af validate  [--worker NAME] [--tasks FILE] [--workers FILE]
   af --help | --version
 
 ENV: TF_REPO_DIR, TF_STATE_DIR, TF_MAX_PARALLEL, TF_BRANCH_PREFIX, TF_POLL,
@@ -205,6 +206,33 @@ fn main() -> ExitCode {
             0
         }
         "clean" => run::clean(&cfg, &st, args.dry_run),
+        "validate" => {
+            // Pre-flight only: load_cfg already loaded + validated the config
+            // (hard errors exit 2 before dispatch) and printed its warnings.
+            // Nothing is dispatched here — no scheduler, no agents, no state.
+            if let Some(name) = &args.worker {
+                if !cfg.workers.iter().any(|w| &w.name == name && w.enabled) {
+                    eprintln!(
+                        "error: unknown or disabled worker '{name}' (known workers: {})",
+                        cfg.workers
+                            .iter()
+                            .map(|w| w.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    return ExitCode::from(2);
+                }
+            }
+            let enabled = cfg.workers.iter().filter(|w| w.enabled).count();
+            println!(
+                "config OK: {} task(s), {} worker(s), {} enabled, {} warning(s)",
+                cfg.tasks.len(),
+                cfg.workers.len(),
+                enabled,
+                cfg.warnings.len()
+            );
+            0
+        }
         other => {
             eprintln!("error: unknown command '{other}'\n\n{USAGE}");
             return ExitCode::from(2);

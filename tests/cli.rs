@@ -18,6 +18,10 @@ impl Cli {
     }
 
     fn new_with_tasks(tasks: &str) -> Cli {
+        Cli::new_with(tasks, WORKERS)
+    }
+
+    fn new_with(tasks: &str, workers: &str) -> Cli {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("af-cli-{}-{n}", std::process::id()));
@@ -25,7 +29,7 @@ impl Cli {
         let config_dir = dir.join("config");
         std::fs::create_dir_all(&config_dir).unwrap();
         std::fs::write(config_dir.join("tasks.json"), tasks).unwrap();
-        std::fs::write(config_dir.join("workers.json"), WORKERS).unwrap();
+        std::fs::write(config_dir.join("workers.json"), workers).unwrap();
         Cli { dir }
     }
 
@@ -282,6 +286,91 @@ fn dry_run_lists_every_task_with_depth_and_readiness() {
     assert!(pos_a < pos_b, "A (depth 0) before B (depth 1): {out}");
     assert!(pos_c < pos_b, "C (depth 0) before B (depth 1): {out}");
     assert!(out.contains("2 ready now"), "summary counts ready: {out}");
+}
+
+#[test]
+fn help_lists_validate_subcommand() {
+    let cli = Cli::new();
+    let (code, out) = cli.af(&["--help"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("validate"), "USAGE mentions validate: {out}");
+}
+
+#[test]
+fn validate_reports_ok_and_exits_zero() {
+    let cli = Cli::new();
+    let (code, out) = cli.af(&["validate"]);
+    assert_eq!(code, 0, "valid config exits 0: {out}");
+    assert!(out.contains("config OK"), "summary line: {out}");
+    assert!(out.contains("1 task"), "task count: {out}");
+    assert!(out.contains("1 enabled"), "enabled count: {out}");
+    // Pre-flight must not touch state or dispatch anything.
+    assert!(
+        !cli.dir.join("state").exists(),
+        "validate must not create state dirs"
+    );
+}
+
+#[test]
+fn validate_cycle_exits_nonzero_and_names_the_cycle() {
+    let tasks = r#"{ "tasks": [
+        { "id": "A", "title": "a", "deps": ["B"], "accept": "true" },
+        { "id": "B", "title": "b", "deps": ["A"], "accept": "true" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    let (code, out) = cli.af(&["validate"]);
+    assert_ne!(code, 0, "cyclic config must exit nonzero: {out}");
+    assert!(out.contains("config error"), "surfaced as config error: {out}");
+    assert!(out.contains("dependency cycle"), "error names the cycle: {out}");
+    assert!(
+        out.contains("A") && out.contains("B"),
+        "cycle members reported: {out}"
+    );
+}
+
+#[test]
+fn validate_duplicate_id_exits_nonzero() {
+    let tasks = r#"{ "tasks": [
+        { "id": "A", "title": "a", "accept": "true" },
+        { "id": "A", "title": "dup", "accept": "true" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    let (code, out) = cli.af(&["validate"]);
+    assert_ne!(code, 0, "duplicate ids must exit nonzero: {out}");
+    assert!(out.contains("duplicate task id"), "error text: {out}");
+}
+
+#[test]
+fn validate_no_enabled_workers_exits_nonzero() {
+    let workers =
+        r#"{ "workers": [ { "name": "w1", "provider": "p", "model": "m", "enabled": false } ] }"#;
+    let cli = Cli::new_with(TASKS, workers);
+    let (code, out) = cli.af(&["validate"]);
+    assert_ne!(code, 0, "no enabled workers must exit nonzero: {out}");
+    assert!(out.contains("no enabled workers"), "error text: {out}");
+}
+
+#[test]
+fn validate_prints_warnings_without_failing() {
+    // Gate-less non-manual task: a warning, not a hard error.
+    let tasks = r#"{ "tasks": [ { "id": "A", "title": "t" } ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    let (code, out) = cli.af(&["validate"]);
+    assert_eq!(code, 0, "warnings must not fail validation: {out}");
+    assert!(out.contains("warning:"), "warning printed: {out}");
+    assert!(out.contains("1 warning(s)"), "warning counted: {out}");
+}
+
+#[test]
+fn validate_rejects_unknown_worker_filter() {
+    let cli = Cli::new();
+    let (code, out) = cli.af(&["validate", "--worker", "ghost"]);
+    assert_ne!(code, 0, "unknown worker must exit nonzero: {out}");
+    assert!(out.contains("ghost"), "error names the worker: {out}");
+    // A known enabled worker passes the pre-flight.
+    let (code, out) = cli.af(&["validate", "--worker", "w1"]);
+    assert_eq!(code, 0, "known worker validates: {out}");
+    assert!(out.contains("config OK"), "{out}");
 }
 
 #[test]
