@@ -230,9 +230,47 @@ fn execute_attempt(
                 .unwrap_or_else(|| "-".into())
         ));
     }
+
+    // 2b) Scope enforcement: the prompt's "do not touch files outside the
+    // allowed scope" is now an enforced contract. The agent's committed
+    // change must stay within `task.scope` (empty scope means any file).
+    // Checked BEFORE the durable AgentDone boundary and BEFORE merge, so a
+    // violating change can never reach the base branch AND a crash after the
+    // check cannot resume into a merge that skips it.
+    {
+        let base_branch = match worktree::current_branch(&repo) {
+            Ok(b) => b,
+            Err(e) => {
+                cleanup(&repo, &wt);
+                return Outcome::Failed(e);
+            }
+        };
+        let changed = match changed_paths(&wt_path, &base_branch) {
+            Ok(c) => c,
+            Err(e) => {
+                cleanup(&repo, &wt);
+                return Outcome::Failed(e);
+            }
+        };
+        let violations = scope_violations(&changed, &task.scope);
+        if !violations.is_empty() {
+            append(&format!(
+                "-- scope violation: {} (allowed: {})",
+                violations.join(", "),
+                task.scope.join(", ")
+            ));
+            cleanup(&repo, &wt);
+            return Outcome::Failed(format!(
+                "attempt edited files out of scope: {} (allowed: {})",
+                violations.join(", "),
+                task.scope.join(", ")
+            ));
+        }
+    }
+
     // Effect sandwich, boundary 2 (commit outcome AFTER the effect): the
-    // agent exited 0 and its change is committed on the attempt branch.
-    // From here on, a resume must NEVER re-invoke the agent.
+    // agent exited 0, its change is committed on the attempt branch, and it
+    // is within scope. From here on, a resume must NEVER re-invoke the agent.
     record_phase(ctx, id, AttemptPhase::AgentDone);
 
     // 3) Acceptance gate (skipped for manual tasks).
@@ -282,6 +320,52 @@ fn execute_attempt(
 
 fn cleanup(repo: &Path, wt: &worktree::Worktree) {
     worktree::remove(repo, wt);
+}
+
+/// Paths changed on the attempt branch relative to the base branch's
+/// merge-base (three-dot diff, so concurrent base advances are ignored).
+/// Trusted git op (af's own), so the full environment is inherited.
+fn changed_paths(wt_path: &Path, base_branch: &str) -> Result<Vec<String>, String> {
+    let out = crate::subprocess::run(
+        "git",
+        &[
+            "diff".to_string(),
+            "--name-only".to_string(),
+            format!("{base_branch}...HEAD"),
+        ],
+        Some(wt_path),
+        &[],
+        crate::subprocess::EnvMode::Inherit,
+        Duration::from_secs(300),
+    );
+    if !out.passed() {
+        return Err(format!(
+            "cannot compute attempt diff ({base_branch}...HEAD): {}",
+            out.combined().trim()
+        ));
+    }
+    Ok(out
+        .stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// Changed paths no scope entry allows. An empty `scope` means "any file"
+/// (current semantics). Uses the SAME matcher as the scheduler
+/// (`crate::scheduler::scope_overlap`) so admission control and enforcement
+/// agree on what "in scope" means.
+fn scope_violations(changed: &[String], scope: &[String]) -> Vec<String> {
+    if scope.is_empty() {
+        return Vec::new();
+    }
+    changed
+        .iter()
+        .filter(|p| !scope.iter().any(|s| crate::scheduler::scope_overlap(p, s)))
+        .cloned()
+        .collect()
 }
 
 /// Full agent child argv: optional sandbox wrapper prefix, then the CLI and
@@ -493,6 +577,32 @@ mod tests {
             outcome: outcome.into(),
             error: error.map(|e| e.into()),
         }
+    }
+
+    #[test]
+    fn scope_violations_empty_scope_allows_any_file() {
+        let changed = vec!["src/a.rs".to_string(), "docs/b.md".to_string()];
+        assert!(scope_violations(&changed, &[]).is_empty());
+    }
+
+    #[test]
+    fn scope_violations_flags_paths_no_entry_matches() {
+        let changed = vec!["in_scope.txt".to_string(), "out_of_scope.txt".to_string()];
+        let scope = vec!["in_scope.txt".to_string()];
+        assert_eq!(
+            scope_violations(&changed, &scope),
+            vec!["out_of_scope.txt".to_string()]
+        );
+    }
+
+    #[test]
+    fn scope_violations_honors_glob_prefix_like_the_scheduler() {
+        let changed = vec!["src/execute.rs".to_string(), "tests/x.rs".to_string()];
+        let scope = vec!["src/*".to_string()];
+        assert_eq!(
+            scope_violations(&changed, &scope),
+            vec!["tests/x.rs".to_string()]
+        );
     }
 
     #[test]
