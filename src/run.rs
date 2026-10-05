@@ -80,7 +80,7 @@ pub fn pick_worker<'a>(
         .iter()
         .filter(|w| w.enabled)
         .filter(|w| match filter {
-            Some(f) => &w.name == f,
+            Some(f) => w.name == f,
             None => true,
         })
         .filter(|w| !busy.get(&w.name).copied().unwrap_or(false))
@@ -128,7 +128,7 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
 
     let log_dir = store.log_dir();
     let _ = std::fs::create_dir_all(&log_dir);
-    let _ = std::fs::create_dir_all(&store.prompt_dir());
+    let _ = std::fs::create_dir_all(store.prompt_dir());
 
     let (tx, rx) = mpsc::channel::<(String, String, Outcome)>();
     let merge_locks = worktree::MergeLocks::new();
@@ -404,7 +404,7 @@ pub fn cost(cfg: &Config, st: &Settings, task_filter: Option<&str>) -> String {
     let mut total: f64 = 0.0;
     for t in &cfg.tasks {
         if let Some(f) = task_filter {
-            if &t.id != f {
+            if t.id != f {
                 continue;
             }
         }

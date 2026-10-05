@@ -1,9 +1,9 @@
 //! CLI contract tests: spawn the real `af` binary and assert exit codes and
 //! output shape (covers main() dispatch, load_cfg, and the command arms).
 
+use agentflow::config;
 use agentflow::config::{Config, Settings};
 use agentflow::state::{Receipt, Store, TaskStatus};
-use agentflow::{config, run};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -75,11 +75,13 @@ impl Cli {
     }
 
     fn seed_done_task(&self, id: &str) {
-        let (cfg, st) = self.settings();
+        let (_, st) = self.settings();
         let mut map = HashMap::new();
-        let mut s = TaskStatus::default();
-        s.state = agentflow::config::TaskState::Done;
-        s.attempts = 1;
+        let s = TaskStatus {
+            state: agentflow::config::TaskState::Done,
+            attempts: 1,
+            ..Default::default()
+        };
         map.insert(id.to_string(), s);
         Store::new(st.state_dir.clone()).save(&map).unwrap();
     }
@@ -171,7 +173,7 @@ fn api_results_requires_task_flag() {
     let (code, out) = cli.af(&["api", "results", "--task", "A"]);
     assert_eq!(code, 0);
     assert!(out.contains("task A:"), "results header: {out}");
-    assert!(out.contains("no such task") == false);
+    assert!(!out.contains("no such task"));
     let (code, out) = cli.af(&["api", "results", "--task", "NOPE"]);
     assert_eq!(code, 0);
     assert!(out.contains("no such task"));

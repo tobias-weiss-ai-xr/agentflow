@@ -49,7 +49,7 @@ impl Router {
             let explore = (2.0 * (n_total as f64 + 1.0).ln() / (n as f64 + 1.0)).sqrt();
             let score = mean + explore;
             // strictly-greater keeps the FIRST maximum (config order)
-            if best.map_or(true, |(s, _)| score > s) {
+            if best.is_none_or(|(s, _)| score > s) {
                 best = Some((score, w));
             }
         }
