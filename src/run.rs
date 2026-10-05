@@ -416,6 +416,8 @@ fn ensure_worktree_on_branch(
 
 /// Reset a resumed-and-failed attempt exactly like a normally failed one:
 /// terminal Failed at max attempts, else Ready for a fresh agent attempt.
+/// The budget check sees a fully-consumed count: `heal_stale_attempt` has
+/// already counted the interrupted attempt before dispatching the resume.
 fn mark_resumed_failure(
     status: &mut HashMap<String, TaskStatus>,
     id: &str,
@@ -567,9 +569,24 @@ fn resume_merge_only(
 }
 
 /// Startup heal for one stale `running` task — the effect-sandwich resume.
-/// RerunAgent: previous behavior (reset to Ready; the stale worktree is
-/// replaced when the retry is dispatched). RerunGate / MergeOnly: finish
-/// only the remaining effects, never re-invoking the agent.
+/// RerunAgent: fresh attempt from Ready (the stale worktree is replaced
+/// when the retry is dispatched). RerunGate / MergeOnly: finish only the
+/// remaining effects, never re-invoking the agent.
+///
+/// The interrupted attempt consumes the retry budget. `attempts` counts
+/// STARTED attempts, and exactly two writers keep that true: `reap`
+/// increments when an attempt reports its outcome, and this heal increments
+/// for an attempt that was started (dispatch persisted `running` with
+/// attempt number `attempts + 1`) but died before `reap` could run. Each
+/// started attempt is counted exactly once because a reaped attempt is no
+/// longer `running` — only one of the two writers can ever fire for it.
+/// Without this, healing rewound the task to Ready for free, so a crash
+/// loop (OOM kill, reboot, kill -9) could re-buy the agent forever without
+/// ever reaching `max_attempts`. Receipt numbering stays coherent: the
+/// dead attempt's receipts (if any) carry the number it was dispatched
+/// with, and the next dispatch computes `attempts + 1` on the incremented
+/// count — a strictly greater number — so `af cost` never double-counts
+/// one started attempt under two numbers.
 fn heal_stale_attempt(
     cfg: &Config,
     st: &Settings,
@@ -577,6 +594,13 @@ fn heal_stale_attempt(
     id: &str,
     max_attempts: u32,
 ) {
+    // Count the interrupted attempt BEFORE any resume decision, so every
+    // resume outcome — the reset below, and `mark_resumed_failure`'s
+    // budget check inside the gate/merge resumes — sees the budget as
+    // already consumed by the interrupted attempt.
+    if let Some(s) = status.get_mut(id) {
+        s.attempts += 1;
+    }
     let action = resume_action(status.get(id).and_then(|s| s.phase));
     let handled = match action {
         ResumeAction::RerunGate => resume_gate_only(cfg, st, status, id, max_attempts),
@@ -585,12 +609,23 @@ fn heal_stale_attempt(
     };
     if !handled {
         // RerunAgent, or a resume that lost its artifacts (always safe):
-        // fresh attempt from Ready; the stale worktree is dropped by
-        // worktree::create when the retry is dispatched.
+        // apply the budget to the now-counted attempt — Ready for a fresh
+        // agent attempt while budget remains (the stale worktree is
+        // dropped by worktree::create when the retry is dispatched), or
+        // terminal Failed once the crash loop has started `max_attempts`
+        // attempts, so it can never re-buy the agent again.
         if let Some(s) = status.get_mut(id) {
-            s.state = TaskState::Ready;
-            s.last_error = Some("previous run interrupted".into());
-            s.phase = None;
+            if s.attempts >= max_attempts {
+                s.state = TaskState::Failed;
+                s.last_error = Some(format!(
+                    "previous run interrupted; retry budget exhausted ({}/{max_attempts})",
+                    s.attempts
+                ));
+            } else {
+                s.state = TaskState::Ready;
+                s.last_error = Some("previous run interrupted".into());
+            }
+            s.phase = None; // next attempt journals from Spawned again
         }
     }
 }
@@ -1296,8 +1331,11 @@ mod tests {
         status.insert("A".into(), running(1, None));
         status.insert("B".into(), running(2, Some(AttemptPhase::Spawned)));
 
-        heal_stale_attempt(&cfg, &st, &mut status, "A", 3);
-        heal_stale_attempt(&cfg, &st, &mut status, "B", 3);
+        // max_attempts 4 (was 3): the interrupted attempts now consume one
+        // attempt of budget each on heal, so the fixture needs a spare slot
+        // to keep exercising the rewind-to-Ready path for both entries.
+        heal_stale_attempt(&cfg, &st, &mut status, "A", 4);
+        heal_stale_attempt(&cfg, &st, &mut status, "B", 4);
 
         for id in ["A", "B"] {
             let s = &status[id];
@@ -1309,8 +1347,80 @@ mod tests {
                 "{id} records why it was rewound"
             );
         }
-        assert_eq!(status["A"].attempts, 1, "attempt count is preserved");
-        assert_eq!(status["B"].attempts, 2);
+        assert_eq!(
+            status["A"].attempts, 2,
+            "the interrupted attempt is counted (1 -> 2)"
+        );
+        assert_eq!(
+            status["B"].attempts, 3,
+            "the interrupted attempt is counted (2 -> 3)"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn interrupted_attempt_consumes_the_retry_budget() {
+        let base = unique_base("heal-budget");
+        let st = settings(base.clone());
+        let cfg = cfg_with(vec![task("A"), task("B")]);
+
+        // Budget exhausted: a stale running entry whose attempts already sit
+        // at max_attempts (3) heals to terminal Failed, never Ready —
+        // otherwise a crash loop re-buys the agent forever.
+        let mut status = HashMap::new();
+        status.insert("A".into(), running(3, None));
+        heal_stale_attempt(&cfg, &st, &mut status, "A", 3);
+        assert_eq!(status["A"].state, TaskState::Failed, "no budget left");
+        assert_eq!(
+            status["A"].attempts, 4,
+            "the interrupted attempt is counted"
+        );
+        let err = status["A"].last_error.as_deref().unwrap_or_default();
+        assert!(
+            err.contains("interrupted") && err.contains("exhausted"),
+            "the error says the run was interrupted and the budget spent: {err}"
+        );
+
+        // Budget remaining: the interrupted attempt still counts — healing
+        // rewinds to Ready at 2 attempts, not a free rewind to 1.
+        status.insert("B".into(), running(1, None));
+        heal_stale_attempt(&cfg, &st, &mut status, "B", 3);
+        assert_eq!(status["B"].state, TaskState::Ready, "budget remains");
+        assert_eq!(
+            status["B"].attempts, 2,
+            "the interrupted attempt is counted"
+        );
+        assert_eq!(
+            status["B"].last_error.as_deref(),
+            Some("previous run interrupted")
+        );
+
+        // Convergence: repeatedly crash the same task (set the entry back to
+        // running, heal). The count climbs by exactly one per started
+        // attempt — 1, 2 — and the budget-exhausting third crash lands on
+        // Failed at the budget instead of being re-dispatched indefinitely.
+        let mut status = HashMap::new();
+        status.insert("B".into(), running(0, None));
+        for expected in [1u32, 2] {
+            heal_stale_attempt(&cfg, &st, &mut status, "B", 3);
+            assert_eq!(
+                status["B"].attempts, expected,
+                "exactly one counted attempt per crash window"
+            );
+            assert_eq!(status["B"].state, TaskState::Ready, "budget remains");
+            status.insert("B".into(), running(expected, None)); // crash again
+        }
+        heal_stale_attempt(&cfg, &st, &mut status, "B", 3);
+        assert_eq!(
+            status["B"].attempts, 3,
+            "the count never exceeds max_attempts"
+        );
+        assert_eq!(
+            status["B"].state,
+            TaskState::Failed,
+            "converges to Failed at the budget, not an infinite re-buy"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
