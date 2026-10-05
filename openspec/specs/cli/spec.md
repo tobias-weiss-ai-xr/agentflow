@@ -37,16 +37,21 @@ THEN it streams that task's log lines until the task finishes.
 
 `af cost` SHALL append a per-worker trust section: worker name, wins/total,
 and trust rate (wins ÷ attempts, two decimals), computed from receipt
-outcomes. `af cost` SHALL also report wasted spend — the total wall-clock
-seconds and the attempt count of attempts whose outcome was not `merged`,
-the wasted percentage of all selected attempts, and a breakdown grouped by
-failure CAUSE (the text before the first `:` in the receipt's `error`,
-trimmed, with runs of whitespace collapsed) — computed over the SAME receipt
-selection as the rest of the report, so `--last`, `--since`, and `--task`
-narrow the waste figures too. The table SHALL include a TOKENS column summing
-the `tokens` recorded on the selected receipts, showing `-` when none are
-recorded, and the report SHALL name every unreadable receipt file (one
-warning line per file) without failing.
+outcomes that are VERDICTS on the worker — `interrupted` receipts are
+excluded from both the numerator and the denominator because they carry no
+agent or gate result. `af cost` SHALL also report wasted spend — the total
+wall-clock seconds and the attempt count of attempts whose outcome was not
+`merged`, the wasted percentage of all selected attempts, and a breakdown
+grouped by failure CAUSE (the text before the first `:` in the receipt's
+`error`, trimmed, with runs of whitespace collapsed) — computed over the
+SAME receipt selection as the rest of the report, so `--last`, `--since`,
+and `--task` narrow the waste figures too. `af cost` SHALL additionally
+report interrupted attempts distinctly, as their own `INTERRUPTED` outcome
+line naming the attempt count, since their duration is unknown (recorded as
+0.0s) — while keeping them out of the trust denominator. The table SHALL
+include a TOKENS column summing the `tokens` recorded on the selected
+receipts, showing `-` when none are recorded, and the report SHALL name
+every unreadable receipt file (one warning line per file) without failing.
 
 #### Scenario: trust section lists each worker with history
 
@@ -77,3 +82,9 @@ THEN the breakdown shows ONE row for that cause whose seconds are the sum and wh
 GIVEN receipts whose `tokens` are recorded and receipts whose `tokens` are absent
 WHEN `af cost` runs
 THEN the TOKENS column shows the summed tokens for the recorded receipts and `-` for the ones with no tokens.
+
+#### Scenario: interrupted attempts are reported distinctly
+
+GIVEN a receipt whose `outcome` is `interrupted` (an attempt lost when the orchestrator was killed mid-attempt)
+WHEN `af cost` runs
+THEN the report shows a distinct `INTERRUPTED` line for it and its worker's `WINS/TOTAL` is unchanged by it.

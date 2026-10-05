@@ -35,7 +35,18 @@ THEN startup removes it.
 
 ### Requirement: Cost receipts
 
-Each attempt SHALL append a receipt (task id, attempt number, worker, model, wall-clock elapsed, agent-reported tokens if available) to `state/receipts/` — every attempt end, including failed attempts (wall-clock truth, ADR-9). Receipts carry `outcome` (`"merged"` | `"failed"`) and `error: Option<String>` — the first line of the attempt's failure reason, capped at 200 characters, `None` for merged attempts. Receipts written before this change SHALL deserialize with outcome `"merged"` and `error = None`. `af cost` SHALL aggregate receipts (last run, since date, or per task).
+Each attempt SHALL append a receipt (task id, attempt number, worker, model, wall-clock elapsed, agent-reported tokens if available) to `state/receipts/` — every attempt end, including failed attempts (wall-clock truth, ADR-9). Receipts carry `outcome` (`"merged"` | `"failed"` | `"interrupted"`) and `error: Option<String>` — the first line of the attempt's failure reason, capped at 200 characters, `None` for merged attempts. Receipts written before this change SHALL deserialize with outcome `"merged"` and `error = None`. `af cost` SHALL aggregate receipts (last run, since date, or per task).
+
+When startup heal finds a stale `running` attempt whose durable agent
+outcome cannot be resumed (it must re-run the agent — phase `Spawned`, a
+legacy state file with no phase, or missing resume artifacts), `af` SHALL
+append an `interrupted` receipt for that lost attempt — `wall_clock_s` 0.0
+because the true duration is unknown, and an `error` explaining that the
+orchestrator exited mid-attempt. `interrupted` is NOT a verdict on the
+worker: `Receipt::counts_as_verdict` SHALL be false for it, and every trust
+statistic SHALL exclude it from both the numerator and the denominator. A
+resume that finishes from durable state (phase `AgentDone` or `GatePassed`)
+is not lost and records no `interrupted` receipt.
 
 #### Scenario: receipt appended per attempt
 
@@ -71,6 +82,12 @@ THEN `error` contains the failure's first line.
 GIVEN a receipt file from before this change
 WHEN receipts are loaded
 THEN `error` is `None`.
+
+#### Scenario: interrupted attempts are recorded as non-verdicts
+
+GIVEN a task left `running` by a killed orchestrator with no durable resume artifacts
+WHEN the next `af run` heals the stale attempt by re-running the agent
+THEN an `interrupted` receipt naming the task and attempt exists with `wall_clock_s` 0.0 and an `error` explaining the duration is unknown, and `Receipt::counts_as_verdict` is false for it.
 
 ### Requirement: Single-writer state lock
 

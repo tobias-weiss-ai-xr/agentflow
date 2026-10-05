@@ -6,7 +6,9 @@ use crate::execute::{self, ExecCtx, Outcome};
 use crate::gate;
 use crate::router::Router;
 use crate::scheduler;
-use crate::state::{resume_action, AttemptPhase, Receipt, ResumeAction, Store, TaskStatus};
+use crate::state::{
+    resume_action, AttemptPhase, Receipt, ResumeAction, Store, TaskStatus, OUTCOME_INTERRUPTED,
+};
 use crate::subprocess::{self, EnvMode};
 use crate::worktree;
 use std::collections::HashMap;
@@ -235,7 +237,15 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
 
     // --- dispatch loop ---
     // Measured routing (ADR-12): replay receipts into per-worker stats.
-    let mut router = Router::from_receipts(&store.load_receipts());
+    // Interrupted attempts are NOT worker verdicts (r9-interrupted): a kill
+    // that says nothing about the worker must not dent its rate, so filter
+    // them out at the call site before they reach the router.
+    let verdicts: Vec<Receipt> = store
+        .load_receipts()
+        .into_iter()
+        .filter(Receipt::counts_as_verdict)
+        .collect();
+    let mut router = Router::from_receipts(&verdicts);
     loop {
         // Reap finished tasks — BLOCKING while attempts are in flight, so
         // a completion wakes the dispatcher immediately instead of it
@@ -676,6 +686,30 @@ fn heal_stale_attempt(
         ResumeAction::RerunAgent => false, // handled by the reset below
     };
     if !handled {
+        // Record the lost attempt (r9-interrupted): heal could not resume
+        // its durable agent outcome, so it produced no verdict and the
+        // process died — the duration is genuinely unknown. An honest zero
+        // plus the reason beats an invented number, and the receipt keeps
+        // the attempt visible in `af cost` (interrupted, not a worker
+        // loss). The attempt number is the one dispatch persisted
+        // (`attempts + 1`), exactly the incremented count above.
+        // NOTE: a successful gate/merge resume is NOT lost — its agent work
+        // is durable and finishes as merged — so it records no receipt here.
+        let store = Store::new(st.state_dir.clone());
+        let attempt = status.get(id).map(|s| s.attempts).unwrap_or(0);
+        let _ = store.append_receipt(&Receipt {
+            task: id.to_string(),
+            attempt,
+            // The worker is not persisted in the task state, so the dead
+            // attempt's worker is unknowable at heal time.
+            worker: "unknown".to_string(),
+            model: "unknown".to_string(),
+            wall_clock_s: 0.0,
+            tokens: None,
+            ts: crate::state::now_ts(),
+            outcome: OUTCOME_INTERRUPTED.to_string(),
+            error: Some("orchestrator exited mid-attempt; attempt duration unknown".to_string()),
+        });
         // RerunAgent, or a resume that lost its artifacts (always safe):
         // apply the budget to the now-counted attempt — Ready for a fresh
         // agent attempt while budget remains (the stale worktree is
@@ -1090,9 +1124,10 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
         selected.len()
     ));
     // Per-worker trust (ADR-12): measured win rate from the SELECTED
-    // receipt outcomes.
+    // receipt VERDICTS. Interrupted receipts (r9-interrupted) are excluded
+    // from wins AND total: they carry no information about the worker.
     let mut by_worker: Vec<(String, u64, u64)> = Vec::new();
-    for r in &selected {
+    for r in selected.iter().copied().filter(|r| r.counts_as_verdict()) {
         let e = by_worker.iter_mut().find(|(n, _, _)| n == &r.worker);
         let won = r.outcome == "merged";
         match e {
@@ -1146,6 +1181,23 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
         selected.len(),
         pct
     ));
+    // Interrupted attempts (r9-interrupted): real spend with an UNKNOWN
+    // duration (recorded as 0.0s), so they get their own outcome line
+    // instead of being buried in the failed subtotal or silently dropped.
+    // They stay out of the trust block above — no verdict on the worker.
+    let interrupted: Vec<&Receipt> = selected
+        .iter()
+        .copied()
+        .filter(|r| r.outcome == OUTCOME_INTERRUPTED)
+        .collect();
+    if !interrupted.is_empty() {
+        let secs: f64 = interrupted.iter().map(|r| r.wall_clock_s).sum();
+        lines.push_str(&format!(
+            "\nINTERRUPTED: {:.1}s on {} attempt(s) — duration unknown (orchestrator exited mid-attempt)",
+            secs,
+            interrupted.len()
+        ));
+    }
     if !failed.is_empty() {
         // Primary grouping is by CAUSE (text before the first `:`), never by
         // the full reason: the reason embeds a file LIST, so two failures of
