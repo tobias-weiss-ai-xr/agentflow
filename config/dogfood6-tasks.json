@@ -1,0 +1,60 @@
+{
+  "_meta": {
+    "project": "agentflow-dogfood6",
+    "goal": "close the remaining gaps: the af cost --last drift, plus contract files for scheduler, worktree and config"
+  },
+  "tasks": [
+    {
+      "id": "r6-cost-last",
+      "title": "Ship the missing af cost --last and --since flags (cost_last_shows_the_latest_attempt_per_task, cost_since_filters_receipts_by_time) so the cost-aggregates-receipts scenario is real and its traceability allowlist entry can be deleted",
+      "deps": [],
+      "manual": false,
+      "priority": 1,
+      "scope": [
+        "src/main.rs",
+        "src/run.rs",
+        "tests/cli.rs",
+        "tests/spec_traceability.rs",
+        "README.md"
+      ],
+      "accept": "grep -q '\"--last\"' src/main.rs && grep -q '\"--since\"' src/main.rs && grep -q 'fn cost_last_shows_the_latest_attempt_per_task' tests/cli.rs && grep -q 'fn cost_since_filters_receipts_by_time' tests/cli.rs && ! grep -q 'cost-receipts#cost-aggregates-receipts' tests/spec_traceability.rs && ./scripts/coverage-gate.sh && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "GOAL: close a real spec/implementation drift the traceability checker caught. openspec/specs/state/spec.md `### Requirement: Cost receipts` says: 'af cost SHALL aggregate receipts (last run, since date, or per task)'. Its scenario `#### Scenario: cost aggregates receipts` says: 'WHEN receipts exist for a run THEN `af cost --last` prints total elapsed and per-task breakdown.' But the CLI only accepts `af cost [--task ID]` (src/main.rs) \u2014 `--last` and any since-date mode were never shipped. Ship them.\n\n1. `--last`: restrict the report to the MOST RECENT ATTEMPT PER TASK (dedupe by task, keeping the receipt with the greatest `ts`; ties broken by the greater `attempt`). This is the 'last run' view: retries are not double-counted, so total elapsed reflects what the campaign actually cost. Keep the existing table shape (TASK / ATTEMPTS / WALL_S / MODEL) plus the TOTAL line and the per-worker trust block, which must still be computed from the SELECTED receipts only.\n2. `--since <DATE|UNIX_TS>`: include only receipts with `ts >= <value>`. Accept either a bare unix timestamp or `YYYY-MM-DD` (UTC midnight). Reject an unparseable value with a clear error and a non-zero exit, not a panic.\n3. `--last` and `--since` compose with each other and with `--task ID`; with no flags behaviour must be byte-identical to today (legacy stability \u2014 see the 'legacy receipts stay loadable' scenario).\n4. Keep `run::cost`'s signature style consistent with the codebase: prefer adding a small, testable filter struct or extra params rather than growing a pile of booleans; document the exact semantics in the CLI help text in src/main.rs and in README.\n\n5. tests/cli.rs \u2014 add `#[test] fn cost_last_shows_the_latest_attempt_per_task()` and `#[test] fn cost_since_filters_receipts_by_time()`. Drive the real `af` binary the way the existing cli.rs tests do, or pre-seed `state/receipts/` with hand-written JSON receipts (several attempts for one task, distinct `ts`) and assert:\n   - `af cost` totals every attempt, while `af cost --last` totals one attempt per task and reports ATTEMPTS 1;\n   - `--since` excludes older receipts and includes newer ones, and a bad value exits non-zero with a message;\n   - the trust block reflects only the selected receipts.\n6. tests/spec_traceability.rs \u2014 the scenario `state/cost-receipts#cost-aggregates-receipts` is the SOLE entry in `UNMAPPED_SCENARIOS`. Now that the flag exists, add the marker `// spec: state/cost-receipts#cost-aggregates-receipts` above your new `cost_last_shows_the_latest_attempt_per_task` test and DELETE that allowlist entry, leaving `UNMAPPED_SCENARIOS` empty (the `<= 3` cap test must keep passing). Update docs/spec-traceability.md if it names the removed entry.\n\nThis task edits src/, so its gate runs `./scripts/coverage-gate.sh` \u2014 the new code must be tested enough that line coverage stays at or above the ratchet. Do not lower `.coverage-min`."
+    },
+    {
+      "id": "r6-contract-scheduler",
+      "title": "Add scheduler_readiness_and_dag_contract \u2014 pin scheduler.rs public semantics (compute_depths, scope_overlap, tasks_overlap, ready_tasks, readiness_of, find_deadlock) as a contract test file",
+      "deps": [],
+      "manual": false,
+      "priority": 2,
+      "scope": [
+        "tests/contract_scheduler.rs"
+      ],
+      "accept": "grep -q 'fn scheduler_readiness_and_dag_contract' tests/contract_scheduler.rs && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "GOAL: src/scheduler.rs (depths, readiness, deadlock detection, scope-overlap routing) has the most unit tests in the crate but no single file stating the CONTRACT callers may rely on. Add tests/contract_scheduler.rs using the public API (`pub fn compute_depths`, `scope_overlap`, `tasks_overlap`, `ready_tasks`, `readiness_of`, `find_deadlock`, `find_deadlock_in`, `pub enum Readiness`) \u2014 src/lib.rs exports `pub mod scheduler`. Build Config/Task values directly.\n\nRequired `#[test] fn scheduler_readiness_and_dag_contract()` plus focused tests pinning:\n  - `compute_depths`: a chain a->b->c yields depths 0/1/2; an independent task stays 0; the same Config yields the SAME mapping on repeated calls (determinism); a dependency cycle returns `Err` whose message names at least one cycle member.\n  - `scope_overlap`: identical paths overlap; a DIRECTORY prefix overlaps its children in BOTH orders (`tests/` vs `tests/x.rs`); disjoint paths do not overlap; an empty string does NOT overlap everything (pin whatever the code actually does and justify it in a comment). `tasks_overlap` is the any-pair generalisation.\n  - `ready_tasks`: a task whose deps are all Done/merged is ready; a task with a pending dep is not; a task whose dep FAILED is permanently not ready (and is not simply 'waiting'); a task in a blocked/failed terminal state is excluded.\n  - `readiness_of` / `Readiness`: assert the exact variant returned for a done task, a running task, a task with an unmet dependency, and a terminal-blocked task \u2014 do not guess the variant names, read src/scheduler.rs.\n  - `find_deadlock`: a dependency naming a task that does not exist is reported; a cycle is reported with its members; a healthy DAG returns Ok/none.\nUse only std + the crate; no new dependencies; no temp dirs needed (these are pure functions). Keep the full suite green and do not weaken existing unit tests."
+    },
+    {
+      "id": "r6-contract-worktree",
+      "title": "Add worktree_lifecycle_and_merge_contract \u2014 pin worktree.rs public semantics (create, remove, merge, MergeLocks, heal, clean_all, orphan_ids) as a contract test file",
+      "deps": [],
+      "manual": false,
+      "priority": 2,
+      "scope": [
+        "tests/contract_worktree.rs"
+      ],
+      "accept": "grep -q 'fn worktree_lifecycle_and_merge_contract' tests/contract_worktree.rs && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "GOAL: src/worktree.rs owns the git safety properties agentflow depends on (isolated branches, serialized merges, abort-not-force on conflict). Those are asserted indirectly today. Pin them as a contract in tests/contract_worktree.rs using the public API (`is_repo`, `current_branch`, `create`, `remove`, `merge`, `MergeLocks`, `heal`, `clean_all`, `orphan_ids`, `clean`) \u2014 src/lib.rs exports `pub mod worktree`.\n\nRequired `#[test] fn worktree_lifecycle_and_merge_contract()` plus focused tests pinning at least:\n  - `create` yields a worktree whose branch is derived from the id and the given prefix, checked out in the new directory, and the base repo's working tree is left on its original branch untouched.\n  - Disjoint worktrees for two ids can exist simultaneously; their branches differ.\n  - `merge` integrates the worktree branch into the base branch and reports a commit; merging the SAME branch twice is a no-op or an explicit error \u2014 pin which, do not leave it ambiguous.\n  - A CONFLICTING merge returns `Err` and leaves the base repo usable: the base HEAD is unchanged, the tree is not left mid-merge, and nothing is force-pushed. This is the most important safety property in the file \u2014 assert it explicitly, creating a real conflict on the same line of a shared file.\n  - `MergeLocks` actually serializes: hold the lock and show a second `merge` cannot interleave destructively (at minimum, assert the type is `Send`/`Sync`-usable and that repeated merges through one instance stay consistent).\n  - `orphan_ids(wt_root, keep)` reports ids on disk that are not in `keep`; `clean_all` removes worktrees; `clean(..)`/`heal(..)` leave `keep`-listed worktrees intact (this is the property a past flake violated).\n  - `is_repo` / `current_branch` on a real scratch repo and on a non-repo directory.\nHermeticity is mandatory: create a scratch repo with `git init -b main`, set identity repo-locally (`git config user.name/user.email`), commit an initial file, and give EVERY test its own uniquely-named directory nested under a per-test subdir (do NOT derive paths from a shared `temp_dir()` parent \u2014 a previous flake came from exactly that). Use std + the crate only; no new dependencies. Keep the full suite green."
+    },
+    {
+      "id": "r6-contract-config",
+      "title": "Add config_loading_and_validation_contract \u2014 pin config.rs public semantics (load, detect_cycle, parse_gate_env, load_repos, Settings defaults) as a contract test file",
+      "deps": [],
+      "manual": false,
+      "priority": 3,
+      "scope": [
+        "tests/contract_config.rs"
+      ],
+      "accept": "grep -q 'fn config_loading_and_validation_contract' tests/contract_config.rs && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "GOAL: src/config.rs decides what a campaign MEANS \u2014 defaults, precedence, and the validation that rejects a broken DAG. Pin its public contract in tests/contract_config.rs using `load(tasks_path, workers_path)`, `detect_cycle`, `parse_gate_env`, `load_repos` and the public `Settings`/`Task`/`Worker`/`WorkerDefaults`/`TaskState`/`Priority` types (src/lib.rs re-exports Config, Settings, Task, TaskState, Worker, WorkerDefaults).\n\nRequired `#[test] fn config_loading_and_validation_contract()` plus focused tests pinning:\n  - Defaults are applied when a field is absent (e.g. max_attempts, retry delay, gate_replay true, priority) and an EXPLICIT value wins over the default \u2014 write two temp JSON files that differ only in that field and assert the difference.\n  - `load` returns `Err` (not a panic) for: a missing file, malformed JSON, a task referencing an unknown worker, and a duplicate task id. Pin the error text loosely (substring) so it stays readable.\n  - A disabled worker is not usable/selectable but does not make `load` fail; the enabled set is what the caller sees.\n  - `detect_cycle` accepts a healthy DAG (chain + diamond) and rejects a cycle with a message naming a member; also pin that a task depending on a NON-EXISTENT id is rejected.\n  - `parse_gate_env` parses `KEY=VALUE` entries including separators and whitespace as the code actually does, and yields an empty vec for an empty string. Read the implementation first \u2014 do not guess the separator.\n  - `load_repos`: maps ids to paths from a JSON file and returns `Err` for a missing/malformed file.\n  - `Settings` env-derived defaults (TF_REPO_DIR / TF_STATE_DIR / TF_BRANCH_PREFIX / TF_MAX_PARALLEL and the timeouts) \u2014 pin whatever public constructor exists; if the only constructor reads process env and that is racy under parallel tests, document the constraint in a comment and keep the assertions robustly ordered inside a single test.\nWrite temp JSON under a uniquely-named per-test directory. Use std + the crate only; no new dependencies. Keep the full suite green."
+    }
+  ]
+}

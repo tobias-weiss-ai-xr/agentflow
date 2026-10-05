@@ -1,0 +1,94 @@
+{
+  "_meta": {
+    "project": "agentflow-dogfood5",
+    "goal": "close the four gaps: unspecced shipped behavior, requirement-only traceability, no coverage ratchet, no gate/env contract files"
+  },
+  "tasks": [
+    {
+      "id": "r5-spec-durability",
+      "title": "Spec the unspecced shipped behavior: add Single-writer state lock, Attempt phase journal, Gate replay contract, Storage backend conformance suite, Scope enforcement on agent edits, Prompt placeholder guarantee to openspec/specs/ and archive the change",
+      "deps": [],
+      "manual": false,
+      "priority": 1,
+      "scope": [
+        "openspec/",
+        "tests/lock.rs",
+        "tests/journal.rs",
+        "tests/gate_replay.rs",
+        "tests/conformance.rs",
+        "tests/scope_enforcement.rs",
+        "tests/contract_prompt.rs"
+      ],
+      "accept": "grep -q '### Requirement: Single-writer state lock' openspec/specs/state/spec.md && grep -q '### Requirement: Attempt phase journal' openspec/specs/state/spec.md && grep -q '### Requirement: Storage backend conformance suite' openspec/specs/state/spec.md && grep -q '### Requirement: Gate replay contract' openspec/specs/lifecycle/spec.md && grep -q '### Requirement: Prompt placeholder guarantee' openspec/specs/lifecycle/spec.md && grep -q '### Requirement: Scope enforcement on agent edits' openspec/specs/scheduling/spec.md && test -z \"$(ls openspec/changes | grep -v '^archive$')\" && openspec validate --specs && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "GOAL: the spec library describes rounds 1-2 but NOT the durability work that already shipped. Six behaviors are implemented and tested but appear in NO spec, so the traceability checker cannot see them. Spec them.\n\nPROCEDURE (verified to work; the scaffolder only writes .openspec.yaml, you author the rest):\n  1. `openspec new change durability-contracts` (pick a change name, e.g. durability-contracts)\n  2. Write openspec/changes/<name>/proposal.md (short '## Why' / '## What Changes') and tasks.md.\n  3. Write delta specs at openspec/changes/<name>/specs/<spec-id>/spec.md. Format EXACTLY:\n         # Delta: <spec-id>\n\n         ## ADDED Requirements\n\n         ### Requirement: <Title>\n\n         <SHALL prose>\n\n         #### Scenario: <scenario title>\n\n         WHEN ...\n         THEN ...\n     (GIVEN/WHEN/THEN is also accepted. `## MODIFIED Requirements` is a full REPLACEMENT and the archive refuses if it would drop an existing scenario \u2014 for this change use ADDED only.)\n  4. `openspec validate <name>` must say 'is valid' (a missing design artifact is fine).\n  5. `openspec archive <name> --yes` moves it into openspec/changes/archive/ and merges the requirements into the library.\n\nAUTHOR THESE SIX REQUIREMENTS WITH THESE EXACT TITLES (the gate greps for them):\n  - state       | `Single-writer state lock`            (Store::acquire_lock/LockGuard; a second `af run` exits 2 naming the owning pid)\n  - state       | `Attempt phase journal`                (AttemptPhase Spawned/AgentDone/GatePassed persisted at boundaries; startup heal resumes with ResumeAction RerunAgent/RerunGate/MergeOnly so a crash never re-runs the LLM)\n  - lifecycle   | `Gate replay contract`                (Task.gate_replay defaults true; TF_GATE_REPLAY is exported to the gate so acceptance gates can be idempotent)\n  - state       | `Storage backend conformance suite`   (the StateStore trait \u2014 status_file/load/save/append_receipt/load_receipts \u2014 plus a reusable conformance suite any backend must pass)\n  - scheduling  | `Scope enforcement on agent edits`    (a task's declared scope is checked against the attempt's changed files; violations fail the attempt BEFORE merge)\n  - lifecycle   | `Prompt placeholder guarantee`        (every render path emits the task scope and the exact accept command, and leaks no unresolved {{...}} token)\n\nMANDATORY FOLLOW-UP: tests/spec_traceability.rs requires EVERY requirement to carry a `// spec: <spec-id>/<slug>` marker or the full suite fails. Add these markers to the EXISTING test that covers each (from the round in which it landed):\n  tests/lock.rs             -> // spec: state/single-writer-state-lock\n  tests/journal.rs          -> // spec: state/attempt-phase-journal\n  tests/gate_replay.rs      -> // spec: lifecycle/gate-replay-contract\n  tests/conformance.rs      -> // spec: state/storage-backend-conformance-suite\n  tests/scope_enforcement.rs-> // spec: scheduling/scope-enforcement-on-agent-edits\n  tests/contract_prompt.rs  -> // spec: lifecycle/prompt-placeholder-guarantee\nWrite the prose from the ACTUAL implementation in src/ (read src/state.rs, src/run.rs, src/gate.rs, src/execute.rs) \u2014 do not invent behavior. Do NOT weaken or re-word the six titles."
+    },
+    {
+      "id": "r5-scenario-trace",
+      "title": "Add every_scenario_has_a_referencing_test \u2014 raise traceability from requirement granularity (27) to scenario granularity (~65 scenarios), mapping every openspec scenario to a test",
+      "deps": [
+        "r5-spec-durability"
+      ],
+      "manual": false,
+      "priority": 1,
+      "scope": [
+        "tests/spec_traceability.rs",
+        "tests/cli.rs",
+        "tests/e2e.rs",
+        "tests/conformance.rs",
+        "tests/journal.rs",
+        "tests/lock.rs",
+        "tests/gate_replay.rs",
+        "tests/scope_enforcement.rs",
+        "tests/contract_prompt.rs",
+        "docs/spec-traceability.md"
+      ],
+      "accept": "grep -q 'fn every_scenario_has_a_referencing_test' tests/spec_traceability.rs && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "GOAL: the checker we added proves every REQUIREMENT has a test, but a requirement can hold 5 scenarios and only 1 test. Raise the contract to scenario granularity.\n\n1. tests/spec_traceability.rs already has `slugify`, `requirement_id`, `parse_spec`, `markers_in_file`, `markers_under`, `collect_markers`, `unmapped`, `failure_message`. Extend it rather than rewriting:\n   - Parse `#### Scenario: <title>` blocks that belong to the nearest preceding `### Requirement:`.\n   - Scenario marker convention: `// spec: <spec-id>/<requirement-slug>#<scenario-slug>`, e.g. `// spec: scheduling/scope-contention-avoidance#overlapping-tasks-run-sequentially`. A requirement-level marker (`// spec: <id>/<req-slug>`) does NOT satisfy the scenarios under it \u2014 the point is finer coverage.\n   - Add `#[test] fn every_scenario_has_a_referencing_test()` that fails listing every unmapped scenario with its spec file and the exact marker line to add.\n   - Keep `every_requirement_has_at_least_one_referencing_test` passing (a scenario marker implies its requirement is covered \u2014 treat requirement mapping as satisfied by requirement OR scenario markers, so requirement-level markers stay valid).\n   - Give scenarios their own allowlist `const UNMAPPED_SCENARIOS: &[(&str, &str)]` with the same <=3 cap and a clear reason.\n   - Extend the self-sanity test so a bogus scenario also fails the matcher.\n2. Map EVERY scenario in openspec/specs/*/spec.md (about 65) by adding markers above the existing test that covers it \u2014 tests/cli.rs and tests/e2e.rs carry most CLI/lifecycle/worktree scenarios; src module unit tests may also carry markers (the checker already scans src/ recursively). Where a scenario genuinely has no test, add a small focused test for it; prefer that over using the allowlist.\n3. Update docs/spec-traceability.md: document the scenario marker format, the slug rules for both levels, the allowlists and their caps, and how to add a scenario safely.\nComment-only edits to existing tests must not change behavior. Keep the full suite green; no new dependencies."
+    },
+    {
+      "id": "r5-contract-gate",
+      "title": "Add gate_contract_exit_codes_and_env \u2014 a dedicated contract test file pinning the acceptance-gate runner's exit-code, env, cwd, timeout and large-output semantics",
+      "deps": [],
+      "manual": false,
+      "priority": 2,
+      "scope": [
+        "tests/contract_gate.rs"
+      ],
+      "accept": "grep -q 'fn gate_contract_exit_codes_and_env' tests/contract_gate.rs && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "GOAL: gate.rs is 100% line-covered but its CONTRACT (what callers may rely on) is not pinned in one readable place. `pub fn run_accept(` is callable from an integration test (src/lib.rs exports `pub mod gate`). Create tests/contract_gate.rs.\n\nRead src/gate.rs first and pin the ACTUAL behavior. Required test `#[test] fn gate_contract_exit_codes_and_env()` plus these:\n  - `gate_exit_zero_passes_and_non_zero_fails`: a gate that exits 0 passes; one that exits 1/2/127 fails; the failure carries the gate's captured output.\n  - `gate_receives_the_task_env_contract`: assert the gate observes TF_GATE_REPLAY matching the replay flag it was invoked with, plus the task id / acceptance variables the runner actually exports. Pin the exact values the code produces (read the source; do not guess) \u2014 e.g. if it exports \"1\"/\"0\" assert that, and say so in a comment.\n  - `gate_runs_in_the_worktree_directory`: a gate writing a relative file lands in the directory passed in, not the orchestrator's cwd.\n  - `gate_timeout_is_reported_as_a_failure`: a gate that sleeps far past the configured timeout is killed and reported as a failure whose message mentions the timeout \u2014 the call must RETURN, not hang.\n  - `gate_with_large_output_does_not_deadlock`: a gate printing more than a pipe buffer (use >= 256 KiB, e.g. a loop writing 64 KiB lines) completes and its output is captured. This is the classic subprocess-pipe deadlock; pin it.\n  - `missing_gate_command_fails_without_panicking`: a non-existent command path yields a failure result, not a panic.\nUse only std + the crate (no new dependencies). Give every test its own uniquely-named temp dir; set git identity repo-locally if you need a repo. Keep the full suite green."
+    },
+    {
+      "id": "r5-contract-env",
+      "title": "Add subprocess_env_is_allowlisted \u2014 a dedicated contract test file proving the agent child process sees only the worker's provider key plus git hygiene, and no other host env leaks",
+      "deps": [],
+      "manual": false,
+      "priority": 2,
+      "scope": [
+        "tests/contract_env.rs"
+      ],
+      "accept": "grep -q 'fn subprocess_env_is_allowlisted' tests/contract_env.rs && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "GOAL: the subprocess env allowlist is a SECURITY boundary (the sandbox spec's 'Agent environment allowlist' requirement) but it is only covered indirectly by a couple of assertions. Pin it as a contract. `pub fn run(` in src/subprocess.rs is callable from an integration test (src/lib.rs exports `pub mod subprocess`). Create tests/contract_env.rs.\n\nRead src/subprocess.rs and src/execute.rs to learn the ACTUAL allowlist and the git-hygiene variables it sets, then write `#[test] fn subprocess_env_is_allowlisted()` that spawns a child which prints its environment as KEY=VALUE lines (use the platform shell the module already uses; `env` on unix) and asserts:\n  1. A sentinel variable that this TEST process sets (e.g. `set_var(\"AF_CONTRACT_CANARY\", \"leak\")`) does NOT appear in the child environment \u2014 proof the child is not simply inheriting the parent env. NOTE: std::env::set_var is unsafe/racy under parallel tests; set the canary on the child's parent Command explicitly or run this assertion in a way that cannot race with other tests (document how you avoided the race).\n  2. The worker's provider key variable IS present when configured, and a DIFFERENT provider's key variable (e.g. a plausible `ANTHROPIC_API_KEY` or another provider's var) is NOT \u2014 the child sees only its own worker's credential.\n  3. The git hygiene variables the code sets are present with deterministic values (author/committer identity, and non-interactive/prompt suppression if the code sets them) \u2014 assert whatever the source actually sets, with a comment.\n  4. `passed()`/`combined()` semantics on the returned result: a non-zero child exit is captured, not raised.\nAdd a second test pinning that an EMPTY/None worker key does not smuggle a key in. Use std only; no new dependencies; unique temp dir per test. Keep the full suite green."
+    },
+    {
+      "id": "r5-coverage-ratchet",
+      "title": "Add scripts/coverage-gate.sh (a real fail-under-lines coverage ratchet wired into CI) - coverage is currently report-only with no threshold",
+      "deps": [
+        "r5-spec-durability",
+        "r5-scenario-trace",
+        "r5-contract-gate",
+        "r5-contract-env"
+      ],
+      "manual": false,
+      "priority": 3,
+      "scope": [
+        "scripts/coverage-gate.sh",
+        ".coverage-min",
+        ".github/workflows/ci.yml",
+        "README.md",
+        "docs/coverage.md"
+      ],
+      "accept": "test -x scripts/coverage-gate.sh && ./scripts/coverage-gate.sh && grep -q 'coverage-gate.sh' .github/workflows/ci.yml && python3 -c \"import yaml;yaml.safe_load(open('.github/workflows/ci.yml'))\" && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "GOAL: CI runs `cargo llvm-cov --workspace --show-missing-lines` with NO threshold, so coverage can silently rot. Make it a ratchet that FAILS the build when line coverage drops. `cargo-llvm-cov` IS installed in this environment.\n\nMEASURED BASELINE on this code: TOTAL 94.10% lines (`cargo llvm-cov --workspace --summary-only`).\n\n1. Create `scripts/coverage-gate.sh` (executable, `#!/usr/bin/env bash`, `set -euo pipefail`) that reads the minimum from `.coverage-min` (a single number, e.g. `94`) and runs:\n       cargo llvm-cov --workspace --fail-under-lines \"$MIN\"\n   plus a short explanatory failure message on non-zero exit. Keep it a single source of truth: the threshold lives in `.coverage-min` and NOT duplicated in the workflow.\n2. Set `.coverage-min` to a value that PASSES on the current tree and is a genuine floor \u2014 use 94 (measured 94.10%). Do NOT set it below the real value to make it trivially pass, and do NOT set it above 94.10% (that would break CI).\n3. Replace the report-only command in the `coverage` job of .github/workflows/ci.yml with `./scripts/coverage-gate.sh`, keeping the llvm-tools-preview setup and the existing comments. Keep the test job (fmt + clippy + test) intact.\n4. Document the ratchet in README.md and docs/coverage.md: what it enforces, how to run it locally, that it may only be RAISED (never lowered to make a build pass), and what to do when new untested code legitimately drops coverage (add tests, or raise the threshold deliberately in a reviewed commit).\nThe gate runs `./scripts/coverage-gate.sh` for real, so it must exist, be executable, and pass. If your own run reports a coverage number below 94, the code changed \u2014 investigate, do not just lower the threshold."
+    }
+  ]
+}

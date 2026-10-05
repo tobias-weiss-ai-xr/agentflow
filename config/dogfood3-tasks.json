@@ -1,0 +1,72 @@
+{
+  "_meta": {
+    "project": "agentflow-dogfood3",
+    "goal": "implement Tier-1 pi-durable durability ideas (docs/pi-durable-ideas.rst)"
+  },
+  "tasks": [
+    {
+      "id": "pd3-lock",
+      "title": "Add single_writer_lock_is_exclusive \u2014 a single-writer lock so two `af run` processes can never share one TF_STATE_DIR",
+      "deps": [],
+      "scope": [
+        "src/state.rs",
+        "src/run.rs",
+        "tests/lock.rs"
+      ],
+      "accept": "grep -q 'fn single_writer_lock_is_exclusive' tests/lock.rs && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "Goal: prevent two concurrent `af run` processes on the same TF_STATE_DIR from clobbering run-state.json (pi-durable's 'one process owns a storage at a time').\n\n1. src/state.rs: add `impl Store { pub fn acquire_lock(&self) -> std::io::Result<LockGuard> }`.\n   - Create `<state_dir>/.lock` (create the state dir first) atomically: write the file only if it does not exist (use OpenOptions::new().write(true).create_new(true) \u2014 that is O_CREAT|O_EXCL). Put the current pid in it as text.\n   - If it already exists: read the pid. If that process is ALIVE, return Err(io::Error::new(ErrorKind::Other, \"another af owns this state dir (pid N)\")). If the pid is DEAD (stale lock), reclaim it (overwrite with our pid) and succeed.\n   - Determine liveness WITHOUT any new dependency; on unix shell out: Command::new(\"sh\").args([\"-c\", &format!(\"kill -0 {pid}\")]) and treat status.success() as alive.\n   - Add `pub struct LockGuard` holding the state dir; its Drop removes `<state_dir>/.lock`.\n2. src/run.rs: `run_loop` acquires the lock right after constructing `Store` (before the startup self-heal). On error print `config error: {err}` to stderr and return 2 \u2014 no worktree may be created. Hold the guard for the entire run, including `--once`.\n3. tests/lock.rs: add `#[test] fn single_writer_lock_is_exclusive()` which:\n   - builds a temp dir and two `Store` handles over it;\n   - acquires on the first (must be Ok);\n   - asserts the second `acquire_lock()` is `Err`;\n   - drops the first guard, then asserts a third `acquire_lock()` is `Ok` (lock released on Drop);\n   - writes a `.lock` file containing the pid of an already-reaped child process (spawn `sh -c 'exit 0'`, wait, use its pid) and asserts `acquire_lock()` succeeds (stale reclaim).\nKeep the FULL existing test suite passing. The gate runs the whole suite plus `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`.",
+      "manual": false,
+      "priority": 1
+    },
+    {
+      "id": "pd3-gate-replay",
+      "title": "Add gate_replay_defaults_to_true_and_parses \u2014 a `gate_replay` task flag making acceptance-gate idempotency an explicit contract",
+      "deps": [],
+      "scope": [
+        "src/config.rs",
+        "src/gate.rs",
+        "src/execute.rs",
+        "README.md",
+        "tests/gate_replay.rs"
+      ],
+      "accept": "grep -q 'fn gate_replay_defaults_to_true_and_parses' tests/gate_replay.rs && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "Goal: make gate replay-safety explicit (pi-durable marks read-only tools `replay: \"safe\"`; an effectful tool is never repeated).\n\n1. src/config.rs: add `pub gate_replay: bool` to `Task`, annotated `#[serde(default = \"default_true\")]` (add a private `fn default_true() -> bool { true }`), so a tasks.json that omits the field parses as `true` and `\"gate_replay\": false` parses as false. Keep all existing derives and the struct's other fields compiling.\n2. src/gate.rs: change `run_accept` to take the flag as a new final parameter `replay: bool`, and forward the decision to the gate process by appending the pair `(\"TF_GATE_REPLAY\".to_string(), if replay { \"1\" } else { \"0\" }.to_string())` to the env slice passed to `subprocess::run`. Update gate.rs's three existing unit tests to pass `true`. Gate behavior is otherwise unchanged.\n3. src/execute.rs: update the call site of `gate::run_accept` to pass `task.gate_replay`.\n4. README.md: add a `gate_replay` row to the task-schema table, and state the contract: \"the `accept` command MUST be idempotent; declare `gate_replay: false` for a gate with side effects \u2014 an interrupted such gate is settled as failed instead of re-run.\"\n5. tests/gate_replay.rs: add `#[test] fn gate_replay_defaults_to_true_and_parses()` that writes TWO tasks.json files \u2014 one containing `\"gate_replay\": false`, one omitting the field \u2014 loads each with `config::load(...)` (reuse the minimal workers.json shape used in tests/cli.rs) and asserts `task.gate_replay == false` and `task.gate_replay == true` respectively.\nKeep the full suite green; the gate also runs fmt + `clippy -D warnings`.",
+      "manual": false,
+      "priority": 1
+    },
+    {
+      "id": "pd3-store",
+      "title": "Add conformance_torn_write_never_corrupts \u2014 a StateStore trait plus a reusable storage conformance suite",
+      "deps": [
+        "pd3-lock"
+      ],
+      "scope": [
+        "src/state.rs",
+        "src/lib.rs",
+        "tests/conformance.rs"
+      ],
+      "accept": "grep -q 'fn conformance_torn_write_never_corrupts' tests/conformance.rs && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "Goal: give agentflow's persistence one documented interface plus a conformance suite every backend must pass (pi-durable's `registerStorageConformance`).\n\n1. src/state.rs: define\n   pub trait StateStore {\n       fn status_file(&self) -> PathBuf;\n       fn load(&self) -> HashMap<String, TaskStatus>;\n       fn save(&self, m: &HashMap<String, TaskStatus>) -> io::Result<()>;\n       fn append_receipt(&self, r: &Receipt) -> io::Result<()>;\n       fn load_receipts(&self) -> Vec<Receipt>;\n   }\n   and implement it for the existing `Store`. Keep `Store::new` and every existing inherent method working unchanged so that src/run.rs, src/router.rs, src/main.rs, tests/cli.rs and tests/e2e.rs compile with NO edits (implementing the trait must not shadow existing inherent methods in a breaking way \u2014 inherent methods still win, so this is safe).\n2. src/lib.rs: make the trait reachable (it already is if `pub mod state;` \u2014 otherwise add a `pub use`).\n3. tests/conformance.rs: write a GENERIC suite `fn conformance_suite<S: StateStore>(make: impl Fn() -> S)` and expose the individual checks as `#[test]`s that run it against `Store`:\n   - `conformance_torn_write_never_corrupts` \u2014 a leftover `run-state.json.tmpNNN` partial file never overrides the real status file;\n   - `conformance_append_only_receipts_never_overwrite` \u2014 two receipts with the same (task, attempt, ts) both survive;\n   - `conformance_receipts_order_by_timestamp` \u2014 `load_receipts()` is ascending by ts;\n   - `conformance_save_roundtrips_across_reopen` \u2014 save then load from a fresh handle yields an equal map.\n4. No new dependencies and no behavior change to the JSON store. The gate runs the full suite, fmt and `clippy -D warnings`.",
+      "manual": false,
+      "priority": 2
+    },
+    {
+      "id": "pd3-journal",
+      "title": "Add resume_from_agent_done_skips_agent \u2014 an attempt phase journal (effect sandwich) so a crash never re-runs the LLM",
+      "deps": [
+        "pd3-store",
+        "pd3-gate-replay"
+      ],
+      "scope": [
+        "src/state.rs",
+        "src/execute.rs",
+        "src/run.rs",
+        "tests/journal.rs"
+      ],
+      "accept": "grep -q 'fn resume_from_agent_done_skips_agent' tests/journal.rs && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "Goal: persist an attempt's phase boundaries so a restart resumes without re-running the expensive, non-replayable agent step. This is pi-durable's 'effect sandwich': commit intent -> perform effect -> commit outcome.\n\n1. src/state.rs:\n   #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]\n   #[serde(rename_all = \"snake_case\")]\n   pub enum AttemptPhase { #[default] Spawned, AgentDone, GatePassed }\n   Add `pub phase: Option<AttemptPhase>` to `TaskStatus` with `#[serde(default)]` (so old state files still load and JSON uses \"spawned\"/\"agent_done\"/\"gate_passed\").\n   Add `pub enum ResumeAction { RerunAgent, RerunGate, MergeOnly }` and `pub fn resume_action(phase: Option<AttemptPhase>) -> ResumeAction` mapping None|Spawned -> RerunAgent, AgentDone -> RerunGate, GatePassed -> MergeOnly. Unit-test the mapping in src/state.rs.\n2. src/execute.rs: `execute_task` persists the phase as it progresses, via `Store::save` (atomic temp+rename), BEFORE/AFTER each effect:\n   - immediately after the worktree+agent are about to run -> phase = Spawned (commit it BEFORE spawning the agent);\n   - after the agent exits successfully and its change is committed on the branch -> phase = AgentDone;\n   - after the acceptance gate passes -> phase = GatePassed.\n   `execute_task` needs access to the shared status map to write the phase; the simplest correct approach is to write ONLY that task's entry by load-modify-save on the Store at each boundary (document the small race window; the orchestrator is the single writer).\n3. src/run.rs startup heal: for each stale `running` task read its phase and act on `resume_action(phase)`:\n   - RerunAgent -> current behavior (reset to Ready, drop any worktree);\n   - RerunGate -> do NOT re-invoke the agent: keep/repair the task's worktree from its existing branch and let the attempt re-run only the acceptance gate, then merge on success;\n   - MergeOnly -> re-run only the merge, idempotently (if the branch is already merged / the task id is already in the base, record merged without a second merge).\n   If the worktree or branch is missing for RerunGate/MergeOnly, fall back to RerunAgent (always safe).\n4. tests/journal.rs (model it on tests/e2e.rs's `fixture`/`worker_json`/`gate_cmd` helpers):\n   - `#[test] fn journal_records_phase_after_successful_attempt()` \u2014 run one task to Done with the `example_agent` and assert the persisted `TaskStatus` shows the attempt reached at least AgentDone (and the task is Done).\n   - `#[test] fn resume_from_agent_done_skips_agent()` \u2014 THE test the gate requires:\n       * build the e2e fixture; set `FAKE_AGENT_EXIT=7` so that ANY agent invocation FAILS the attempt (making an accidental re-dispatch observable) and `TF_AGENT_ENV_PASSTHROUGH` to include it;\n       * in the scratch repo create branch `<branch_prefix>/A` from main, on it write the gate's expected file (e.g. DONE.txt) and commit, then return to main;\n       * pre-seed the state dir with `run-state.json` = `{\"A\":{\"state\":\"running\",\"attempts\":1,\"last_error\":null,\"phase\":\"agent_done\"}}`;\n       * call `run::run_loop(&cfg,&st,&RunOptions::default())` and assert it returns 0, the task is `Done`, and the repo contains the merged DONE.txt \u2014 i.e. the gate re-ran and the merge happened even though the agent would have failed.\n5. No new dependencies. Keep the FULL suite green; the gate also runs fmt + `clippy -D warnings`.",
+      "manual": false,
+      "priority": 2
+    }
+  ]
+}

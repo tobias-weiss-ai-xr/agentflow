@@ -1,0 +1,92 @@
+{
+  "_meta": {
+    "project": "agentflow-dogfood4",
+    "goal": "make agentflow's specs + test pyramid a real contract (archive specs, traceability, contract tests, scope enforcement, run.rs units, CI clippy)"
+  },
+  "tasks": [
+    {
+      "id": "r4-spec-archive",
+      "title": "Archive all 5 openspec changes into a living spec library at openspec/specs/ (reconcile the broken delta headers so `openspec validate --specs` passes)",
+      "deps": [],
+      "scope": [
+        "openspec/"
+      ],
+      "accept": "test -f openspec/specs/state/spec.md && test -z \"$(ls openspec/changes | grep -v '^archive$')\" && openspec validate --specs && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "GOAL: agentflow has 5 openspec changes marked Complete but NO living spec library (`openspec list --specs` prints 'No specs found'). Archive all 5 so `openspec/specs/<id>/spec.md` becomes the authoritative contract.\n\nUse the CLI: `openspec archive <name> --yes`. It applies the change's delta to the main spec library and moves the change to `openspec/changes/archive/<date>-<name>/`. It ABORTS ATOMICALLY on a bad delta and prints a precise reason \u2014 iterate until every archive succeeds.\n\nKNOWN-BAD DELTAS (already diagnosed \u2014 these are why a blind loop fails). Fix exactly these:\n  1. ORDER: archive `rust-orchestrator` FIRST (it is the base: it ADDs the initial requirements), then `agent-sandboxing`.\n  2. openspec/changes/multi-repo/specs/worktree/spec.md \u2014 it has `## MODIFIED Requirements` for 'Worktrees target the task's repository' and 'Self-heal spans all repositories', headers that do NOT exist in the base worktree spec. These are genuinely NEW requirements: change the section to `## ADDED Requirements`.\n  3. openspec/changes/worker-routing/specs/cli/spec.md \u2014 `## MODIFIED 'Cost report'` does not exist in the base cli spec. It is new: change the section to `## ADDED Requirements`.\n  4. openspec/changes/retry-context/specs/lifecycle/spec.md \u2014 MODIFIED 'Prompt rendering'. The archive REFUSES a MODIFIED block that drops scenarios already in the library: you must preserve the existing scenario 'template substitution' inside the modified block (keep the base scenario text verbatim, alongside the two new retry scenarios).\n  5. 'Cost receipts' (state) is MODIFIED by BOTH worker-routing and retry-context. Archive worker-routing FIRST, then make retry-context's block a COMPLETE replacement that contains the union: the base scenarios ('receipt appended per attempt', 'cost aggregates receipts'), worker-routing's additions ('failed attempts are recorded', 'legacy receipts stay loadable'), PLUS retry-context's own ('failed receipt carries the reason', 'legacy receipts parse with no error'). Merge the requirement prose too (outcome + error fields in one paragraph). If you archive retry-context first, mirror the change.\n\nA MODIFIED block is a REPLACEMENT, not a patch: it must reproduce every scenario that should survive.\n\nDONE when: `openspec list --specs` shows 7 specs (cli, config, lifecycle, sandbox, scheduling, state, worktree); `openspec validate --specs` reports 7 passed / 0 failed; `openspec/changes/` contains ONLY `archive/`; and the git tree is committed. Do NOT delete spec content to make validation pass \u2014 reconcile it. Keep the full Rust suite green.",
+      "manual": false,
+      "priority": 1
+    },
+    {
+      "id": "r4-scope-enforce",
+      "title": "Add out_of_scope_edit_fails_the_attempt \u2014 enforce task.scope on the agent's diff (today scope is prompt-only and never checked)",
+      "deps": [],
+      "scope": [
+        "src/execute.rs",
+        "tests/scope_enforcement.rs"
+      ],
+      "accept": "grep -q 'fn out_of_scope_edit_fails_the_attempt' tests/scope_enforcement.rs && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "GOAL: `task.scope` is currently only a sentence in the prompt ('Do not touch files outside the allowed scope') \u2014 nothing checks it, so an agent can edit anything. Make it an enforced contract.\n\n1. src/execute.rs: after the agent exits successfully and its change is committed on the attempt branch, compute the files the attempt changed, e.g. `git -C <worktree> diff --name-only <base_branch>...HEAD` (base branch = the branch the worktree was cut from; use the existing git helper in the module).\n   - An empty `task.scope` means 'any file' (current semantics \u2014 keep it).\n   - Otherwise every changed path MUST match at least one scope entry, using the SAME matcher the scheduler uses: `crate::scheduler::scope_overlap(changed_path, scope_entry)` (prefix/glob-prefix match). Reuse it; do not write a second matcher.\n   - On violation: fail the attempt with an error whose message contains 'out of scope' and names the offending paths, e.g. `attempt edited files outside task scope: src/other.rs (allowed: src/execute.rs)`. The violation must happen BEFORE merging, so the offending change never reaches the base branch.\n   - Exempt nothing by default; keep it strict.\n2. tests/scope_enforcement.rs \u2014 model it on tests/e2e.rs (`fixture`, `worker_json`, `gate_cmd`, the `example_agent` binary):\n   - `#[test] fn out_of_scope_edit_fails_the_attempt()`: one task with scope `[\"in_scope.txt\"]`; drive `example_agent` with FAKE_AGENT_TOUCH=out_of_scope.txt (remember it must ride TF_AGENT_ENV_PASSTHROUGH); assert run::run_loop reports the task Failed, `last_error` mentions 'out of scope', and out_of_scope.txt was NOT merged into the base repo.\n   - `#[test] fn in_scope_edit_is_merged()`: scope `[\"in_scope.txt\"]`, FAKE_AGENT_TOUCH=in_scope.txt -> task Done and the file exists in the base repo (proves you did not break the happy path).\nKeep the FULL suite green \u2014 many existing e2e tests use FAKE_AGENT_TOUCH, so check their scopes still pass (if an existing test writes a file outside its declared scope, that test's fixture scope must be widened, and say so in the commit message).",
+      "manual": false,
+      "priority": 1
+    },
+    {
+      "id": "r4-contract-prompt",
+      "title": "Add every_render_path_contains_scope_and_accept_cmd \u2014 a contract test pinning the prompt placeholder guarantees (guards the removed foreign-template bug)",
+      "deps": [],
+      "scope": [
+        "tests/contract_prompt.rs"
+      ],
+      "accept": "grep -q 'fn every_render_path_contains_scope_and_accept_cmd' tests/contract_prompt.rs && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "GOAL: pin the prompt-rendering CONTRACT as a test, so the class of bug fixed in commit f961ffe (a stray custom template whose placeholders did not match, silently dispatching agents with NO scope and NO acceptance gate) can never return silently.\n\nCreate tests/contract_prompt.rs with `#[test] fn every_render_path_contains_scope_and_accept_cmd()` that renders a prompt through EVERY supported path and asserts the guarantees hold. Render paths come from `Settings.prompt_file`: a MISSING file (=> built-in DEFAULT_PROMPT) and a PRESENT custom template. Build the Settings/task structs directly (see execute.rs's own unit tests for the shape) with a task whose scope is e.g. [\"src/one.rs\", \"src/two.rs\"] and accept is a distinctive command such as `cargo test --test contract_prompt`.\nAssert for EVERY path:\n  1. the rendered text contains the task's EXACT `accept` command string;\n  2. it contains every scope path;\n  3. it contains the task id and title;\n  4. NO unresolved placeholder or conditional marker leaks: the output must not contain any `{{`-token such as {{SCOPE}}, {{ACCEPT_CMD}}, {{#SCOPE}} or {{/SCOPE}}.\nCover at minimum: (a) missing template, (b) a custom template containing all placeholders, (c) a HOSTILE custom template that omits {{SCOPE}} and {{ACCEPT_CMD}} entirely (the hardening path must still append them), (d) a task with an EMPTY scope list.\nAdd a second test `#[test] fn hostile_template_is_reported_and_repaired()` proving the hostile case is the repaired one.\nIf render_prompt is private, use whatever public entry point exists (e.g. a pub(crate) re-export, or make the minimal visibility change needed \u2014 but do NOT change rendering behavior). Keep the full suite green. No new dependencies.",
+      "manual": false,
+      "priority": 2
+    },
+    {
+      "id": "r4-run-unit",
+      "title": "Add at least 4 unit tests to src/run.rs \u2014 the 859-line orchestrator core currently has ZERO #[cfg(test)] coverage",
+      "deps": [],
+      "scope": [
+        "src/run.rs"
+      ],
+      "accept": "test \"$(grep -c '#\\[test\\]' src/run.rs)\" -ge 4 && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "GOAL: src/run.rs (~860 lines: dispatch loop, startup self-heal/resume, merge, cost, status board, attach) has `#[cfg(test)]` count 0 \u2014 it is covered only through the slow E2E layer. Add fast unit tests for its PURE / locally-decidable logic.\n\n1. Add a `#[cfg(test)] mod tests` to src/run.rs with AT LEAST 4 `#[test]` functions. Prefer testing the pure helpers already present or trivially extractable, e.g.:\n   - `branch_exists` / `branch_merged_into_head` / `merge_commit_in_base` against a scratch git repo (create one in a temp dir the way src/worktree.rs's tests do: `git init -b main`, commit, branch, merge);\n   - the status-board renderer (`board_of` / `status_board`) \u2014 assert every task id and its state appear, that a Done task shows its attempt count, and that LAST ERROR is blanked when None;\n   - `status_json` / cost formatting \u2014 assert the JSON parses and carries the task fields;\n   - the resume plan selection used by startup heal (phase -> action) at the run.rs boundary.\n2. If a helper is nested inside another function, extract it to a `fn` (privately) \u2014 that is a pure refactor: NO behavior change, no signature changes to public APIs, no new dependencies.\n3. Tests must be hermetic: temp dirs under `std::env::temp_dir()`, git identity set repo-locally (`git config user.name/user.email`), and cleanup so parallel tests do not collide. NB: a previous flake came from tests sharing `temp_dir()` via `repo.parent()` \u2014 give each test its own uniquely-named subdirectory.\n4. The gate asserts `grep -c '#\\[test\\]' src/run.rs` is >= 4, so add real named tests. Keep the FULL existing suite green.",
+      "manual": false,
+      "priority": 2
+    },
+    {
+      "id": "r4-ci-harden",
+      "title": "Add clippy to the CI test job \u2014 CI currently runs only fmt + test, so clippy drift is invisible",
+      "deps": [],
+      "scope": [
+        ".github/workflows/ci.yml"
+      ],
+      "accept": "grep -q 'cargo clippy --all-targets -- -D warnings' .github/workflows/ci.yml && python3 -c \"import yaml,sys; yaml.safe_load(open('.github/workflows/ci.yml'))\" && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "GOAL: .github/workflows/ci.yml's `test` job runs `cargo fmt --check` and `cargo test --all-targets` but NOT clippy, so clippy warnings (round 2 found 13) are invisible to CI. agentflow's own gates run `cargo clippy --all-targets -- -D warnings`, so CI must enforce the same bar.\n\n1. In the `test` job, ensure the toolchain installs clippy (e.g. `dtolnay/rust-toolchain@stable` with `with: components: clippy`) and add a step running EXACTLY:\n     cargo clippy --all-targets -- -D warnings\n   Place it before the test step so warnings fail fast.\n2. Keep the existing `cargo fmt --check` and `cargo test --all-targets` steps. Do not remove the coverage job.\n3. The YAML must stay valid (`python3 -c \"import yaml;yaml.safe_load(open('.github/workflows/ci.yml'))\"`), and keep the existing comments explaining that E2E needs no network/LLM keys.\nThe gate greps for the exact clippy command and re-runs the full local suite.",
+      "manual": false,
+      "priority": 3
+    },
+    {
+      "id": "r4-spec-trace",
+      "title": "Add every_requirement_has_at_least_one_referencing_test \u2014 a spec<->test traceability checker so the new spec library is a contract, not prose",
+      "deps": [
+        "r4-spec-archive"
+      ],
+      "scope": [
+        "tests/spec_traceability.rs",
+        "tests/cli.rs",
+        "tests/e2e.rs",
+        "tests/conformance.rs",
+        "tests/journal.rs",
+        "tests/lock.rs",
+        "tests/gate_replay.rs",
+        "tests/scope_enforcement.rs",
+        "tests/contract_prompt.rs",
+        "docs/spec-traceability.md"
+      ],
+      "accept": "grep -q 'fn every_requirement_has_at_least_one_referencing_test' tests/spec_traceability.rs && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      "acceptance_prose": "GOAL: `openspec/specs/<id>/spec.md` is now the living contract (see the archived specs). Nothing links those requirements to tests, so nobody can answer 'which requirement is unverified?'. Add that check.\n\nMARKER CONVENTION (document it in docs/spec-traceability.md): a test that verifies a requirement carries a comment line\n    // spec: <spec-id>/<requirement-slug>\nimmediately above the `#[test]` fn. Slug = the requirement title lowercased, with every run of non-alphanumeric characters replaced by a single '-' and trimmed, e.g. `### Requirement: Cost receipts` -> `state/cost-receipts`, `### Requirement: Scope contention avoidance` -> `scheduling/scope-contention-avoidance`.\n\n1. tests/spec_traceability.rs:\n   - Parse every `openspec/specs/*/spec.md`, extract each `### Requirement:` title -> `<spec-id>/<slug>`.\n   - Walk the repo's test sources (tests/*.rs and src/**/*.rs) for `spec: <id>/<slug>` markers.\n   - `#[test] fn every_requirement_has_at_least_one_referencing_test()`: FAIL listing every requirement with no marker, with an actionable message naming the requirement and the expected marker text.\n   - `#[test] fn traceability_allowlist_stays_small()`: a small, explicitly-documented `const UNMAPPED: &[(&str, &str)]` of (requirement, reason) for requirements that genuinely cannot be tested yet; assert `UNMAPPED.len() <= 3` so the gap can only shrink. Do NOT use UNMAPPED to paper over requirements that have an obvious test.\n   - Sanity-check the checker itself: include a test that a deliberately-bogus requirement fails the matcher logic.\n2. Add the `// spec: ...` markers to the EXISTING tests that cover these requirements (you may also add new small tests where a requirement clearly has none). Map by reading the spec text: config loading -> config tests, worktree lifecycle/merge serialization -> worktree tests + tests/e2e.rs, scope contention -> scheduler tests, status persistence / cost receipts -> state tests, prompt rendering -> execute prompt tests, agent env allowlist -> execute/e2e env tests, run/status/cost/clean/validate commands -> tests/cli.rs, resume & self-heal -> tests/journal.rs, sandbox wrapper hook -> sandbox tests.\n3. Adding a comment above an existing test is a no-op for behavior; keep the full suite green. No new dependencies.\n4. Requires the spec library from r4-spec-archive to exist \u2014 do not edit openspec/ (it is not in your scope).",
+      "manual": false,
+      "priority": 2
+    }
+  ]
+}
