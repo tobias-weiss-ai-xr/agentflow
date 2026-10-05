@@ -1,6 +1,6 @@
 # Delta: cli
 
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Cost report
 
