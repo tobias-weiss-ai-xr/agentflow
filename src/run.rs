@@ -121,7 +121,15 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     let max_attempts = cfg.defaults.max_attempts;
 
     // --- self-heal: remove orphan worktrees from dead attempts ---
-    let mut status = store.load();
+    // A corrupt ledger is an ERROR, never a fresh campaign: refusing here is
+    // what stops a torn state file from silently re-buying every task.
+    let mut status = match store.load_checked() {
+        Ok(m) => m,
+        Err(err) => {
+            eprintln!("config error: {err}");
+            return 2;
+        }
+    };
     let stale_running: Vec<String> = status
         .iter()
         .filter(|(_, s)| s.state == TaskState::Running)
@@ -642,7 +650,16 @@ pub fn clean(cfg: &Config, st: &Settings, dry_run: bool) -> i32 {
 
 pub fn dry_run(cfg: &Config, st: &Settings) -> i32 {
     let depths = scheduler::compute_depths(cfg).unwrap_or_default();
-    let status = Store::new(st.state_dir.clone()).load();
+    let store = Store::new(st.state_dir.clone());
+    // Same strict read as the real run: the displayed plan must never
+    // disagree with what a run would do, so a corrupt ledger exits 2 too.
+    let status = match store.load_checked() {
+        Ok(m) => m,
+        Err(err) => {
+            eprintln!("config error: {err}");
+            return 2;
+        }
+    };
     // Full plan, not just the first ready batch: every task in dispatch-wave
     // order (depth ascending, then config order) with its readiness, so a
     // deep DAG is visible end-to-end before anything is dispatched.
