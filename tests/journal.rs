@@ -154,6 +154,7 @@ fn seed_running_state(f: &Fixture, phase: &str) {
 
 /// A successful attempt leaves a journal: the persisted TaskStatus shows the
 /// attempt reached at least AgentDone (and the task is Done).
+// spec: state/attempt-phase-journal
 #[test]
 fn journal_records_phase_after_successful_attempt() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());

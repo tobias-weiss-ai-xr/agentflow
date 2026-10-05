@@ -20,6 +20,7 @@ fn write(dir: &std::path::Path, name: &str, content: &str) -> PathBuf {
     p
 }
 
+// spec: lifecycle/gate-replay-contract
 #[test]
 fn gate_replay_defaults_to_true_and_parses() {
     // 1) Explicit `false` parses as false.

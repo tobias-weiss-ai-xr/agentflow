@@ -111,6 +111,7 @@ fn worker_json(max_attempts: u32) -> String {
 /// Agent edits `out_of_scope.txt` while the task only allows `in_scope.txt`:
 /// the attempt fails with an "out of scope" reason naming the offending path,
 /// and the change is never merged into the base repo.
+// spec: scheduling/scope-enforcement-on-agent-edits
 #[test]
 fn out_of_scope_edit_fails_the_attempt() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());

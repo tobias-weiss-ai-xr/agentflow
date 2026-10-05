@@ -13,6 +13,7 @@ fn tmpdir() -> PathBuf {
     d
 }
 
+// spec: state/single-writer-state-lock
 #[test]
 fn single_writer_lock_is_exclusive() {
     let dir = tmpdir();

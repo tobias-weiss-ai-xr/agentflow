@@ -154,6 +154,7 @@ pub fn conformance_suite<S: StateStore>(make: impl Fn() -> S) {
 }
 
 // spec: state/status-persistence
+// spec: state/storage-backend-conformance-suite
 #[test]
 fn conformance_torn_write_never_corrupts() {
     let dir = tmpdir();
