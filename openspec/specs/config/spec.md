@@ -41,7 +41,7 @@ THEN both parse and rank deterministically (CRITICAL > HIGH > number-ranked).
 
 ### Requirement: Worker schema loading
 
-`af` SHALL load a `workers.json` file of the form `{ "defaults": {...}, "workers": [...] }`. Each worker SHALL support `name`, `provider`, `model`, `api_base`, `enabled`. Validation SHALL reject duplicate worker names and a config with zero enabled workers.
+`af` SHALL load a `workers.json` file of the form `{ "defaults": {...}, "workers": [...] }`. Each worker SHALL support `name`, `provider`, `model`, `api_base`, `enabled`, and `args` — an array of extra agent-CLI arguments in which an absent field means an empty list. Validation SHALL reject duplicate worker names, a config with zero enabled workers, and any `args` entry that is an empty string (naming the worker). `args` entries SHALL be passed through to the agent CLI verbatim — agentflow never interprets or whitelists them (CLI-agnostic, ADR-1) — appended to the agent argv AFTER `--model` and BEFORE the `-p @file` prompt handoff, so a caller can reach CLI flags agentflow does not model (or override an earlier flag) while the prompt file always stays last.
 
 #### Scenario: valid workers load
 
@@ -52,6 +52,18 @@ THEN both workers are parsed and dispatch can use them.
 
 WHEN all workers have `enabled: false` or the worker list is empty
 THEN loading fails with an error.
+
+#### Scenario: Worker args are passed through to the agent CLI
+
+GIVEN a worker with `args: ["--model", "from-worker-args"]`
+WHEN a task dispatches on that worker
+THEN the agent CLI receives those entries in its argv after the built-in `--model` and before `-p @file`, and a worker with no `args` dispatches exactly as before.
+
+#### Scenario: Empty arg entries are rejected
+
+GIVEN a worker whose `args` array contains an empty string
+WHEN `workers.json` is loaded
+THEN loading fails with an error naming the worker.
 
 ### Requirement: Environment overrides
 

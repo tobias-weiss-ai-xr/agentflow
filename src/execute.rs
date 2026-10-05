@@ -460,6 +460,14 @@ fn spawn_argv(st: &Settings, worker: &Worker, prompt_path: &Path) -> Vec<String>
     argv.push(worker.provider.clone());
     argv.push("--model".to_string());
     argv.push(worker.model.clone());
+    // STABLE POSITION (do not move silently): the worker's extra `args` go
+    // AFTER `--model M` and BEFORE `-p @file`. After the built-in flags so a
+    // caller can override anything the earlier argv set (most CLIs take the
+    // last occurrence of a repeated flag); before `-p` so the prompt
+    // handoff always stays LAST — no extra arg can displace or swallow the
+    // prompt file the orchestrator rendered. Entries are passed through
+    // verbatim (CLI-agnostic per ADR-1).
+    argv.extend(worker.args.iter().cloned());
     argv.push("-p".to_string());
     argv.push(format!("@{}", prompt_path.display()));
     argv
@@ -600,6 +608,7 @@ mod tests {
             provider: "p".into(),
             model: "m".into(),
             api_key_env: api_key_env.map(str::to_string),
+            args: Vec::new(),
             ..Default::default()
         }
     }
@@ -751,6 +760,7 @@ model {{MODEL}}/{{PROVIDER}}
             model: "gpt-x".into(),
             enabled: true,
             cli: "c".into(),
+            args: Vec::new(),
             ..Default::default()
         };
         let out = render_prompt(
