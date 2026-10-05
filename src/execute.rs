@@ -83,7 +83,7 @@ pub fn execute_task(
     log_path: &Path,
 ) -> Outcome {
     let start = std::time::Instant::now();
-    let outcome = execute_attempt(ctx, worker, id, attempt, log_path);
+    let (outcome, tokens) = execute_attempt(ctx, worker, id, attempt, log_path);
     // Receipt for EVERY attempt (merged + failed) — routing/cost substrate.
     let outcome_name = match outcome {
         Outcome::Merged => "merged",
@@ -99,7 +99,7 @@ pub fn execute_task(
         worker: worker.name.clone(),
         model: worker.model.clone(),
         wall_clock_s: start.elapsed().as_secs_f64(),
-        tokens: None,
+        tokens,
         ts: now_ts(),
         outcome: outcome_name.to_string(),
         error,
@@ -147,16 +147,20 @@ fn record_phase(ctx: &ExecCtx, id: &str, phase: AttemptPhase) {
     let _ = ctx.store.save(&m);
 }
 
+/// One attempt's outcome plus the token usage captured from the agent
+/// CLI's JSON transcript (`None` in text mode, on gate-only retries, and
+/// whenever the stream yielded no usage — missing telemetry never fails
+/// an attempt).
 fn execute_attempt(
     ctx: &ExecCtx,
     worker: &Worker,
     id: &str,
     attempt: u32,
     log_path: &Path,
-) -> Outcome {
+) -> (Outcome, Option<u64>) {
     let task = match ctx.cfg.by_id.get(id) {
         Some(t) => t.clone(),
-        None => return Outcome::Failed(format!("unknown task {id}")),
+        None => return (Outcome::Failed(format!("unknown task {id}")), None),
     };
 
     // Multi-repo (ADR-11): worktree, branch, and merge target the task's repo.
@@ -169,9 +173,13 @@ fn execute_attempt(
     let (wt, reused) =
         match materialize_worktree(&repo, &ctx.st.worktree_root, id, &ctx.st.branch_prefix) {
             Ok(w) => w,
-            Err(e) => return Outcome::Failed(e),
+            Err(e) => return (Outcome::Failed(e), None),
         };
     let wt_path = wt.path.clone();
+    // Token usage lifted out of the agent's JSON transcript, when the
+    // worker opted into json output mode. Every failure path that did not
+    // run the agent reports `None`.
+    let mut tokens: Option<u64> = None;
     // Effect sandwich, boundary 1 (commit intent BEFORE the effect): the
     // attempt is live — worktree ready, agent about to spawn. A crash from
     // here resumes as RerunAgent (the agent's outcome is not durable yet).
@@ -211,7 +219,7 @@ fn execute_attempt(
         let _ = fs::create_dir_all(ctx.store.prompt_dir());
         if let Err(e) = fs::write(&prompt_path, &prompt) {
             cleanup(&repo, &wt);
-            return Outcome::Failed(format!("cannot write prompt: {e}"));
+            return (Outcome::Failed(format!("cannot write prompt: {e}")), None);
         }
 
         // 2) Agent CLI (external, OpenAI-compatible): --provider P --model M -p @file
@@ -237,9 +245,19 @@ fn execute_attempt(
             Duration::from_secs(ctx.st.agent_timeout_s),
             stall,
         );
-        let out_lines = agent_out.combined();
-        if !out_lines.is_empty() {
-            append(&out_lines);
+        // JSON output mode (r9-token-capture): the stream is telemetry,
+        // not the log — render it for the human and lift the token usage
+        // out of it. Text mode keeps the raw combined stream, byte-identical
+        // to the legacy behaviour.
+        let body = if worker.output == "json" {
+            let t = crate::transcript::parse(&agent_out.stdout);
+            tokens = t.usage.map(|u| u.total_tokens);
+            json_log_body(&t, &agent_out.stdout, &agent_out.stderr)
+        } else {
+            agent_out.combined()
+        };
+        if !body.is_empty() {
+            append(&body);
         }
         if !agent_out.passed() {
             cleanup(&repo, &wt);
@@ -264,7 +282,9 @@ fn execute_attempt(
                         .unwrap_or_else(|| "-".into())
                 )
             };
-            return Outcome::Failed(reason);
+            // The tokens were still spent (and captured) even though the
+            // attempt failed — the receipt is the cost ledger.
+            return (Outcome::Failed(reason), tokens);
         }
     }
 
@@ -280,14 +300,14 @@ fn execute_attempt(
             Ok(b) => b,
             Err(e) => {
                 cleanup(&repo, &wt);
-                return Outcome::Failed(e);
+                return (Outcome::Failed(e), None);
             }
         };
         let changed = match changed_paths(&wt_path, &base_branch) {
             Ok(c) => c,
             Err(e) => {
                 cleanup(&repo, &wt);
-                return Outcome::Failed(e);
+                return (Outcome::Failed(e), None);
             }
         };
         let violations = scope_violations(&changed, &task.scope);
@@ -298,11 +318,14 @@ fn execute_attempt(
                 task.scope.join(", ")
             ));
             cleanup(&repo, &wt);
-            return Outcome::Failed(format!(
-                "attempt edited files out of scope: {} (allowed: {})",
-                violations.join(", "),
-                task.scope.join(", ")
-            ));
+            return (
+                Outcome::Failed(format!(
+                    "attempt edited files out of scope: {} (allowed: {})",
+                    violations.join(", "),
+                    task.scope.join(", ")
+                )),
+                None,
+            );
         }
     }
 
@@ -342,14 +365,17 @@ fn execute_attempt(
                     append("-- gate failed; keeping committed branch for gate-only retry --");
                     worktree::remove_worktree_only(&repo, &wt);
                 }
-                return Outcome::Failed(format!(
-                    "acceptance gate failed (exit {}): {}",
-                    gate_out
-                        .code
-                        .map(|c| c.to_string())
-                        .unwrap_or_else(|| "-".into()),
-                    gate_out.combined().trim()
-                ));
+                return (
+                    Outcome::Failed(format!(
+                        "acceptance gate failed (exit {}): {}",
+                        gate_out
+                            .code
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "-".into()),
+                        gate_out.combined().trim()
+                    )),
+                    None,
+                );
             }
             // Effect sandwich, boundary 3 (commit outcome AFTER the gate
             // effect): only the merge remains — resume re-runs it
@@ -363,15 +389,37 @@ fn execute_attempt(
     if let Err(e) = worktree::merge(&repo, &wt.branch, &ctx.merge_locks, &msg) {
         append(&format!("-- merge failed: {e}"));
         cleanup(&repo, &wt);
-        return Outcome::Failed(e);
+        return (Outcome::Failed(e), None);
     }
     append("-- merged --");
     cleanup(&repo, &wt);
-    Outcome::Merged
+    (Outcome::Merged, tokens)
 }
 
 fn cleanup(repo: &Path, wt: &worktree::Worktree) {
     worktree::remove(repo, wt);
+}
+
+/// Log body for a JSON-mode agent run: the RENDERED transcript (raw JSONL
+/// in the log would be a debuggability regression — the log is how a human
+/// debugs an attempt), falling back to the raw stdout when nothing parsed
+/// (a CLI that ignored `--mode json` stays visible), with stderr appended
+/// verbatim — stderr is never parsed, it rides along exactly as the legacy
+/// combined stream carried it. Pure for testing.
+fn json_log_body(t: &crate::transcript::Transcript, stdout: &str, stderr: &str) -> String {
+    let mut body = if t.rendered.trim().is_empty() {
+        stdout.trim_end()
+    } else {
+        t.rendered.trim_end()
+    }
+    .to_string();
+    if !stderr.is_empty() {
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(stderr);
+    }
+    body
 }
 
 /// Worktree + mode for one attempt. `(wt, true)` = gate-only retry: the
@@ -460,6 +508,16 @@ fn spawn_argv(st: &Settings, worker: &Worker, prompt_path: &Path) -> Vec<String>
     argv.push(worker.provider.clone());
     argv.push("--model".to_string());
     argv.push(worker.model.clone());
+    // JSON output mode (r9-token-capture): ask the agent CLI for its JSON
+    // Lines transcript so token usage can be captured (see `transcript`).
+    // Placed with the other built-in flags — BEFORE the worker's own
+    // `args` (same last-wins rule: a worker can still override the mode)
+    // and never after the `-p @file` handoff. Text mode adds nothing, so
+    // its argv stays byte-identical to the legacy one.
+    if worker.output == "json" {
+        argv.push("--mode".to_string());
+        argv.push("json".to_string());
+    }
     // STABLE POSITION (do not move silently): the worker's extra `args` go
     // AFTER `--model M` and BEFORE `-p @file`. After the built-in flags so a
     // caller can override anything the earlier argv set (most CLIs take the
@@ -608,6 +666,7 @@ mod tests {
             provider: "p".into(),
             model: "m".into(),
             api_key_env: api_key_env.map(str::to_string),
+            output: "text".into(),
             args: Vec::new(),
             ..Default::default()
         }
@@ -655,6 +714,56 @@ mod tests {
         st.sandbox_cmd.clear();
         let argv = spawn_argv(&st, &worker(None), &PathBuf::from("p.md"));
         assert_eq!(argv[0], "pi", "unset wrapper is a no-op");
+    }
+
+    #[test]
+    fn spawn_argv_adds_mode_json_only_in_json_output_mode() {
+        let mut st = Settings::from_env();
+        st.sandbox_cmd = vec![];
+        // json mode: `--mode json` rides with the built-in flags — after
+        // `--model M`, before the worker's own `args`, never after `-p`.
+        let mut w = worker(None);
+        w.output = "json".into();
+        w.args = vec!["--flag".into()];
+        let argv = spawn_argv(&st, &w, &PathBuf::from("p.md"));
+        let mode = argv
+            .iter()
+            .position(|a| a == "--mode")
+            .expect("--mode present in json mode");
+        assert_eq!(argv[mode + 1], "json");
+        let model = argv.iter().position(|a| a == "--model").unwrap();
+        assert!(mode > model, "--mode follows --model: {argv:?}");
+        let flag = argv.iter().position(|a| a == "--flag").unwrap();
+        assert!(flag > mode, "worker args follow --mode: {argv:?}");
+        let p = argv.iter().position(|a| a == "-p").unwrap();
+        assert_eq!(p, argv.len() - 2, "-p @file stays LAST: {argv:?}");
+
+        // text mode (the default): the legacy argv, byte-identical — no
+        // --mode anywhere.
+        let text = spawn_argv(&st, &worker(None), &PathBuf::from("p.md"));
+        assert!(!text.contains(&"--mode".to_string()), "{text:?}");
+        assert_eq!(text.last().unwrap(), "@p.md");
+    }
+
+    #[test]
+    fn json_log_body_renders_appends_stderr_and_falls_back_to_raw() {
+        let t = crate::transcript::parse(
+            "{\"type\":\"message_end\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],\"usage\":{\"input\":1,\"output\":1,\"totalTokens\":2}}}\n",
+        );
+        // Rendered transcript + stderr appended verbatim.
+        assert_eq!(
+            json_log_body(&t, "RAW", "a warning on stderr"),
+            "assistant: hi\nusage: 1 in, 1 out, 2 total\na warning on stderr"
+        );
+        // Nothing parsed: the raw stdout stays visible so a CLI that
+        // ignored `--mode json` is still debuggable from the log.
+        let empty = crate::transcript::Transcript::default();
+        assert_eq!(
+            json_log_body(&empty, "plain text output", ""),
+            "plain text output"
+        );
+        // Nothing at all: nothing appended (the caller skips empty bodies).
+        assert_eq!(json_log_body(&empty, "", ""), "");
     }
 
     fn receipt_of(task: &str, attempt: u32, outcome: &str, error: Option<&str>) -> Receipt {
@@ -760,6 +869,7 @@ model {{MODEL}}/{{PROVIDER}}
             model: "gpt-x".into(),
             enabled: true,
             cli: "c".into(),
+            output: "text".into(),
             args: Vec::new(),
             ..Default::default()
         };

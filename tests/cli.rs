@@ -1044,6 +1044,7 @@ fn ucb1_selection_matches_the_spec_scenarios() {
 
     let w = |name: &str| agentflow::Worker {
         name: name.to_string(),
+        output: "text".into(),
         args: Vec::new(),
         ..Default::default()
     };

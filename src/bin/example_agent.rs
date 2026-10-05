@@ -89,7 +89,15 @@ fn main() -> ExitCode {
         let _ = std::fs::write(&probe, s);
     }
     let _ = std::fs::write(&touch, format!("{out}\n"));
-    println!("{out}");
+    if std::env::var("FAKE_AGENT_JSON").is_ok() {
+        let total: u64 = std::env::var("FAKE_AGENT_JSON_TOKENS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(13_525);
+        emit_json_transcript(&out, total);
+    } else {
+        println!("{out}");
+    }
 
     // Commit the work so merges carry it (ignore commit failures — the
     // acceptance gate is the real check).
@@ -103,4 +111,51 @@ fn main() -> ExitCode {
         .status();
 
     ExitCode::SUCCESS
+}
+
+/// Emit a realistic pi-style `--mode json` JSON Lines transcript on stdout:
+/// one JSON object per line, the assistant text split across two
+/// `text_delta` chunks (char-boundary safe), one tool call, a PARTIAL usage
+/// on the streaming events and the full/final usage on `message_end` /
+/// `turn_end` / `agent_end` (identical totals — the authoritative number is
+/// the last one seen).
+fn emit_json_transcript(text: &str, total: u64) {
+    let usage = |t: u64| {
+        serde_json::json!({
+            "input": t.saturating_sub(2),
+            "output": 2.min(t),
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "reasoning": 0,
+            "totalTokens": t,
+            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}
+        })
+    };
+    let partial = total.saturating_sub(1);
+    // Char-boundary-safe midpoint so a multi-byte summary splits cleanly.
+    let mid = text
+        .char_indices()
+        .nth(text.chars().count() / 2)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len());
+    let (a, b) = text.split_at(mid);
+    let events = [
+        serde_json::json!({"type": "session", "sessionId": "fake-session"}),
+        serde_json::json!({"type": "message_start", "message": {"role": "assistant", "content": []}}),
+        serde_json::json!({"type": "message_update", "usage": usage(partial),
+            "assistantMessageEvent": {"type": "tool_call", "toolCallId": "c1", "title": "inspect worktree"}}),
+        serde_json::json!({"type": "message_update", "usage": usage(partial),
+            "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": a}}),
+        serde_json::json!({"type": "message_update", "usage": usage(partial),
+            "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": b}}),
+        serde_json::json!({"type": "message_end", "message": {"role": "assistant",
+            "content": [{"type": "text", "text": text}], "provider": "example", "model": "stub",
+            "usage": usage(total), "stopReason": "stop"}}),
+        serde_json::json!({"type": "turn_end", "usage": usage(total)}),
+        serde_json::json!({"type": "agent_end", "messages": [], "usage": usage(total), "willRetry": false}),
+        serde_json::json!({"type": "agent_settled"}),
+    ];
+    for line in events {
+        println!("{line}");
+    }
 }

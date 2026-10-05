@@ -14,6 +14,7 @@ pub mod run;
 pub mod scheduler;
 pub mod state;
 pub mod subprocess;
+pub mod transcript;
 pub mod worktree;
 
 pub use config::{Config, Settings, Task, TaskState, Worker, WorkerDefaults};
