@@ -27,6 +27,19 @@ pub struct RunOptions {
 /// Reap finished attempts from the channel: worker busy-ness, routing
 /// stats, status transitions + persistence. Shared by the main loop and
 /// `--once` (single source of truth for the attempt bookkeeping).
+///
+/// `wait` is the wake-on-completion bound: when `Some(d)` the FIRST
+/// receive blocks up to `d` (`recv_timeout`), so the dispatcher is woken
+/// the moment an attempt finishes instead of idling through a poll
+/// interval — a timeout still returns, so the loop's deadline
+/// re-evaluation (deadlock detection, self-heal) keeps its schedule.
+/// `None` keeps the drain-only semantics (`--once`'s fast 200ms poll).
+///
+/// The parameter list is deliberately a flat bundle of the attempt
+/// bookkeeping shared verbatim by both call sites (main loop + `--once`);
+/// grouping them into a context struct would cost more indirection than
+/// the one extra argument saves.
+#[allow(clippy::too_many_arguments)] // flat bookkeeping bundle, see above
 fn reap(
     rx: &mpsc::Receiver<(String, String, Outcome)>,
     running: &Arc<Mutex<HashMap<String, ()>>>,
@@ -35,8 +48,16 @@ fn reap(
     status: &mut HashMap<String, TaskStatus>,
     store: &Store,
     max_attempts: u32,
+    wait: Option<Duration>,
 ) {
-    while let Ok((id, worker_name, outcome)) = rx.try_recv() {
+    let first = match wait {
+        Some(d) => rx.recv_timeout(d).ok(),
+        None => rx.try_recv().ok(),
+    };
+    for (id, worker_name, outcome) in first
+        .into_iter()
+        .chain(std::iter::from_fn(|| rx.try_recv().ok()))
+    {
         running.lock().unwrap().remove(&id);
         worker_busy
             .lock()
@@ -216,7 +237,19 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     // Measured routing (ADR-12): replay receipts into per-worker stats.
     let mut router = Router::from_receipts(&store.load_receipts());
     loop {
-        // Reap finished tasks.
+        // Reap finished tasks — BLOCKING while attempts are in flight, so
+        // a completion wakes the dispatcher immediately instead of it
+        // idling through the poll interval. poll_secs stays the UPPER
+        // BOUND on how long the loop may idle before re-evaluating
+        // (deadlock detection, self-heal and edge cases still re-check on
+        // schedule). With nothing in flight no completion can arrive (an
+        // attempt is registered in `running` before its thread is
+        // spawned), so drain without waiting and re-evaluate at once.
+        let wait = if running.lock().unwrap().is_empty() {
+            None
+        } else {
+            Some(Duration::from_secs(poll.max(1)))
+        };
         reap(
             &rx,
             &running,
@@ -225,6 +258,7 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
             &mut status,
             &store,
             max_attempts,
+            wait,
         );
 
         // Terminal conditions (judged on the in-scope tasks only).
@@ -319,6 +353,7 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                         &mut status,
                         &store,
                         max_attempts,
+                        None,
                     );
                     std::thread::sleep(Duration::from_millis(200));
                 }
@@ -327,7 +362,9 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
             }
         }
 
-        std::thread::sleep(Duration::from_secs(poll.max(1)));
+        // No trailing sleep: the next iteration's reap blocks on the
+        // completion channel while work is in flight (waking the instant
+        // an attempt finishes) and bounds its wait by poll_secs otherwise.
     }
 }
 
