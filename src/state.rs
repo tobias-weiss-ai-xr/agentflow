@@ -1,7 +1,10 @@
 //! State: atomic JSON persistence of task status + cost receipts.
 //!
-//! One writer (the orchestrator process), temp-file + rename so a torn write
-//! never leaves corrupt JSON (ADR-3, ch. 6.2 of arc42).
+//! Writes go to a unique temp file (per-process id + a process-global atomic
+//! sequence), are fsync'd, then atomically renamed over `run-state.json` — so
+//! even several attempt threads saving at once can never corrupt the readable
+//! state. A state file that exists but does not parse is reported, never
+//! silently treated as an empty campaign (ADR-3, ch. 6.2 of arc42).
 
 use crate::config::TaskState;
 use serde::{Deserialize, Serialize};
@@ -10,6 +13,7 @@ use std::fs::OpenOptions;
 use std::io;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,22 +133,86 @@ impl Store {
         self.dir.join("run-state.json")
     }
 
+    /// Read the status map for read-only display paths.
+    ///
+    /// LOUD on corruption: a state file that exists but cannot be parsed is
+    /// reported to stderr (naming the file) and only then treated as empty —
+    /// it is never silently presented as a fresh campaign. Any path that
+    /// would ACT on the result must use [`Store::load_checked`] instead.
     pub fn load(&self) -> HashMap<String, TaskStatus> {
-        match std::fs::read_to_string(self.status_file()) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-            Err(_) => HashMap::new(),
+        match self.load_checked() {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!(
+                    "warning: {e}; showing an empty campaign (the unreadable file was left in place)"
+                );
+                HashMap::new()
+            }
         }
     }
 
+    /// Fallible read of the status map.
+    ///
+    /// * `Ok(empty)` when the state file does not exist — a fresh campaign is
+    ///   legitimate, not an error;
+    /// * `Err` (naming the path and the parse problem) when the file exists
+    ///   but cannot be read or is not a task map — the file is never
+    ///   modified or overwritten, it is evidence;
+    /// * `Ok(map)` otherwise.
+    pub fn load_checked(&self) -> io::Result<HashMap<String, TaskStatus>> {
+        let path = self.status_file();
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
+            Err(e) => {
+                return Err(io::Error::new(
+                    e.kind(),
+                    format!("read state file {}: {e}", path.display()),
+                ));
+            }
+        };
+        serde_json::from_str::<HashMap<String, TaskStatus>>(&raw).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("parse state file {}: {e}", path.display()),
+            )
+        })
+    }
+
+    /// Atomically persist `m` to `run-state.json`.
+    ///
+    /// Each call writes its own temp file, fsyncs it, then renames it over
+    /// the final path. Concurrent callers never share or truncate one
+    /// another's temp file, and the rename is the single atomic install step.
+    /// The temp file is removed if the write or the rename fails.
     pub fn save(&self, m: &HashMap<String, TaskStatus>) -> io::Result<()> {
         std::fs::create_dir_all(&self.dir)?;
-        let tmp = self
-            .dir
-            .join(format!("run-state.json.tmp{}", std::process::id()));
         let data = serde_json::to_vec_pretty(m).map_err(io::Error::other)?;
-        std::fs::write(&tmp, data)?;
-        std::fs::rename(&tmp, self.status_file())?;
-        Ok(())
+        let tmp = self.temp_file();
+        let installed = std::fs::File::create(&tmp)
+            .and_then(|mut f| {
+                // fsync before rename: a power loss cannot install a
+                // truncated or empty ledger.
+                f.write_all(&data)?;
+                f.sync_all()
+            })
+            .and_then(|_| std::fs::rename(&tmp, self.status_file()));
+        if installed.is_err() {
+            // Never leak a partial temp file for the next process to guess at.
+            let _ = std::fs::remove_file(&tmp);
+        }
+        installed
+    }
+
+    /// Unique temp path for one save: the pid separates processes, the
+    /// process-global atomic sequence separates concurrent threads. No two
+    /// writers ever share it (unlike the old `tmp{pid}`, which every thread
+    /// in the process truncated and interleaved).
+    fn temp_file(&self) -> PathBuf {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        self.dir
+            .join(format!("run-state.json.tmp{}.{}", std::process::id(), seq))
     }
 
     pub fn log_dir(&self) -> PathBuf {
