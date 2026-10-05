@@ -2,6 +2,7 @@
 //! by the CLI (spec: cli, scheduling, state).
 
 use crate::config::{Config, Settings, TaskState};
+use crate::cost::{basis as declared_basis, estimate_usd, size_ratio, Basis};
 use crate::execute::{self, ExecCtx, Outcome};
 use crate::gate;
 use crate::router::Router;
@@ -11,7 +12,7 @@ use crate::state::{
 };
 use crate::subprocess::{self, EnvMode};
 use crate::worktree;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
@@ -1102,6 +1103,135 @@ type ReasonCount = (String, f64, usize);
 /// One aggregated cause row: (cause, seconds, attempts, per-reason sub-counts).
 type CauseAggregate = (String, f64, usize, Vec<ReasonCount>);
 
+/// Every worker in `cfg.workers` paired with its DECLARED basis
+/// ([`declared_basis`]): a worker present in the config but declaring
+/// nothing keeps an entry (`None`), so it stays distinguishable from a
+/// worker ABSENT from the config (no entry at all) — both render `-` in
+/// the COST column, but only the absent one is footnoted.
+fn worker_bases(cfg: &Config) -> Vec<(String, Option<Basis>)> {
+    cfg.workers
+        .iter()
+        .map(|w| {
+            (
+                w.name.clone(),
+                declared_basis(w.params_b, w.price_per_mtok_usd),
+            )
+        })
+        .collect()
+}
+
+/// The DECLARED bases of every worker — the reference set
+/// [`size_ratio`] measures a `Sized` worker against. Because it spans
+/// EVERY worker in `cfg.workers` (not just those with receipts), the
+/// CHEAPEST declaring worker is always exactly `1.00x` in the report,
+/// whatever the selected window.
+fn declared_bases(bases: &[(String, Option<Basis>)]) -> Vec<Basis> {
+    bases.iter().filter_map(|(_, b)| *b).collect()
+}
+
+/// The basis a receipt's worker runs on: `None` when the worker declares
+/// neither field OR is absent from `cfg.workers` entirely.
+fn basis_of(worker: &str, bases: &[(String, Option<Basis>)]) -> Option<Basis> {
+    bases
+        .iter()
+        .find(|(name, _)| name == worker)
+        .and_then(|(_, b)| *b)
+}
+
+/// The ONE basis line printed above the tables, so a relative proxy can
+/// never be misread as money. Chosen from the DECLARATIONS alone: any
+/// worker declaring a price puts the report on the prices basis (with a
+/// note when some other worker declares only `params_b`), else the
+/// `params_b` proxy, else an honest `none`.
+fn basis_line(bases: &[(String, Option<Basis>)]) -> String {
+    let any_priced = bases
+        .iter()
+        .any(|(_, b)| matches!(b, Some(Basis::Priced(_))));
+    let any_sized = bases
+        .iter()
+        .any(|(_, b)| matches!(b, Some(Basis::Sized(_))));
+    if any_priced {
+        let mut line = "cost basis: declared prices (USD per 1M tokens)".to_string();
+        if any_sized {
+            line.push_str("; some workers declare only params_b");
+        }
+        line
+    } else if any_sized {
+        "cost basis: params_b proxy (relative; cheapest declared worker = 1.00x)".to_string()
+    } else {
+        "cost basis: none (no worker declares params_b or price_per_mtok_usd)".to_string()
+    }
+}
+
+/// The COST cell for one WORKER row: real dollars (`$` + 4 decimals) from
+/// a declared price via [`estimate_usd`]; a relative RATE (`N.NNx`, 2
+/// decimals — a PROXY, never a `$`) from a declared `params_b` via
+/// [`size_ratio`]; `-` when the worker declares neither basis, is absent
+/// from `cfg.workers`, or its receipts record no tokens (legacy receipts).
+fn worker_cost_cell(basis: Option<Basis>, tokens: Option<u64>, all_declared: &[Basis]) -> String {
+    match (basis, tokens) {
+        (Some(Basis::Priced(price)), Some(t)) => format!("${:.4}", estimate_usd(t, price)),
+        (Some(Basis::Sized(params)), Some(t)) if t > 0 => {
+            size_ratio(params, all_declared).map_or_else(|| "-".into(), |r| format!("{r:.2}x"))
+        }
+        _ => "-".into(),
+    }
+}
+
+/// The COST cell for one TASK row, which spans every selected attempt of
+/// the task — possibly on DIFFERENT workers:
+///
+/// * every attempt `Priced` → the SUM of the per-attempt dollars;
+/// * every attempt `Sized` → the TOKEN-WEIGHTED MEAN rate ratio
+///   (Σ tokens·ratio ÷ Σ tokens), the blend the row's tokens actually ran;
+/// * anything else — a worker declaring nothing, a receipt naming a worker
+///   absent from `cfg.workers`, or a receipt with no `tokens` (legacy) —
+///   makes the whole row `-`: one unknown term must not silently
+///   understate a figure that reads as exact.
+fn task_cost_cell(
+    rs: &[&Receipt],
+    bases: &[(String, Option<Basis>)],
+    all_declared: &[Basis],
+) -> String {
+    let mut dollars = 0.0; // exact only when every attempt is Priced
+    let mut weighted = 0.0; // Σ tokens·ratio — exact only when every attempt is Sized
+    let mut tokens = 0.0;
+    let mut priced = true;
+    let mut sized = true;
+    for r in rs {
+        match basis_of(&r.worker, bases) {
+            Some(Basis::Priced(price)) => {
+                sized = false;
+                match r.tokens {
+                    Some(t) => {
+                        dollars += estimate_usd(t, price);
+                        tokens += t as f64;
+                    }
+                    None => return "-".into(),
+                }
+            }
+            Some(Basis::Sized(params)) => {
+                priced = false;
+                match (r.tokens, size_ratio(params, all_declared)) {
+                    (Some(t), Some(ratio)) => {
+                        weighted += t as f64 * ratio;
+                        tokens += t as f64;
+                    }
+                    _ => return "-".into(),
+                }
+            }
+            None => return "-".into(),
+        }
+    }
+    if priced {
+        format!("${dollars:.4}")
+    } else if sized && tokens > 0.0 {
+        format!("{:.2}x", weighted / tokens)
+    } else {
+        "-".into()
+    }
+}
+
 /// `af cost`: aggregate receipts (wall-clock truth, ADR-9). The table rows
 /// honor `filter.task`; the TOTAL line and the per-worker trust block are
 /// computed over the window-selected receipts only — with no window flags
@@ -1118,9 +1248,18 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
     for p in &problems {
         lines.push_str(&format!("warning: {p}\n"));
     }
+    // Cost basis (r10-cost-report): one line ABOVE the tables states the
+    // units of the COST column before any number is read, so a relative
+    // proxy can never be misread as money. `all_declared` spans EVERY
+    // worker in cfg.workers, so the cheapest declaring worker is always
+    // exactly `1.00x` on the proxy scale.
+    let bases = worker_bases(cfg);
+    let all_declared = declared_bases(&bases);
+    lines.push_str(&basis_line(&bases));
+    lines.push('\n');
     lines.push_str(&format!(
-        "{:<12} {:<9} {:<10} {:<9} {}",
-        "TASK", "ATTEMPTS", "WALL_S", "TOKENS", "MODEL"
+        "{:<12} {:<9} {:<10} {:<9} {:<8} {}",
+        "TASK", "ATTEMPTS", "WALL_S", "TOKENS", "COST", "MODEL"
     ));
     let mut total: f64 = 0.0;
     for t in &cfg.tasks {
@@ -1149,12 +1288,17 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
             let tokens = token_sum
                 .map(|t| t.to_string())
                 .unwrap_or_else(|| "-".into());
+            // Estimated expense for the whole row (dollars when every
+            // attempt is Priced, the token-weighted mean rate when every
+            // attempt is Sized, `-` otherwise).
+            let cost_cell = task_cost_cell(&rs, &bases, &all_declared);
             lines.push_str(&format!(
-                "\n{:<12} {:<9} {:<10.1} {:<9} {}",
+                "\n{:<12} {:<9} {:<10.1} {:<9} {:<8} {}",
                 t.id,
                 rs.len(),
                 wall,
                 tokens,
+                cost_cell,
                 rs[0].model
             ));
         }
@@ -1168,6 +1312,10 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
     // receipt VERDICTS. Interrupted receipts (r9-interrupted) are excluded
     // from wins AND total: they carry no information about the worker.
     let mut by_worker: Vec<(String, u64, u64)> = Vec::new();
+    // The worker's summed recorded tokens over the same selected VERDICT
+    // receipts that form its row — the input to its COST cell. `None`
+    // until a receipt actually carries tokens (legacy receipts never do).
+    let mut worker_tokens: HashMap<String, Option<u64>> = HashMap::new();
     for r in selected.iter().copied().filter(|r| r.counts_as_verdict()) {
         let e = by_worker.iter_mut().find(|(n, _, _)| n == &r.worker);
         let won = r.outcome == "merged";
@@ -1180,19 +1328,34 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
             }
             None => by_worker.push((r.worker.clone(), u64::from(won), 1)),
         }
+        let t = worker_tokens.entry(r.worker.clone()).or_insert(None);
+        if let Some(v) = r.tokens {
+            *t = Some(t.unwrap_or(0) + v);
+        }
     }
     if !by_worker.is_empty() {
         by_worker.sort();
         lines.push_str(&format!(
-            "\n\n{:<14} {:<11} {}",
-            "WORKER", "WINS/TOTAL", "TRUST"
+            "\n\n{:<14} {:<11} {} {}",
+            "WORKER", "WINS/TOTAL", "TRUST", "COST"
         ));
         for (name, w, n) in by_worker {
+            // Estimated expense for the worker's whole recorded token spend
+            // on the selected window: dollars from a declared price, a
+            // relative rate from `params_b`, `-` when neither is declared,
+            // the worker is absent from the config, or no tokens were ever
+            // recorded (legacy receipts).
+            let cost_cell = worker_cost_cell(
+                basis_of(&name, &bases),
+                worker_tokens.get(name.as_str()).copied().flatten(),
+                &all_declared,
+            );
             lines.push_str(&format!(
-                "\n{:<14} {:<11} {:.2}",
+                "\n{:<14} {:<11} {:.2} {}",
                 name,
                 format!("{w}/{n}"),
-                w as f64 / n as f64
+                w as f64 / n as f64,
+                cost_cell
             ));
         }
     }
@@ -1293,6 +1456,23 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
                 }
             }
         }
+    }
+    // Footnote (r10-cost-report): receipts naming a worker ABSENT from
+    // cfg.workers render as `-`; this line names them (sorted, deduped)
+    // with the attempt count. Historical receipts routinely outlive config
+    // edits, so this is a NOTE — never an error, never blocking the report.
+    let mut unknown: BTreeMap<&str, usize> = BTreeMap::new();
+    for r in &selected {
+        if !bases.iter().any(|(name, _)| name == &r.worker) {
+            *unknown.entry(r.worker.as_str()).or_insert(0) += 1;
+        }
+    }
+    let unknown_attempts: usize = unknown.values().sum();
+    if unknown_attempts > 0 {
+        let names = unknown.keys().copied().collect::<Vec<_>>().join(", ");
+        lines.push_str(&format!(
+            "\nnote: {unknown_attempts} attempt(s) name a worker absent from the config, shown as '-': {names}"
+        ));
     }
     lines
 }
@@ -1419,14 +1599,28 @@ mod tests {
     }
 
     fn cfg_with(tasks: Vec<Task>) -> Config {
+        cfg_with_workers(tasks, Vec::new())
+    }
+
+    /// A config that also DECLARES its workers — the cost report resolves
+    /// every COST cell (and the absent-worker footnote) against them.
+    fn cfg_with_workers(tasks: Vec<Task>, workers: Vec<crate::config::Worker>) -> Config {
         let by_id = tasks.iter().map(|t| (t.id.clone(), t.clone())).collect();
         Config {
             tasks,
-            workers: vec![],
+            workers,
             defaults: WorkerDefaults::default(),
             by_id,
             repos: BTreeMap::new(),
             warnings: vec![],
+        }
+    }
+
+    /// A worker with no declared cost basis (neutral — COST cells `-`).
+    fn worker_named(name: &str) -> crate::config::Worker {
+        crate::config::Worker {
+            name: name.into(),
+            ..Default::default()
         }
     }
 
@@ -1759,7 +1953,7 @@ mod tests {
     fn cost_aggregates_wall_clock_and_filters_by_task() {
         let base = unique_base("cost");
         let st = settings(base.clone());
-        let cfg = cfg_with(vec![task("A"), task("B")]);
+        let cfg = cfg_with_workers(vec![task("A"), task("B")], vec![worker_named("w1")]);
         let store = Store::new(st.state_dir.clone());
         let receipt = |task: &str, wall: f64, outcome: &str| Receipt {
             task: task.into(),
@@ -1890,7 +2084,13 @@ mod tests {
     fn cost_last_keeps_the_latest_attempt_per_task_without_double_counting() {
         let base = unique_base("cost-last");
         let st = settings(base.clone());
-        let cfg = cfg_with(vec![task("A"), task("B"), task("C")]);
+        // w1/w2 are declared (no cost basis) so the report's COST cells are
+        // `-` and no absent-worker footnote distracts from the window
+        // semantics under test.
+        let cfg = cfg_with_workers(
+            vec![task("A"), task("B"), task("C")],
+            vec![worker_named("w1"), worker_named("w2")],
+        );
         let store = Store::new(st.state_dir.clone());
         let rcpt =
             |task: &str, attempt: u32, ts: u64, wall: f64, worker: &str, outcome: &str| Receipt {
@@ -2000,7 +2200,10 @@ mod tests {
     fn cost_since_windows_receipts_and_composes_with_last() {
         let base = unique_base("cost-since");
         let st = settings(base.clone());
-        let cfg = cfg_with(vec![task("A")]);
+        let cfg = cfg_with_workers(
+            vec![task("A")],
+            vec![worker_named("w1"), worker_named("w2")],
+        );
         let store = Store::new(st.state_dir.clone());
         let rcpt = |attempt: u32, ts: u64, wall: f64, worker: &str, outcome: &str| Receipt {
             task: "A".into(),
@@ -2075,5 +2278,122 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // --- cost cells (r10-cost-report) -------------------------------------
+
+    #[test]
+    fn worker_cost_cell_renders_dollars_ratios_and_placeholders() {
+        // Cheapest declared Sized basis is 4B, so 8B runs at exactly 2x.
+        let all = vec![Basis::Sized(4.0), Basis::Sized(8.0)];
+        // Real money: 500k tokens at $2/Mtok, four decimals.
+        assert_eq!(
+            worker_cost_cell(Some(Basis::Priced(2.0)), Some(500_000), &all),
+            "$1.0000"
+        );
+        // Proxy RATE relative to the cheapest declared basis — `x`, never `$`.
+        assert_eq!(
+            worker_cost_cell(Some(Basis::Sized(4.0)), Some(1), &all),
+            "1.00x"
+        );
+        assert_eq!(
+            worker_cost_cell(Some(Basis::Sized(8.0)), Some(1), &all),
+            "2.00x"
+        );
+        // Legacy receipts (no tokens) and a zero-token sum degrade to `-`.
+        assert_eq!(worker_cost_cell(Some(Basis::Priced(2.0)), None, &all), "-");
+        assert_eq!(worker_cost_cell(Some(Basis::Sized(8.0)), None, &all), "-");
+        assert_eq!(
+            worker_cost_cell(Some(Basis::Sized(8.0)), Some(0), &all),
+            "-"
+        );
+        // No declared basis (or a worker absent from the config): `-`.
+        assert_eq!(worker_cost_cell(None, Some(1), &all), "-");
+        // No Sized basis to relate to: never invent a reference rate.
+        assert_eq!(worker_cost_cell(Some(Basis::Sized(8.0)), Some(1), &[]), "-");
+    }
+
+    #[test]
+    fn task_cost_cell_sums_dollars_blends_ratios_or_degrades() {
+        let bases = vec![
+            ("pw".to_string(), Some(Basis::Priced(2.0))),
+            ("sw".to_string(), Some(Basis::Sized(8.0))),
+            ("cw".to_string(), Some(Basis::Sized(4.0))),
+            ("nw".to_string(), None),
+        ];
+        let all = vec![Basis::Sized(4.0), Basis::Sized(8.0)];
+        let rcpt = |worker: &str, tokens: Option<u64>| Receipt {
+            task: "A".into(),
+            attempt: 1,
+            worker: worker.into(),
+            model: "m".into(),
+            wall_clock_s: 1.0,
+            tokens,
+            ts: 1,
+            outcome: "merged".into(),
+            error: None,
+        };
+        // Every attempt Priced: the dollars SUM (500k + 250k at $2/Mtok).
+        let r1 = rcpt("pw", Some(500_000));
+        let r2 = rcpt("pw", Some(250_000));
+        assert_eq!(task_cost_cell(&[&r1, &r2], &bases, &all), "$1.5000");
+        // Every attempt Sized: the TOKEN-WEIGHTED MEAN rate — 300k at 2x
+        // blended with 100k at 1x is (600k + 100k) / 400k = 1.75x.
+        let big = rcpt("sw", Some(300_000));
+        let small = rcpt("cw", Some(100_000));
+        assert_eq!(task_cost_cell(&[&big, &small], &bases, &all), "1.75x");
+        // A price and a parameter count are incommensurable: mixed rows are
+        // `-`, never a converted figure.
+        let r1 = rcpt("pw", Some(1));
+        let r2 = rcpt("sw", Some(1));
+        assert_eq!(task_cost_cell(&[&r1, &r2], &bases, &all), "-");
+        // A worker with no basis, or absent from the config entirely: `-`.
+        let r = rcpt("nw", Some(1));
+        assert_eq!(task_cost_cell(&[&r], &bases, &all), "-");
+        let r = rcpt("ghost", Some(1));
+        assert_eq!(task_cost_cell(&[&r], &bases, &all), "-");
+        // One legacy receipt (no tokens) makes the row `-` — its expense is
+        // unknown, so a figure that reads as exact would understate it.
+        let r1 = rcpt("pw", Some(1));
+        let r2 = rcpt("pw", None);
+        assert_eq!(task_cost_cell(&[&r1, &r2], &bases, &all), "-");
+        let r1 = rcpt("sw", Some(1));
+        let r2 = rcpt("sw", None);
+        assert_eq!(task_cost_cell(&[&r1, &r2], &bases, &all), "-");
+        // A row whose tokens sum to zero has no weighted-mean denominator.
+        let r = rcpt("sw", Some(0));
+        assert_eq!(task_cost_cell(&[&r], &bases, &all), "-");
+        // No Sized basis to relate to: never invent a reference rate.
+        let r = rcpt("sw", Some(1));
+        assert_eq!(task_cost_cell(&[&r], &bases, &[]), "-");
+    }
+
+    #[test]
+    fn basis_line_names_prices_the_proxy_or_none() {
+        let priced = vec![("w".to_string(), Some(Basis::Priced(1.0)))];
+        let mixed = vec![
+            ("w".to_string(), Some(Basis::Priced(1.0))),
+            ("v".to_string(), Some(Basis::Sized(8.0))),
+        ];
+        let sized = vec![("v".to_string(), Some(Basis::Sized(8.0)))];
+        let none = vec![("n".to_string(), None)];
+        assert_eq!(
+            basis_line(&priced),
+            "cost basis: declared prices (USD per 1M tokens)"
+        );
+        // Both kinds declared: say so, so the mixed `$` / `N.NNx` cells on
+        // one report are explained before they are read.
+        assert_eq!(
+            basis_line(&mixed),
+            "cost basis: declared prices (USD per 1M tokens); some workers declare only params_b"
+        );
+        assert_eq!(
+            basis_line(&sized),
+            "cost basis: params_b proxy (relative; cheapest declared worker = 1.00x)"
+        );
+        assert_eq!(
+            basis_line(&none),
+            "cost basis: none (no worker declares params_b or price_per_mtok_usd)"
+        );
     }
 }

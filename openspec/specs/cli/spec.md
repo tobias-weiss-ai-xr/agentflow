@@ -53,6 +53,26 @@ include a TOKENS column summing the `tokens` recorded on the selected
 receipts, showing `-` when none are recorded, and the report SHALL name
 every unreadable receipt file (one warning line per file) without failing.
 
+`af cost` SHALL also estimate EXPENSE, so a campaign whose providers report
+no price can still see who is burning the budget. ONE basis line SHALL be
+printed above the tables stating the basis in force: `declared prices
+(USD per 1M tokens)` when any worker declares `price_per_mtok_usd` (with a
+note when some workers declare only `params_b`), `params_b proxy (relative;
+cheapest declared worker = 1.00x)` when any declares `params_b` and none a
+price, or `none` otherwise — so a relative proxy can never be misread as
+money. Both tables SHALL carry a COST column (immediately after TOKENS in
+the task table, immediately after TRUST in the worker table): `$<usd>`
+with four decimals from a declared price (real money, via the cost model's
+`estimate_usd`), `N.NNx` with two decimals from the `params_b` proxy (the
+rate relative to the cheapest declared `params_b` — never a `$`), or `-`
+when the worker declares neither basis, is absent from the config, or the
+receipts carry no tokens. A task row spanning several attempts SHALL sum
+the dollars when every attempt is priced, use the token-weighted mean ratio
+when every attempt is sized, and show `-` otherwise. Receipts naming a
+worker absent from `cfg.workers` SHALL render as `-` and be listed in ONE
+footnote line after the tables (attempt count plus the sorted, deduplicated
+names) — a note, never an error, never blocking the report.
+
 #### Scenario: trust section lists each worker with history
 
 GIVEN receipts exist for workers w1 (2 merged, 1 failed) and w2 (1 merged)
@@ -88,3 +108,21 @@ THEN the TOKENS column shows the summed tokens for the recorded receipts and `-`
 GIVEN a receipt whose `outcome` is `interrupted` (an attempt lost when the orchestrator was killed mid-attempt)
 WHEN `af cost` runs
 THEN the report shows a distinct `INTERRUPTED` line for it and its worker's `WINS/TOTAL` is unchanged by it.
+
+#### Scenario: Cost report shows relative expense when no provider reports a price
+
+GIVEN two workers declaring different `params_b` (8 and 40) and receipts carrying `tokens`, one of which has no `tokens`
+WHEN `af cost` runs
+THEN one basis line above the tables says `cost basis: params_b proxy (relative; cheapest declared worker = 1.00x)`, the cheapest declaring worker shows `1.00x`, the bigger one shows its real ratio (`5.00x`), and the attempt whose receipt has no tokens shows `-` — and no `$` appears anywhere.
+
+#### Scenario: A declared price is reported as dollars
+
+GIVEN a worker declaring `price_per_mtok_usd` (and also `params_b`) with a receipt carrying `tokens`
+WHEN `af cost` runs
+THEN its COST cell shows `$<usd>` computed from its tokens with four decimals and never an `x` ratio, and the basis line says `declared prices` (noting any workers that declare only `params_b`).
+
+#### Scenario: Receipts naming a worker absent from the config are footnoted
+
+GIVEN receipts naming workers that are not in `cfg.workers` alongside receipts for a configured worker
+WHEN `af cost` runs
+THEN it exits 0, shows `-` for the absent workers' rows, and prints one footnote line after the tables listing the absent names (sorted, deduplicated) with the attempt count.

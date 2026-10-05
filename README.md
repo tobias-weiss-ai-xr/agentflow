@@ -104,6 +104,23 @@ The table also carries a `TOKENS` column: it sums the `tokens` recorded on
 the selected receipts and shows `-` when they carry none, so a report over
 legacy receipts reads exactly as it did before the column existed.
 
+Both tables also carry a `COST` column — an estimate of expense derived
+from the basis each worker DECLARES (see `params_b` / `price_per_mtok_usd`
+in the worker schema below), so the report answers "who is burning my
+budget?" even when no provider reports a price. A worker with a declared
+price shows real dollars (`$` + four decimals, computed from its recorded
+tokens — summed over a task row's attempts); a worker with only `params_b`
+shows its relative RATE (`1.25x` — a task row spanning several workers
+shows the token-weighted mean); and `-` appears when nothing is declared,
+the receipts carry no tokens, or the receipt names a worker that is no
+longer in `workers.json`. One `cost basis:` line above the tables states
+the basis in force — declared prices, the `params_b` proxy (relative;
+cheapest declared worker = `1.00x`), or none — so a proxy can never be
+misread as money. Receipts naming workers absent from the config are
+listed in one `note:` footnote after the tables (sorted, deduplicated
+names with the attempt count): historical receipts routinely outlive
+config edits, so this is a note — never an error.
+
 The report also ends with a waste section: `WASTED: <seconds>s on <failed>
 of <total> attempt(s) (<pct>%)`, followed by a `WASTED BY REASON` breakdown
 that groups failed attempts by the CAUSE — the text before the first `:` in

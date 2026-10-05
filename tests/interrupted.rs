@@ -144,8 +144,8 @@ fn a_killed_attempt_is_recorded_as_interrupted_and_excluded_from_trust() {
 
     let before = run::cost(&f.cfg, &f.st, &CostFilter::default());
     assert!(
-        before.contains(&format!("{:<14} {:<11} {:.2}", "w1", "2/3", 0.67)),
-        "seeded trust is 2/3:\n{before}"
+        before.contains(&format!("{:<14} {:<11} {:.2} {}", "w1", "2/3", 0.67, "-")),
+        "seeded trust is 2/3 (COST is `-`: w1 declares no basis):\n{before}"
     );
     assert!(
         !before.contains("INTERRUPTED"),
@@ -206,7 +206,7 @@ fn a_killed_attempt_is_recorded_as_interrupted_and_excluded_from_trust() {
 
     let after = run::cost(&f.cfg, &f.st, &CostFilter::default());
     assert!(
-        after.contains(&format!("{:<14} {:<11} {:.2}", "w1", "2/3", 0.67)),
+        after.contains(&format!("{:<14} {:<11} {:.2} {}", "w1", "2/3", 0.67, "-")),
         "interrupted receipts stay out of WINS/TOTAL (would be 2/4):\n{after}"
     );
     assert!(
