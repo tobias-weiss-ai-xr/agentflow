@@ -525,6 +525,272 @@ fn cost_report_surfaces_wasted_spend() {
     );
 }
 
+/// With NO provider-reported price, the COST column still ranks expense:
+/// each worker's declared `params_b` becomes a RATE relative to the
+/// cheapest declaring worker (exactly `1.00x`) — a PROXY, so the report
+/// announces the basis above the tables and never prints a `$`. A receipt
+/// without tokens cannot be priced and shows `-` instead.
+// spec: cli/cost-report#cost-report-shows-relative-expense-when-no-provider-reports-a-price
+#[test]
+fn cost_report_shows_relative_expense_when_no_provider_reports_a_price() {
+    let tasks = r#"{ "tasks": [
+        { "id": "A", "title": "a", "accept": "true" },
+        { "id": "B", "title": "b", "accept": "true" },
+        { "id": "C", "title": "c", "accept": "true" }
+    ] }"#;
+    // Two workers, different declared sizes: 8B and 40B — no price anywhere.
+    let workers = r#"{ "defaults": { "max_attempts": 1, "accept_timeout_s": 10 },
+        "workers": [
+            { "name": "w1", "provider": "openai", "model": "gpt-4o", "params_b": 8, "enabled": true, "cli": "unused" },
+            { "name": "w2", "provider": "openai", "model": "o1", "params_b": 40, "enabled": true, "cli": "unused" }
+        ] }"#;
+    let cli = Cli::new_with(tasks, workers);
+    let (_, st) = cli.settings();
+    let store = Store::new(st.state_dir.clone());
+    let receipt = |task: &str, ts: u64, wall: f64, worker: &str, tokens: Option<u64>| Receipt {
+        task: task.into(),
+        attempt: 1,
+        worker: worker.into(),
+        model: "m".into(),
+        wall_clock_s: wall,
+        tokens,
+        ts,
+        outcome: "merged".into(),
+        error: None,
+    };
+    store
+        .append_receipt(&receipt("A", 1_000, 1.0, "w1", Some(1_000_000)))
+        .unwrap();
+    store
+        .append_receipt(&receipt("B", 2_000, 2.0, "w2", Some(500_000)))
+        .unwrap();
+    // A legacy receipt: tokens were never recorded, so its expense is
+    // unknown — the placeholder, never an invented rate.
+    store
+        .append_receipt(&receipt("C", 3_000, 4.0, "w1", None))
+        .unwrap();
+
+    let (code, out) = cli.af(&["cost"]);
+    assert_eq!(code, 0, "{out}");
+    // ONE basis line above the tables announces the proxy before any
+    // number is read.
+    assert!(
+        out.contains("cost basis: params_b proxy (relative; cheapest declared worker = 1.00x)"),
+        "basis line: {out}"
+    );
+    // The cheapest declaring worker anchors the scale at exactly 1.00x…
+    // (w1 has two verdict receipts — A and the legacy C — both merged.)
+    assert!(
+        out.contains(&format!(
+            "{:<14} {:<11} {:.2} {}",
+            "w1", "2/2", 1.00, "1.00x"
+        )),
+        "w1 anchors the proxy at 1.00x: {out}"
+    );
+    // …and the 40B worker runs at 40/8 = 5x that rate.
+    assert!(
+        out.contains(&format!(
+            "{:<14} {:<11} {:.2} {}",
+            "w2", "1/1", 1.00, "5.00x"
+        )),
+        "w2 shows its real ratio: {out}"
+    );
+    // TASK rows carry the same estimate, between TOKENS and MODEL.
+    assert!(
+        out.contains(&format!(
+            "{:<12} {:<9} {:<10.1} {:<9} {:<8} {}",
+            "A", 1, 1.0, "1000000", "1.00x", "m"
+        )),
+        "A row: {out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "{:<12} {:<9} {:<10.1} {:<9} {:<8} {}",
+            "B", 1, 2.0, "500000", "5.00x", "m"
+        )),
+        "B row: {out}"
+    );
+    // The legacy receipt shows `-` in the COST column, not a zero rate.
+    assert!(
+        out.contains(&format!(
+            "{:<12} {:<9} {:<10.1} {:<9} {:<8} {}",
+            "C", 1, 4.0, "-", "-", "m"
+        )),
+        "C row shows the placeholder for absent tokens: {out}"
+    );
+    // A size proxy is not money: no `$` anywhere in the report.
+    assert!(
+        !out.contains('$'),
+        "a proxy report never shows dollars: {out}"
+    );
+}
+
+/// A DECLARED price is real money: the COST cell shows `$` + 4 decimals
+/// computed from the row's tokens — even when the same worker ALSO
+/// declares `params_b` (the price wins) — and never an `x` ratio.
+// spec: cli/cost-report#a-declared-price-is-reported-as-dollars
+#[test]
+fn a_declared_price_beats_the_params_proxy_in_the_cost_report() {
+    let tasks = r#"{ "tasks": [
+        { "id": "A", "title": "a", "accept": "true" },
+        { "id": "B", "title": "b", "accept": "true" }
+    ] }"#;
+    // w1 declares BOTH a price and a size: the price must win. w2 keeps the
+    // proxy scale, so the mixed report says so on the basis line.
+    let workers = r#"{ "defaults": { "max_attempts": 1, "accept_timeout_s": 10 },
+        "workers": [
+            { "name": "w1", "provider": "openai", "model": "gpt-4o", "params_b": 100, "price_per_mtok_usd": 2.0, "enabled": true, "cli": "unused" },
+            { "name": "w2", "provider": "openai", "model": "mini", "params_b": 8, "enabled": true, "cli": "unused" }
+        ] }"#;
+    let cli = Cli::new_with(tasks, workers);
+    let (_, st) = cli.settings();
+    let store = Store::new(st.state_dir.clone());
+    let receipt = |task: &str, ts: u64, wall: f64, worker: &str, tokens: u64| Receipt {
+        task: task.into(),
+        attempt: 1,
+        worker: worker.into(),
+        model: "m".into(),
+        wall_clock_s: wall,
+        tokens: Some(tokens),
+        ts,
+        outcome: "merged".into(),
+        error: None,
+    };
+    // w1: 500k tokens at $2/Mtok = $1.0000.
+    store
+        .append_receipt(&receipt("A", 1_000, 1.0, "w1", 500_000))
+        .unwrap();
+    // w2: proxy worker, the only Sized declaration → 1.00x.
+    store
+        .append_receipt(&receipt("B", 2_000, 2.0, "w2", 250_000))
+        .unwrap();
+
+    let (code, out) = cli.af(&["cost"]);
+    assert_eq!(code, 0, "{out}");
+    // Prices put the report on the prices basis, and the proxy straggler
+    // is named on the SAME line so mixed cells cannot be misread.
+    assert!(
+        out.contains(
+            "cost basis: declared prices (USD per 1M tokens); some workers declare only params_b"
+        ),
+        "basis line: {out}"
+    );
+    // w1's row: dollars from its tokens, never a ratio.
+    let w1_row = out
+        .lines()
+        .find(|l| l.starts_with("w1 "))
+        .unwrap_or_else(|| panic!("w1 worker row: {out}"));
+    assert!(
+        w1_row.contains(&format!(
+            "{:<14} {:<11} {:.2} {}",
+            "w1", "1/1", 1.00, "$1.0000"
+        )),
+        "w1 shows dollars computed from its tokens: {w1_row}"
+    );
+    assert!(
+        !w1_row.contains('x'),
+        "a priced worker never shows a ratio: {w1_row}"
+    );
+    // The TASK row sums the same dollars.
+    assert!(
+        out.contains(&format!(
+            "{:<12} {:<9} {:<10.1} {:<9} {:<8} {}",
+            "A", 1, 1.0, "500000", "$1.0000", "m"
+        )),
+        "A row: {out}"
+    );
+    // w2 keeps the proxy scale on the SAME report.
+    assert!(
+        out.contains(&format!(
+            "{:<14} {:<11} {:.2} {}",
+            "w2", "1/1", 1.00, "1.00x"
+        )),
+        "w2 keeps its proxy rate: {out}"
+    );
+}
+
+/// Historical receipts outlive config edits: a receipt naming a worker that
+/// is no longer in workers.json renders as `-` and gets ONE footnote line
+/// naming those workers (sorted, deduped, with the attempt count) — a note,
+/// never an error, never blocking the report.
+// spec: cli/cost-report#receipts-naming-a-worker-absent-from-the-config-are-footnoted
+#[test]
+fn receipts_naming_an_absent_worker_are_footnoted_not_fatal() {
+    let tasks = r#"{ "tasks": [
+        { "id": "A", "title": "a", "accept": "true" },
+        { "id": "B", "title": "b", "accept": "true" },
+        { "id": "C", "title": "c", "accept": "true" }
+    ] }"#;
+    // Only w1 is configured; `ghost` (twice) and `foo` are history.
+    let workers = r#"{ "defaults": { "max_attempts": 1, "accept_timeout_s": 10 },
+        "workers": [
+            { "name": "w1", "provider": "openai", "model": "gpt-4o", "price_per_mtok_usd": 1.0, "enabled": true, "cli": "unused" }
+        ] }"#;
+    let cli = Cli::new_with(tasks, workers);
+    let (_, st) = cli.settings();
+    let store = Store::new(st.state_dir.clone());
+    let receipt =
+        |task: &str, attempt: u32, ts: u64, wall: f64, worker: &str, tokens: u64| Receipt {
+            task: task.into(),
+            attempt,
+            worker: worker.into(),
+            model: "m".into(),
+            wall_clock_s: wall,
+            tokens: Some(tokens),
+            ts,
+            outcome: "merged".into(),
+            error: None,
+        };
+    store
+        .append_receipt(&receipt("A", 1, 1_000, 1.0, "ghost", 1_000_000))
+        .unwrap();
+    store
+        .append_receipt(&receipt("A", 2, 2_000, 2.0, "ghost", 1_000_000))
+        .unwrap();
+    store
+        .append_receipt(&receipt("B", 1, 3_000, 3.0, "foo", 10))
+        .unwrap();
+    // The configured worker keeps its priced row, proving the footnote
+    // changes nothing about the rest of the report.
+    store
+        .append_receipt(&receipt("C", 1, 4_000, 4.0, "w1", 2_000_000))
+        .unwrap();
+
+    let (code, out) = cli.af(&["cost"]);
+    assert_eq!(code, 0, "absent workers are a note, not an error: {out}");
+    // ONE footnote after the tables: total attempt count, names sorted and
+    // deduped (ghost appears twice, listed once, after foo).
+    assert!(
+        out.contains(
+            "note: 3 attempt(s) name a worker absent from the config, shown as '-': foo, ghost"
+        ),
+        "footnote: {out}"
+    );
+    // The unknown workers' rows show `-`, both tables.
+    assert!(
+        out.contains(&format!(
+            "{:<14} {:<11} {:.2} {}",
+            "ghost", "2/2", 1.00, "-"
+        )),
+        "ghost worker row: {out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "{:<12} {:<9} {:<10.1} {:<9} {:<8} {}",
+            "A", 2, 3.0, "2000000", "-", "m"
+        )),
+        "A's attempts name an absent worker, so COST is `-`: {out}"
+    );
+    // The configured worker's priced row is untouched.
+    assert!(
+        out.contains(&format!(
+            "{:<14} {:<11} {:.2} {}",
+            "w1", "1/1", 1.00, "$2.0000"
+        )),
+        "w1 keeps its dollars: {out}"
+    );
+}
+
 // spec: cli/run-commands
 #[test]
 fn dry_run_prints_plan_without_spawning_agents() {

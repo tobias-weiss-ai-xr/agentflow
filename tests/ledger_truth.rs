@@ -232,15 +232,22 @@ fn cost_report_shows_tokens_when_present() {
     );
     assert!(
         out.contains(&format!(
-            "{:<12} {:<9} {:<10.1} {:<9} {}",
-            "A", 2, 3.0, "350", "m"
+            "{:<12} {:<9} {:<10} {:<9} {:<8} {}",
+            "TASK", "ATTEMPTS", "WALL_S", "TOKENS", "COST", "MODEL"
         )),
-        "A shows its summed tokens (100 + 250): {out}"
+        "the header carries COST right after TOKENS: {out}"
     );
     assert!(
         out.contains(&format!(
-            "{:<12} {:<9} {:<10.1} {:<9} {}",
-            "B", 1, 3.0, "-", "m"
+            "{:<12} {:<9} {:<10.1} {:<9} {:<8} {}",
+            "A", 2, 3.0, "350", "-", "m"
+        )),
+        "A shows its summed tokens (100 + 250); the worker declares no cost basis, so COST is `-`: {out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "{:<12} {:<9} {:<10.1} {:<9} {:<8} {}",
+            "B", 1, 3.0, "-", "-", "m"
         )),
         "B shows the placeholder when no tokens are recorded: {out}"
     );
