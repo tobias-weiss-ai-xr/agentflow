@@ -10,7 +10,7 @@ af — parallel LLM task execution on isolated git worktrees
 
 USAGE:
   af run       [--once] [--dry-run] [--worker NAME] [--task ID] [--poll SECS] [--tasks FILE] [--workers FILE]
-  af status
+  af status    [--json]
   af api       status [--json] | results --task ID
   af attach    ID
   af cost      [--task ID]
@@ -164,7 +164,11 @@ fn main() -> ExitCode {
             run::run_loop(&cfg, &st, &opts)
         }
         "status" => {
-            println!("{}", run::status_board(&cfg, &st));
+            if args.json {
+                println!("{}", run::status_json(&cfg, &st));
+            } else {
+                println!("{}", run::status_board(&cfg, &st));
+            }
             0
         }
         "api-status" => {
