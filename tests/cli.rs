@@ -166,6 +166,39 @@ fn status_and_api_status_render_board() {
 }
 
 #[test]
+fn status_json_emits_parseable_board_with_task_fields() {
+    let cli = Cli::new();
+    cli.seed_done_task("A");
+    // `af status --json` must emit machine-parseable JSON, not the human board.
+    let (code, out) = cli.af(&["status", "--json"]);
+    assert_eq!(code, 0, "status --json exits 0: {out}");
+    let v: serde_json::Value = serde_json::from_str(&out).expect("status --json is valid JSON");
+    let task = v
+        .get("A")
+        .and_then(|t| t.as_object())
+        .unwrap_or_else(|| panic!("task A present as object: {out}"));
+    assert_eq!(task.get("id").and_then(|x| x.as_str()), Some("A"));
+    assert_eq!(task.get("state").and_then(|x| x.as_str()), Some("done"));
+    assert_eq!(task.get("attempts").and_then(|x| x.as_u64()), Some(1));
+
+    // Plain `af status` keeps printing the human board.
+    let (code, out) = cli.af(&["status"]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains("TASK") && out.contains("ATTEMPTS"),
+        "human board: {out}"
+    );
+    assert!(
+        out.contains("A") && out.contains("Done"),
+        "human board row: {out}"
+    );
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&out).is_err(),
+        "plain status must not be JSON: {out}"
+    );
+}
+
+#[test]
 fn api_results_requires_task_flag() {
     let cli = Cli::new();
     assert_eq!(cli.af(&["api", "results"]).0, 2);

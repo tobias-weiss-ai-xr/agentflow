@@ -437,6 +437,7 @@ pub fn status_json(cfg: &Config, st: &Settings) -> String {
         map.insert(
             t.id.clone(),
             serde_json::json!({
+                "id": t.id,
                 "state": format!("{:?}", s.state).to_lowercase(),
                 "attempts": s.attempts,
                 "last_error": s.last_error,
