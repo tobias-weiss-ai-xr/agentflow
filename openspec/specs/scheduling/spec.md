@@ -73,8 +73,15 @@ Among free, enabled workers eligible for dispatch, `af` SHALL pick the
 worker maximizing `mean_reward + sqrt(2·ln(N+1)/(n+1))` where `n` is the
 worker's recorded attempts, `N` the total recorded attempts (replayed from
 receipts at startup, updated in-memory per attempt), and reward is 1 for a
-merged attempt, 0 for a failed one. Ties SHALL break in config order, so a
-fresh state reproduces the previous first-free behavior exactly.
+merged attempt, 0 for a failed one. A strictly higher score SHALL always
+win: measured reliability never yields to a declared expense assumption —
+cost-per-task is confounded by task difficulty (the hard work goes to the
+trusted worker), so a cost term in the score itself would penalise a worker
+for being given the hard tasks and starve it. A score tie within a small
+tolerance SHALL prefer the worker with the strictly cheaper DECLARED cost
+basis (`params_b` / `price_per_mtok_usd`) when the two bases are comparable;
+otherwise ties SHALL break in config order, so a fresh state with no
+declared bases reproduces the previous first-free behavior exactly.
 
 #### Scenario: fresh state picks first configured worker
 
@@ -93,6 +100,24 @@ THEN B is chosen (exploration term dominates).
 GIVEN worker A has 3/3 wins and worker B has 0/3 wins
 WHEN both are free
 THEN A is chosen.
+
+#### Scenario: cheaper worker wins a score tie
+
+GIVEN two free workers with identical recorded stats (their scores tie) whose declared cost bases are comparable, and the cheaper one is not first in config order
+WHEN a task dispatches
+THEN the cheaper worker is chosen regardless of config order.
+
+#### Scenario: a strictly better score beats a cheaper competitor
+
+GIVEN a free worker with a strictly better win rate whose declared cost basis is more expensive than its competitor's
+WHEN both are free
+THEN the better-scoring worker is chosen; cost never overrides measured trust.
+
+#### Scenario: incomparable bases keep config order
+
+GIVEN a score tie where one worker declares a price and the other only a parameter count, or where either worker declares no cost basis at all
+WHEN a task dispatches
+THEN config order decides; a price is never converted into a parameter count.
 
 ### Requirement: Scope enforcement on agent edits
 

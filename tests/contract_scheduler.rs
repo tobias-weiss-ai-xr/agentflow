@@ -37,11 +37,13 @@
 //! Uses only std + the crate; no temp dirs, no new dependencies.
 
 use agentflow::config::{Config, Priority, Task, TaskState};
+use agentflow::router::Router;
 use agentflow::scheduler::{
     compute_depths, find_deadlock, find_deadlock_in, readiness_of, ready_tasks, scope_overlap,
     tasks_overlap, Readiness,
 };
 use agentflow::state::TaskStatus;
+use agentflow::Worker;
 use std::collections::{BTreeMap, HashMap};
 
 /// A task with the given id and deps; everything else default.
@@ -189,6 +191,162 @@ fn priority_breaks_ties_among_equally_deep_ready_tasks() {
         vec!["first", "second", "third"],
         "equal priority rank preserves the original config order"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Worker selection (Router::pick): cost as a tie-break, never a score.
+//
+// The task-level tie-breaks above decide WHICH TASK dispatches; these
+// decide WHICH WORKER takes it. The UCB1 score (measured trust +
+// exploration) always decides; the workers' DECLARED cost basis
+// (`params_b` / `price_per_mtok_usd`, see src/cost.rs) is consulted only
+// when two scores tie, and only when the two bases are comparable.
+// ---------------------------------------------------------------------------
+
+/// A worker with the given name and declared cost basis; everything else
+/// default (enabled, no extra args, text output) — the same construction
+/// style as `src/router.rs`'s own unit tests.
+fn worker_of(name: &str, params_b: Option<f64>, price_per_mtok_usd: Option<f64>) -> Worker {
+    Worker {
+        name: name.to_string(),
+        output: "text".into(),
+        args: Vec::new(),
+        params_b,
+        price_per_mtok_usd,
+        ..Default::default()
+    }
+}
+
+/// A Router whose named workers all carry IDENTICAL stats (`wins` merged
+/// out of `attempts` each), so their UCB1 scores tie exactly (same mean,
+/// same n, hence the same exploration term).
+fn router_with_tied_stats(names: &[&str], wins: u64, attempts: u64) -> Router {
+    let mut r = Router::default();
+    for name in names {
+        for i in 0..attempts {
+            r.record(name, i < wins);
+        }
+    }
+    r
+}
+
+// spec: scheduling/ucb1-worker-selection#cheaper-worker-wins-a-score-tie
+#[test]
+fn the_router_prefers_the_cheaper_worker_only_when_trust_ties() {
+    // Identical stats (2/2 each): the UCB1 scores tie exactly. The worker
+    // declaring the SMALLER params_b wins the tie — even though it is
+    // configured SECOND, so the old config-order tie-break would have
+    // picked "big" (the test passes by accident otherwise).
+    let r = router_with_tied_stats(&["big", "small"], 2, 2);
+    let pool = [
+        worker_of("big", Some(235.0), None),
+        worker_of("small", Some(8.0), None),
+    ];
+    assert_eq!(
+        r.pick(pool.iter()).unwrap().name,
+        "small",
+        "on a score tie, the smaller declared params_b wins regardless of config order"
+    );
+
+    // Two declared PRICES behave the same way: the cheaper $/Mtok wins the
+    // tie, again from second position in the pool.
+    let pool = [
+        worker_of("dear", None, Some(5.0)),
+        worker_of("bargain", None, Some(0.5)),
+    ];
+    assert_eq!(
+        r.pick(pool.iter()).unwrap().name,
+        "bargain",
+        "on a score tie, the cheaper declared price wins regardless of config order"
+    );
+}
+
+// spec: scheduling/ucb1-worker-selection#a-strictly-better-score-beats-a-cheaper-competitor
+#[test]
+fn a_strictly_better_trust_score_beats_a_cheaper_competitor() {
+    // The most important property: cost NEVER overrides measured trust.
+    // "expensive" is 3/3 merged, "cheap" is 0/3 — equal counts, different
+    // means, so the score is STRICTLY higher. "cheap" is deliberately
+    // FIRST in the pool: config order and the cost tie-break would both
+    // favour it, so only the strictly-better score can explain the pick.
+    let mut r = Router::default();
+    for _ in 0..3 {
+        r.record("cheap", false); // 0/3
+        r.record("expensive", true); // 3/3
+    }
+    let pool = [
+        worker_of("cheap", Some(8.0), None),
+        worker_of("expensive", Some(235.0), None),
+    ];
+    assert_eq!(
+        r.pick(pool.iter()).unwrap().name,
+        "expensive",
+        "a strictly better win rate beats both config order and the cheaper basis"
+    );
+
+    // A narrower margin (3/3 vs 2/3 at equal counts) still strictly wins
+    // over the cheaper competitor.
+    let mut r = Router::default();
+    for i in 0..3 {
+        r.record("cheap", i < 2); // 2/3
+        r.record("expensive", true); // 3/3
+    }
+    assert_eq!(
+        r.pick(pool.iter()).unwrap().name,
+        "expensive",
+        "any strict score difference outranks the declared cost basis"
+    );
+}
+
+// spec: scheduling/ucb1-worker-selection#incomparable-bases-keep-config-order
+#[test]
+fn incomparable_cost_bases_keep_config_order() {
+    // One priced, one only sized: a $/Mtok price and a parameter count are
+    // incommensurable (`cost::compare` refuses to order them), so a score
+    // tie never triggers a swap — the FIRST worker keeps the tie...
+    let r = router_with_tied_stats(&["priced", "sized"], 1, 2);
+    let pool = [
+        worker_of("priced", None, Some(0.1)),
+        worker_of("sized", Some(8.0), None),
+    ];
+    assert_eq!(r.pick(pool.iter()).unwrap().name, "priced");
+    // ...and in the reverse order the other one keeps it (the rule is
+    // "no swap", not "priced wins").
+    let pool = [
+        worker_of("sized", Some(8.0), None),
+        worker_of("priced", None, Some(0.1)),
+    ];
+    assert_eq!(r.pick(pool.iter()).unwrap().name, "sized");
+
+    // A worker declaring NOTHING can neither be displaced by a tie-break
+    // nor displace one: either side missing its basis makes `compare`
+    // return None, so config order decides — in both orders.
+    let r2 = router_with_tied_stats(&["declared", "neutral"], 2, 4);
+    let pool = [
+        worker_of("declared", Some(8.0), None),
+        worker_of("neutral", None, None),
+    ];
+    assert_eq!(r2.pick(pool.iter()).unwrap().name, "declared");
+    let pool = [
+        worker_of("neutral", None, None),
+        worker_of("declared", Some(8.0), None),
+    ];
+    assert_eq!(r2.pick(pool.iter()).unwrap().name, "neutral");
+
+    // Two workers declaring nothing: pure config order (the legacy
+    // behaviour, unchanged).
+    let r3 = router_with_tied_stats(&["x", "y"], 1, 1);
+    let pool = [worker_of("x", None, None), worker_of("y", None, None)];
+    assert_eq!(r3.pick(pool.iter()).unwrap().name, "x");
+
+    // Equal comparable declarations are not "cheaper" (`Some(Equal)`):
+    // config order still decides.
+    let r4 = router_with_tied_stats(&["twin1", "twin2"], 3, 3);
+    let pool = [
+        worker_of("twin1", Some(70.0), None),
+        worker_of("twin2", Some(70.0), None),
+    ];
+    assert_eq!(r4.pick(pool.iter()).unwrap().name, "twin1");
 }
 
 // spec: scheduling/Dependency DAG
