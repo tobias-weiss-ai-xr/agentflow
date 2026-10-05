@@ -56,7 +56,7 @@ impl Priority {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Task {
     pub id: String,
@@ -68,22 +68,6 @@ pub struct Task {
     pub manual: bool,
     pub priority: Priority,
     pub repo: String,
-}
-
-impl Default for Task {
-    fn default() -> Self {
-        Task {
-            id: String::new(),
-            title: String::new(),
-            deps: Vec::new(),
-            scope: Vec::new(),
-            accept: None,
-            acceptance_prose: None,
-            manual: false,
-            priority: Priority::default(),
-            repo: String::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

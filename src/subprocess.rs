@@ -242,7 +242,7 @@ mod tests {
             "visible",
             "allowlisted key passes through"
         );
-        let _ = std::env::remove_var("AF_TEST_ALLOWLIST_VAR");
+        std::env::remove_var("AF_TEST_ALLOWLIST_VAR");
     }
 
     #[cfg(unix)]
