@@ -39,6 +39,7 @@ impl Cli {
             )
             .env("TF_STATE_DIR", self.dir.join("state"))
             .env("TF_REPO_DIR", self.dir.join("repo"))
+            .env("TF_WORKTREE_ROOT", self.dir.join("wt"))
             .output()
             .expect("spawn af");
         (
@@ -248,6 +249,37 @@ fn dry_run_lists_every_task_with_depth_and_readiness() {
     assert!(pos_a < pos_b, "A (depth 0) before B (depth 1): {out}");
     assert!(pos_c < pos_b, "C (depth 0) before B (depth 1): {out}");
     assert!(out.contains("2 ready now"), "summary counts ready: {out}");
+}
+
+#[test]
+fn clean_dry_run_reports_and_real_clean_removes_orphan_worktree() {
+    let cli = Cli::new();
+    let orphan = cli.dir.join("wt").join("ORPHAN");
+    std::fs::create_dir_all(&orphan).unwrap();
+    std::fs::write(orphan.join("junk.txt"), "leftover\n").unwrap();
+
+    // --dry-run prints the orphan but changes nothing.
+    let (code, out) = cli.af(&["clean", "--dry-run"]);
+    assert_eq!(code, 0, "dry run exits 0: {out}");
+    assert!(out.contains("ORPHAN"), "dry run names the orphan: {out}");
+    assert!(orphan.exists(), "dry run must not remove anything");
+
+    // Real clean removes the orphan dir and exits 0.
+    let (code, out) = cli.af(&["clean"]);
+    assert_eq!(code, 0, "clean exits 0: {out}");
+    assert!(out.contains("ORPHAN"), "clean reports the orphan: {out}");
+    assert!(!orphan.exists(), "orphan worktree dir is gone after clean");
+}
+
+#[test]
+fn clean_with_nothing_to_do_exits_zero() {
+    let cli = Cli::new();
+    let (code, out) = cli.af(&["clean"]);
+    assert_eq!(code, 0, "empty clean exits 0: {out}");
+    assert!(
+        out.contains("no orphaned worktrees"),
+        "reports nothing: {out}"
+    );
 }
 
 #[test]

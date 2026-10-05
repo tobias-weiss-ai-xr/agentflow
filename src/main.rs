@@ -14,6 +14,7 @@ USAGE:
   af api       status [--json] | results --task ID
   af attach    ID
   af cost      [--task ID]
+  af clean     [--dry-run]
   af --help | --version
 
 ENV: TF_REPO_DIR, TF_STATE_DIR, TF_MAX_PARALLEL, TF_BRANCH_PREFIX, TF_POLL,
@@ -199,6 +200,7 @@ fn main() -> ExitCode {
             println!("{}", run::cost(&cfg, &st, args.task.as_deref()));
             0
         }
+        "clean" => run::clean(&cfg, &st, args.dry_run),
         other => {
             eprintln!("error: unknown command '{other}'\n\n{USAGE}");
             return ExitCode::from(2);
