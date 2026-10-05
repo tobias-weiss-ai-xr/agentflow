@@ -145,6 +145,55 @@ pub fn clean_all(wt_root: &Path) {
     let _ = std::fs::remove_dir_all(wt_root);
 }
 
+/// Task ids with a worktree dir under `wt_root`, excluding `keep` (tasks still
+/// running). Sorted for stable dry-run output. Missing root → empty.
+pub fn orphan_ids(wt_root: &Path, keep: &[String]) -> Vec<String> {
+    let Ok(rd) = std::fs::read_dir(wt_root) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = rd
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|id| !keep.iter().any(|k| k == id))
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// `af clean [--dry-run]`: remove orphaned worktrees + their branches left by
+/// crashed runs, preserving `keep` (tasks still marked Running). With
+/// `dry_run`, report the ids that *would* be removed and touch nothing.
+/// Returns the affected ids (sorted). Never fails the caller.
+pub fn clean(
+    repos: &[(String, PathBuf)],
+    wt_root: &Path,
+    branch_prefix: &str,
+    keep: &[String],
+    dry_run: bool,
+) -> Vec<String> {
+    let ids = orphan_ids(wt_root, keep);
+    if dry_run || ids.is_empty() {
+        return ids;
+    }
+    // Same path as startup self-heal: unregister worktrees and delete their
+    // branches in every repo that owns them.
+    heal(repos, wt_root, branch_prefix, keep);
+    if keep.is_empty() {
+        // Nothing must survive, so wipe the root too — drops dirs no repo
+        // owns (e.g. no repos configured, or non-worktree junk).
+        clean_all(wt_root);
+    } else {
+        // Preserve running worktrees; drop only orphans heal couldn't.
+        for id in &ids {
+            let path = wt_root.join(id);
+            if path.exists() {
+                let _ = std::fs::remove_dir_all(&path);
+            }
+        }
+    }
+    ids
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,5 +341,67 @@ mod tests {
         heal(&repos, &wt_root, "tf", &[] as &[String]);
         assert!(!w2.path.exists());
         let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    #[test]
+    fn clean_dry_run_reports_without_touching_and_removes_dirs_branches() {
+        let repo = scratch_repo();
+        // Unique root: scratch repos share a parent, so a fixed "wt" would
+        // leak orphans from tests running in parallel.
+        let wt_root = repo.parent().unwrap().join(format!(
+            "wt-clean-dry-{}",
+            repo.file_name().unwrap().to_string_lossy()
+        ));
+        let repos = vec![("main".to_string(), repo.clone())];
+        let w1 = create_ok(&repo, &wt_root, "C1");
+        let w2 = create_ok(&repo, &wt_root, "C2");
+
+        // Dry run: lists orphans, deletes nothing.
+        let dry = clean(&repos, &wt_root, "tf", &[], true);
+        assert_eq!(dry, vec!["C1".to_string(), "C2".to_string()]);
+        assert!(
+            w1.path.exists() && w2.path.exists(),
+            "dry run leaves worktrees in place"
+        );
+
+        // Real clean: worktree dirs and branches are gone.
+        let gone = clean(&repos, &wt_root, "tf", &[], false);
+        assert_eq!(gone, vec!["C1".to_string(), "C2".to_string()]);
+        assert!(
+            !w1.path.exists() && !w2.path.exists(),
+            "orphan dirs removed"
+        );
+        for b in ["tf/C1", "tf/C2"] {
+            let out = git(
+                &repo,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/heads/{b}"),
+                ],
+            );
+            assert!(!out.passed(), "branch {b} deleted");
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&wt_root);
+    }
+
+    #[test]
+    fn clean_keeps_running_worktrees() {
+        let repo = scratch_repo();
+        let wt_root = repo.parent().unwrap().join(format!(
+            "wt-clean-keep-{}",
+            repo.file_name().unwrap().to_string_lossy()
+        ));
+        let repos = vec![("main".to_string(), repo.clone())];
+        let w1 = create_ok(&repo, &wt_root, "K1");
+        let w2 = create_ok(&repo, &wt_root, "K2");
+        let removed = clean(&repos, &wt_root, "tf", &["K2".to_string()], false);
+        assert_eq!(removed, vec!["K1".to_string()]);
+        assert!(!w1.path.exists(), "orphan K1 removed");
+        assert!(w2.path.exists(), "running K2 kept");
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&wt_root);
     }
 }

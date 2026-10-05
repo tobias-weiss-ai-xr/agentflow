@@ -297,6 +297,59 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     }
 }
 
+/// `af clean [--dry-run]`: remove orphaned worktrees + branches left behind
+/// by crashed runs. Tasks still marked Running are preserved. `--dry-run`
+/// reports what would go and changes nothing. Returns the process exit code.
+pub fn clean(cfg: &Config, st: &Settings, dry_run: bool) -> i32 {
+    let status = Store::new(st.state_dir.clone()).load();
+    let running: Vec<String> = status
+        .iter()
+        .filter(|(_, s)| s.state == TaskState::Running)
+        .map(|(k, _)| k.clone())
+        .collect();
+    // Multi-repo (ADR-11): try every configured repo + the default, exactly
+    // like the startup self-heal.
+    let mut repo_list: Vec<(String, PathBuf)> = cfg
+        .repos
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    repo_list.push(("(default)".to_string(), st.repo_dir.clone()));
+
+    let ids = worktree::clean(
+        &repo_list,
+        &st.worktree_root,
+        &st.branch_prefix,
+        &running,
+        dry_run,
+    );
+    if ids.is_empty() {
+        println!(
+            "clean: no orphaned worktrees under {}",
+            st.worktree_root.display()
+        );
+        return 0;
+    }
+    for id in &ids {
+        let path = st.worktree_root.join(id);
+        let branch = format!("{}/{}", st.branch_prefix, id);
+        if dry_run {
+            println!("would remove {} (branch {branch})", path.display());
+        } else {
+            println!("removed {} (branch {branch})", path.display());
+        }
+    }
+    if dry_run {
+        println!(
+            "dry run: {} orphan(s) would be removed; nothing changed",
+            ids.len()
+        );
+    } else {
+        println!("clean: removed {} orphan(s)", ids.len());
+    }
+    0
+}
+
 pub fn dry_run(cfg: &Config, st: &Settings) -> i32 {
     let depths = scheduler::compute_depths(cfg).unwrap_or_default();
     let status = Store::new(st.state_dir.clone()).load();
