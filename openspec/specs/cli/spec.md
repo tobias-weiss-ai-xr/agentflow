@@ -36,10 +36,14 @@ THEN it streams that task's log lines until the task finishes.
 ### Requirement: Cost report
 
 `af cost` SHALL append a per-worker trust section: worker name, wins/total,
-and trust rate (wins ÷ attempts, two decimals), computed from receipt
-outcomes that are VERDICTS on the worker — `interrupted` receipts are
-excluded from both the numerator and the denominator because they carry no
-agent or gate result. `af cost` SHALL also report wasted spend — the total
+trust rate (wins ÷ attempts, two decimals), and MEAN_S — the mean
+wall-clock seconds over the worker's VERDICT attempts, ONE decimal, `-`
+when the worker has no verdict attempt — all computed from receipt
+outcomes that are VERDICTS on the worker: `interrupted` receipts are
+excluded from the numerator, the denominator, and the mean, because they
+carry no agent or gate result and their duration is a placeholder, not a
+measurement. MEAN_S is the same statistic the router reads as its last
+tie-break, so the routing choice is inspectable from the report. `af cost` SHALL also report wasted spend — the total
 wall-clock seconds and the attempt count of attempts whose outcome was not
 `merged`, the wasted percentage of all selected attempts, and a breakdown
 grouped by failure CAUSE (the text before the first `:` in the receipt's
@@ -61,7 +65,7 @@ note when some workers declare only `params_b`), `params_b proxy (relative;
 cheapest declared worker = 1.00x)` when any declares `params_b` and none a
 price, or `none` otherwise — so a relative proxy can never be misread as
 money. Both tables SHALL carry a COST column (immediately after TOKENS in
-the task table, immediately after TRUST in the worker table): `$<usd>`
+the task table, immediately after MEAN_S in the worker table): `$<usd>`
 with four decimals from a declared price (real money, via the cost model's
 `estimate_usd`), `N.NNx` with two decimals from the `params_b` proxy (the
 rate relative to the cheapest declared `params_b` — never a `$`), or `-`
@@ -148,6 +152,12 @@ THEN its COST cell shows `$<usd>` computed from its tokens with four decimals an
 GIVEN a receipt carrying a provider-reported `cost_micros` on a worker that ALSO declares `price_per_mtok_usd`, a task row mixing that measured attempt with an estimated-priced attempt, and a task row mixing a measured attempt with a `params_b`-only attempt
 WHEN `af cost` runs
 THEN the measured attempt's COST cell shows its measured dollars with NO `~` (not the figure its declared price would estimate), the mixed measured+estimated row shows the summed dollars marked `~`, the measured+sized row stays `-`, and the basis line says `cost basis: provider-reported (USD)` naming how many attempts were estimated from a declared price.
+
+#### Scenario: The cost report shows the duration the router reads
+
+GIVEN receipts where worker w1 has verdict attempts of 2.0s and 6.0s plus one `interrupted` attempt of 999s, and worker w2 has one verdict attempt of 3.0s
+WHEN `af cost` runs
+THEN the worker table shows a MEAN_S column with `4.0` for w1 and `3.0` for w2 — the `interrupted` attempt is excluded from the mean exactly as it is from wins/total, and stays visible on its own INTERRUPTED line.
 
 #### Scenario: Receipts naming a worker absent from the config are footnoted
 

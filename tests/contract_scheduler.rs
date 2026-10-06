@@ -42,7 +42,7 @@ use agentflow::scheduler::{
     compute_depths, find_deadlock, find_deadlock_in, readiness_of, ready_tasks, scope_overlap,
     tasks_overlap, Readiness,
 };
-use agentflow::state::TaskStatus;
+use agentflow::state::{Receipt, TaskStatus};
 use agentflow::Worker;
 use std::collections::{BTreeMap, HashMap};
 
@@ -220,13 +220,14 @@ fn worker_of(name: &str, params_b: Option<f64>, price_per_mtok_usd: Option<f64>)
 }
 
 /// A Router whose named workers all carry IDENTICAL stats (`wins` merged
-/// out of `attempts` each), so their UCB1 scores tie exactly (same mean,
-/// same n, hence the same exploration term).
+/// out of `attempts` each, all attempts the same 1.0s), so their UCB1
+/// scores tie exactly (same mean, same n, hence the same exploration term)
+/// and their mean durations are equal — neither tie-break can fire.
 fn router_with_tied_stats(names: &[&str], wins: u64, attempts: u64) -> Router {
     let mut r = Router::default();
     for name in names {
         for i in 0..attempts {
-            r.record(name, i < wins);
+            r.record(name, i < wins, Some(1.0));
         }
     }
     r
@@ -273,8 +274,8 @@ fn a_strictly_better_trust_score_beats_a_cheaper_competitor() {
     // favour it, so only the strictly-better score can explain the pick.
     let mut r = Router::default();
     for _ in 0..3 {
-        r.record("cheap", false); // 0/3
-        r.record("expensive", true); // 3/3
+        r.record("cheap", false, Some(1.0)); // 0/3
+        r.record("expensive", true, Some(1.0)); // 3/3
     }
     let pool = [
         worker_of("cheap", Some(8.0), None),
@@ -290,8 +291,8 @@ fn a_strictly_better_trust_score_beats_a_cheaper_competitor() {
     // over the cheaper competitor.
     let mut r = Router::default();
     for i in 0..3 {
-        r.record("cheap", i < 2); // 2/3
-        r.record("expensive", true); // 3/3
+        r.record("cheap", i < 2, Some(1.0)); // 2/3
+        r.record("expensive", true, Some(1.0)); // 3/3
     }
     assert_eq!(
         r.pick(pool.iter()).unwrap().name,
@@ -349,6 +350,117 @@ fn incomparable_cost_bases_keep_config_order() {
         worker_of("twin2", Some(70.0), None),
     ];
     assert_eq!(r4.pick(pool.iter()).unwrap().name, "twin1");
+}
+
+// spec: scheduling/ucb1-worker-selection#faster-worker-wins-only-when-trust-and-cost-tie
+#[test]
+fn the_router_prefers_the_faster_worker_only_when_trust_and_cost_tie() {
+    // Equal trust (1/1 each), both bases undeclared — the costs cannot
+    // decide — and different mean durations: the FASTER worker wins the
+    // score tie even from second position in the pool, so only the
+    // duration tie-break can explain the pick.
+    let mut r = Router::default();
+    r.record("slow", true, Some(10.0));
+    r.record("fast", true, Some(2.0));
+    let pool = [worker_of("slow", None, None), worker_of("fast", None, None)];
+    assert_eq!(
+        r.pick(pool.iter()).unwrap().name,
+        "fast",
+        "on a trust+cost tie, the strictly lower mean duration wins regardless of config order"
+    );
+
+    // A STRICTLY better trust score still beats a faster worker: 3/3 vs
+    // 0/3 at equal counts is a strict score win, so the slower-but-solid
+    // worker takes it — duration is a tie-break, never a score term.
+    let mut r = Router::default();
+    for _ in 0..3 {
+        r.record("solid", true, Some(10.0)); // 3/3, mean 10.0s
+        r.record("fast", false, Some(1.0)); // 0/3, mean 1.0s
+    }
+    let pool = [
+        worker_of("fast", None, None),
+        worker_of("solid", None, None),
+    ];
+    assert_eq!(
+        r.pick(pool.iter()).unwrap().name,
+        "solid",
+        "measured trust outranks the faster worker"
+    );
+
+    // A CHEAPER declared price still beats a faster worker: cost is the
+    // earlier tie-break, so it decides before duration is ever consulted.
+    // "bargain" is 5x slower yet 10x cheaper — and wins.
+    let mut r = Router::default();
+    r.record("dear", true, Some(1.0));
+    r.record("bargain", true, Some(10.0));
+    let pool = [
+        worker_of("dear", None, Some(5.0)),
+        worker_of("bargain", None, Some(0.5)),
+    ];
+    assert_eq!(
+        r.pick(pool.iter()).unwrap().name,
+        "bargain",
+        "a cheaper declared price outranks the faster worker"
+    );
+
+    // No duration history → config order (no swap), in BOTH orders: a
+    // worker whose only attempt carries no measurement ("lost", the
+    // interrupted shape) ties "timed" on trust (0/1 each) with nothing to
+    // compare durations against. A missing duration is never zero — if it
+    // were, "lost" would win the [timed, lost] order as the "faster" one.
+    let with_none = |a: &str, b: &str| {
+        let mut r = Router::default();
+        r.record(a, false, None); // attempt recorded, duration unmeasured
+        r.record(b, false, Some(2.0));
+        r
+    };
+    let pool = [
+        worker_of("timed", None, None),
+        worker_of("lost", None, None),
+    ];
+    assert_eq!(
+        with_none("timed", "lost").pick(pool.iter()).unwrap().name,
+        "timed",
+        "a candidate with no duration never displaces the incumbent (missing ≠ 0.0)"
+    );
+    let pool = [
+        worker_of("lost", None, None),
+        worker_of("timed", None, None),
+    ];
+    assert_eq!(
+        with_none("timed", "lost").pick(pool.iter()).unwrap().name,
+        "lost",
+        "an incumbent with no duration is not beaten by any duration"
+    );
+
+    // An `interrupted` receipt does not enter the mean: its wall-clock is a
+    // placeholder, not a measurement — the mean stays over VERDICT
+    // attempts only ((2.0 + 6.0) / 2, never (2.0 + 6.0 + 999.0) / 3).
+    let receipt = |worker: &str, wall: f64, outcome: &str| Receipt {
+        task: "t".into(),
+        attempt: 1,
+        worker: worker.into(),
+        model: "m".into(),
+        wall_clock_s: wall,
+        tokens: None,
+        ts: 0,
+        outcome: outcome.into(),
+        error: None,
+        cost_micros: None,
+    };
+    let r = Router::from_receipts(&[
+        receipt("w1", 2.0, "merged"),
+        receipt("w1", 6.0, "failed"),
+        receipt("w1", 999.0, "interrupted"),
+    ]);
+    assert_eq!(
+        r.mean_duration_s("w1"),
+        Some(4.0),
+        "the interrupted placeholder stays out of the mean"
+    );
+    // And a worker with ONLY interrupted attempts has no duration at all.
+    let r = Router::from_receipts(&[receipt("w2", 999.0, "interrupted")]);
+    assert_eq!(r.mean_duration_s("w2"), None);
 }
 
 // spec: scheduling/Dependency DAG
