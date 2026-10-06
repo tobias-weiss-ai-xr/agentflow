@@ -53,3 +53,34 @@ stale worktree dirs against every configured repo plus the default repo
 GIVEN a leftover worktree dir from a task whose repo is `aux`
 WHEN the next run starts
 THEN `aux` reports the worktree removed and `aux`'s stale branch is deleted.
+
+### Requirement: Rejected work is preserved on an archived branch
+
+A rejected attempt's committed work SHALL survive the cleanup that follows
+its failure, preserved as a COPY under `<branch>-rejected-<now>` (never a
+rename — the original branch, the cleanup, and the retry are unaffected),
+so the retry still starts clean from the current base while the paid-for
+work stays recoverable and the receipt names the archived branch. Archiving
+SHALL be best-effort and can never fail the attempt.
+
+#### Scenario: scope violation archives the committed work
+
+WHEN an attempt fails because the agent edited a file outside the task's scope
+AND archiving the attempt branch succeeds
+THEN the work is kept on `<branch>-rejected-<now>`, the failure message names
+that branch, the archived branch contains the agent's commit, and the original
+branch is removed so a retry starts clean.
+
+#### Scenario: merge conflict archives the committed work
+
+WHEN an attempt's committed branch conflicts with the base branch at merge
+time AND archiving the attempt branch succeeds
+THEN the work is kept on `<branch>-rejected-<now>`, the failure message names
+that branch, and the original branch is removed so a retry starts clean.
+
+#### Scenario: archiving never fails the attempt
+
+WHEN a rejected attempt cannot be archived (a git error, or a name collision
+that cannot be resolved)
+THEN the attempt still fails with its original message unchanged and no empty
+suffix, exactly as if archiving had not been attempted.

@@ -11,11 +11,12 @@
 //!
 //! This file pins that PUBLIC contract from the outside, using ONLY the
 //! exported surface (`is_repo`, `current_branch`, `create`, `remove`,
-//! `merge`, `MergeLocks`, `heal`, `clean_all`, `orphan_ids`, `clean`,
-//! `Worktree`) declared by `pub mod worktree` in `src/lib.rs`. Everything
-//! asserted here was read from the implementation first; where this file
-//! pins a choice the implementation could have made either way, it is called
-//! out at the assertion (e.g. a repeated merge is pinned as an `Ok` no-op).
+//! `merge`, `archive_branch`, `MergeLocks`, `heal`, `clean_all`,
+//! `orphan_ids`, `clean`, `Worktree`) declared by `pub mod worktree` in
+//! `src/lib.rs`. Everything asserted here was read from the implementation
+//! first; where this file pins a choice the implementation could have made
+//! either way, it is called out at the assertion (e.g. a repeated merge is
+//! pinned as an `Ok` no-op).
 //!
 //! Hermeticity: every test builds its OWN scratch repo with `git init -b
 //! main`, sets identity repo-locally, commits an initial file, and nests
@@ -25,8 +26,8 @@
 //! here is shared between tests. Uses only std + the crate; no new deps.
 
 use agentflow::worktree::{
-    clean, clean_all, create, current_branch, heal, is_repo, merge, orphan_ids, remove, MergeLocks,
-    Worktree,
+    archive_branch, clean, clean_all, create, current_branch, heal, is_repo, merge, orphan_ids,
+    remove, MergeLocks, Worktree,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -486,4 +487,49 @@ fn is_repo_and_current_branch_contract() {
         err.contains("not a git repository"),
         "create names the non-repo: {err}"
     );
+}
+
+/// `archive_branch` keeps a COPY of a branch's tip under a fresh,
+/// discoverable `<branch>-rejected-<now>` name (never a rename), leaves the
+/// original branch AND its worktree untouched — so the existing cleanup and
+/// the retry are unaffected — and never fails the caller: a missing branch
+/// or an unresolvable name collision yields `None`.
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch#archiving-never-fails-the-attempt
+#[test]
+fn archive_branch_copies_the_tip_without_touching_the_original() {
+    let s = Scratch::new("archive");
+    let wt = create_ok(&s.repo, &s.wt_root, "R1", "tf");
+    std::fs::write(wt.path.join("f.txt"), "agent worked\n").unwrap();
+    git(&wt.path, &["commit", "-am", "agent work"]);
+    let tip = git(&s.repo, &["rev-parse", "tf/R1"]);
+
+    // A real branch archives to a copy pointing at the SAME tip.
+    let name = archive_branch(&s.repo, "tf/R1", 1234).expect("archives a real branch");
+    assert_eq!(name, "tf/R1-rejected-1234");
+    assert_eq!(
+        git(&s.repo, &["rev-parse", name.as_str()]).trim(),
+        tip.trim(),
+        "the copy points at the original's tip"
+    );
+
+    // The ORIGINAL branch and its worktree are left alone.
+    assert!(
+        git_ok(&s.repo, &["rev-parse", "--verify", "refs/heads/tf/R1"]),
+        "original branch survives archiving"
+    );
+    assert!(wt.path.exists(), "worktree untouched by archiving");
+
+    // A name collision resolves via a growing `-<n>` suffix.
+    let name2 = archive_branch(&s.repo, "tf/R1", 1234).expect("resolves a name collision");
+    assert_eq!(name2, "tf/R1-rejected-1234-1");
+    assert_eq!(
+        git(&s.repo, &["rev-parse", name2.as_str()]).trim(),
+        tip.trim(),
+        "the suffixed copy also points at the same tip"
+    );
+
+    // A missing branch is `None` — archiving can never fail the caller.
+    assert!(archive_branch(&s.repo, "tf/does-not-exist", 999).is_none());
+
+    remove(&s.repo, &wt);
 }

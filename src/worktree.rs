@@ -112,6 +112,35 @@ pub fn remove_worktree_only(repo: &Path, wt: &Worktree) {
     );
 }
 
+/// Keep a COPY of `branch`'s tip under a fresh, discoverable name —
+/// `<branch>-rejected-<now>` — so the work an attempt paid for survives
+/// the cleanup that follows a failure, without disturbing the original
+/// branch (the retry MUST still start clean from the current base).
+/// Returns the new branch name. Never fails the caller: a git error or a
+/// name collision that cannot be resolved yields `None`, because the
+/// attempt's own failure is the story and archiving is a courtesy.
+pub fn archive_branch(repo: &Path, branch: &str, now: u64) -> Option<String> {
+    // Nothing to preserve when the branch is already gone.
+    if !branch_exists(repo, branch) {
+        return None;
+    }
+    let base = format!("{branch}-rejected-{now}");
+    let mut name = base.clone();
+    let mut n: u64 = 1;
+    loop {
+        // A COPY (`git branch <new> <branch>`), never a rename — the
+        // original branch is left untouched so the existing cleanup and the
+        // retry are unaffected. Pick the next free `-<n>` name when the
+        // requested one already exists; a git error or an unresolvable
+        // collision falls through to `None`.
+        if !branch_exists(repo, &name) && git(repo, &["branch", &name, branch]).passed() {
+            return Some(name);
+        }
+        name = format!("{base}-{n}");
+        n += 1;
+    }
+}
+
 /// Does `branch` exist as a local branch in `repo`?
 pub fn branch_exists(repo: &Path, branch: &str) -> bool {
     git(
