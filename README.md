@@ -22,7 +22,7 @@ providers directly.
 
 - **Parallel dispatch** — one worker per provider+model slot; concurrent tasks in isolated git worktrees
 - **Multi-repo** — one campaign can touch several repositories: `repos.json` maps names to paths, each task's worktree/branch/merge targets its own repo, deps order across repos
-- **Measured routing** — every attempt leaves a receipt with its outcome; free workers are picked by UCB1 (track record + exploration), per-worker trust shown in `af cost`
+- **Measured routing** — every attempt leaves a receipt with its outcome; free workers are picked by UCB1 (track record + exploration), per-worker trust shown in `af cost`; ties among equally trusted workers go to the cheaper declared basis, then to the faster measured mean, and only then to config order
 - **Retry memory** — failed attempts record their error; retry prompts list the task's earlier failures so the agent doesn't repeat them
 - **Exact acceptance gates** — each task declares a shell command that must exit 0 before merge
 - **Dependency DAG** — `deps` ordering, critical-path priority, deadlock detection
@@ -31,7 +31,7 @@ providers directly.
 - **Self-healing** — atomic JSON state; crash-safe resume; orphan worktree cleanup at startup, plus `af clean [--dry-run]` to sweep leftovers from crashed runs
 - **Validated config** — `af validate` pre-flights tasks/workers (dependency cycles, duplicate ids, no enabled workers) without dispatching anything
 - **Observable** — status board (`af status [--json]`), live `attach`, per-task logs, wall-clock cost receipts
-- **Sound by construction** — spec → contract → test pyramid (71 tests, incl. E2E against a stub agent + scratch git repos; no network in CI)
+- **Sound by construction** — spec → contract → test pyramid (300 tests, incl. E2E against a stub agent + scratch git repos; no network in CI)
 
 ## Quick start
 
@@ -129,6 +129,22 @@ from the config are listed in one `note:` footnote after the tables
 names with the attempt count): historical receipts routinely outlive
 config edits, so this is a note — never an error.
 
+When the agent CLI reports what an attempt actually COST, that measurement is
+recorded on the receipt in integer micro-USD (`cost_micros`) and OUTRANKS any
+declared basis for the attempt it belongs to. Only a strictly positive report
+counts as a measurement: every provider tested here reports `0`, which is
+indistinguishable from "not tracked", so a reported zero is recorded as
+unknown — never as a measured free run. On a report where any selected receipt
+carries a measurement the basis line names the measured source (`cost basis:
+provider-reported (USD)`, appending `; N of M attempt(s) estimated from a
+declared price`), and a row mixing a measured attempt with an estimated one is
+marked `~` (`~$0.0123` — summed dollars with at least one term an assumption),
+so an assumption is never presented as a measurement. The row invariants still
+hold: a measured+sized row stays `-`, because a dollar amount and a parameter
+ratio are incommensurable. A report none of whose receipts carries a
+measurement keeps the declared-basis output byte-for-byte, so nothing about a
+no-telemetry provider changes.
+
 The report also ends with a waste section: `WASTED: <seconds>s on <failed>
 of <total> attempt(s) (<pct>%)`, followed by a `WASTED BY REASON` breakdown
 that groups failed attempts by the CAUSE — the text before the first `:` in
@@ -140,6 +156,17 @@ trust block, the waste figures are computed over the same window-selected
 receipts, so `--last` / `--since` narrow the waste alongside the rest of the
 report; a window whose receipts contain no failures reports `0.0s` and omits
 the reason breakdown.
+
+A failed attempt's committed work is never destroyed. A GATE failure keeps its
+branch and the retry re-runs only the gate; a SCOPE VIOLATION or a MERGE
+CONFLICT archives the branch as `<branch>-rejected-<unix-ts>` before cleanup
+and names it in the receipt's error, so work an agent was already paid for
+stays recoverable — while the original branch is still deleted, so the retry
+starts clean off the current base. An attempt lost to a killed orchestrator is
+recorded as `interrupted`, and because the worker and the start time are
+persisted at dispatch the receipt names that worker (and its model) and
+reports `wall_clock_s` as an upper bound — time since dispatch, since the exit
+time is unknown. `interrupted` is not a verdict, so it never lowers trust.
 
 A receipt file that cannot be parsed (a torn write from an interrupted
 campaign) is reported by name with one `warning:` line — `af cost` and
@@ -326,18 +353,28 @@ score(worker) =  mean(worker)  +  sqrt( 2 * ln(N + 1) / (n + 1) )
 - `mean` = `wins ÷ attempts` — the worker's measured trust rate.
 - `N` = total attempts across all workers; `n` = this worker's attempts.
 
+A tie between equally scoring workers is broken in a fixed order: the cheaper
+DECLARED basis (`params_b` / `price_per_mtok_usd`) first, then the strictly
+faster measured mean wall-clock (`MEAN_S` in `af cost`, computed over verdict
+attempts only — an `interrupted` duration is a placeholder, not a
+measurement), then **config order**. A strictly higher score never loses a
+tie-break, so measured trust always outranks both. Duration is deliberately
+only a tie-break: wall-clock is confounded by task difficulty (the hard tasks
+go to the trusted worker), so making it part of the score would penalise a
+worker for being given the hard work and starve it.
+
 With no receipts yet, every worker scores `0` (a tie), broken in **config
 order** — the first configured worker (`opus`) takes the first ripe task and
 `gpt4o` takes the second, so both run concurrently. As receipts accumulate, a
 worker that keeps failing lowers its `mean`, while the exploration term gives
 an under-tried (or untried) worker the chance to be routed past it. `af cost`
-shows each worker's live trust rate so you can watch routing adapt between
-campaigns.
+shows each worker's live trust rate — and the `MEAN_S` the tie-break reads —
+so you can watch routing adapt between campaigns.
 
 ## Testing
 
 ```sh
-cargo test        # 71 tests: unit (scheduler DAG, contention, deadlock, state,
+cargo test        # 300 tests: unit (scheduler DAG, contention, deadlock, state,
                   # receipts, config validation, sandbox policy, multi-repo,
                   # UCB1 router, retry context, subprocess contracts) + E2E
                   # (fake agent + scratch git repos — no network)
