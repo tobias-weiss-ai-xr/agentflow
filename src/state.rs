@@ -27,6 +27,15 @@ pub struct TaskStatus {
     /// between attempts — `resume_action` maps it to `RerunAgent`.
     #[serde(default)]
     pub phase: Option<AttemptPhase>,
+    /// Unix ts when the running attempt was dispatched. Persisted BEFORE the
+    /// agent spawns, so a killed orchestrator still leaves behind the moment
+    /// the attempt started — the only thing that makes its spend measurable.
+    #[serde(default)]
+    pub attempt_started_ts: Option<u64>,
+    /// The worker that attempt was dispatched to: the task state is the only
+    /// place a killed orchestrator's choice survives.
+    #[serde(default)]
+    pub attempt_worker: Option<String>,
 }
 
 impl Default for TaskStatus {
@@ -36,6 +45,8 @@ impl Default for TaskStatus {
             attempts: 0,
             last_error: None,
             phase: None,
+            attempt_started_ts: None,
+            attempt_worker: None,
         }
     }
 }
@@ -441,6 +452,8 @@ mod tests {
                 attempts: 1,
                 last_error: None,
                 phase: None,
+                attempt_started_ts: None,
+                attempt_worker: None,
             },
         );
         store.save(&m).unwrap();
@@ -489,6 +502,8 @@ mod tests {
                 attempts: 1,
                 last_error: None,
                 phase: Some(AttemptPhase::AgentDone),
+                attempt_started_ts: None,
+                attempt_worker: None,
             },
         );
         store.save(&m).unwrap();

@@ -281,6 +281,8 @@ mod tests {
                         attempts: 0,
                         last_error: None,
                         phase: None,
+                        attempt_started_ts: None,
+                        attempt_worker: None,
                     },
                 )
             })
@@ -555,6 +557,8 @@ mod tests {
                         attempts: (rng() % 5) as u32,
                         last_error: None,
                         phase: None,
+                        attempt_started_ts: None,
+                        attempt_worker: None,
                     },
                 );
             }

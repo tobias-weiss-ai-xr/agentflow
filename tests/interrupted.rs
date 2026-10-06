@@ -4,6 +4,11 @@
 //! unknowable — and must stay OUT of worker trust: it is not a verdict on
 //! the worker.
 //!
+//! r11-attempt-identity: dispatch now persists WHO ran the attempt and
+//! WHEN it started, so a healed receipt names the worker, its configured
+//! model, and an UPPER-BOUND duration (time since dispatch) when that
+//! identity survived — and keeps the r9 placeholder when it did not.
+//!
 //! Harness follows `tests/e2e.rs::fixture`: a scratch git repo in a uniquely
 //! named temp dir, repo-local git identity, config files in temp, and a
 //! hand-built `Settings`. Receipts are seeded through the real `Store`
@@ -164,6 +169,8 @@ fn a_killed_attempt_is_recorded_as_interrupted_and_excluded_from_trust() {
             attempts: 2,
             last_error: None,
             phase: Some(AttemptPhase::Spawned),
+            attempt_started_ts: None,
+            attempt_worker: None,
         },
     );
     store.save(&status).unwrap();
@@ -276,4 +283,153 @@ fn interrupted_outcome_is_not_a_worker_verdict() {
     assert!(receipt("A", 1, "w1", "merged", 1).counts_as_verdict());
     assert!(receipt("A", 1, "w1", "failed", 1).counts_as_verdict());
     assert!(!receipt("A", 1, "w1", "interrupted", 1).counts_as_verdict());
+}
+
+/// Dispatch persists the attempt's identity (`attempt_worker`,
+/// `attempt_started_ts`) before the agent spawns, so a heal can tell the
+/// truth: the receipt NAMES the worker and its configured model, carries a
+/// wall-clock at least the time since dispatch (an upper bound — the exit
+/// time is unknowable), says so in `error`, and STILL is not a verdict:
+/// a measured duration must not move `WINS/TOTAL`, and the now-named
+/// worker must not be footnoted as missing from the config.
+// spec: state/cost-receipts#a-healed-receipt-names-the-worker-and-an-upper-bound-duration
+#[test]
+fn the_healed_receipt_names_the_worker_and_an_upper_bound_duration() {
+    let f = fixture(&tasks_json(), &worker_json(3));
+    let store = Store::new(f.st.state_dir.clone());
+
+    // A known track record for w1 on a DIFFERENT task: 2 merged, 1 failed →
+    // trust 2/3. The healed attempt naming w1 must NOT enter it (2/4).
+    for (attempt, outcome, ts) in [(1u32, "merged", 1u64), (2, "failed", 2)] {
+        store
+            .append_receipt(&receipt("B", attempt, "w1", outcome, ts))
+            .unwrap();
+    }
+    store
+        .append_receipt(&receipt("B", 3, "w1", "merged", 3))
+        .unwrap();
+
+    // A killed orchestrator's mid-attempt state, WITH the identity dispatch
+    // persisted: the worker it chose (w1) and the moment it started — 10s
+    // ago. `attempts: 2` means the running attempt is the third and final
+    // one, so the heal goes terminal and dispatches nothing.
+    const OFFSET_S: u64 = 10;
+    let mut status = HashMap::new();
+    status.insert(
+        "A".to_string(),
+        TaskStatus {
+            state: TaskState::Running,
+            attempts: 2,
+            last_error: None,
+            phase: Some(AttemptPhase::Spawned),
+            attempt_started_ts: Some(agentflow::state::now_ts() - OFFSET_S),
+            attempt_worker: Some("w1".to_string()),
+        },
+    );
+    store.save(&status).unwrap();
+
+    let _ = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
+
+    let receipts = store.load_receipts();
+    let interrupted: Vec<&Receipt> = receipts
+        .iter()
+        .filter(|r| r.outcome == "interrupted")
+        .collect();
+    assert_eq!(
+        interrupted.len(),
+        1,
+        "the killed attempt is recorded exactly once: {receipts:?}"
+    );
+    assert_eq!(interrupted[0].worker, "w1", "the persisted worker is named");
+    assert_eq!(
+        interrupted[0].model, "gpt-4o",
+        "the configured worker's model is named"
+    );
+    assert!(
+        interrupted[0].wall_clock_s >= OFFSET_S as f64,
+        "the duration is at least the elapsed offset, not 0.0: {}",
+        interrupted[0].wall_clock_s
+    );
+    let err = interrupted[0].error.as_deref().unwrap_or_default();
+    assert!(
+        err.contains("upper bound"),
+        "the reason says the duration is an upper bound: {err:?}"
+    );
+    assert!(!interrupted[0].counts_as_verdict());
+
+    // The measured duration did not buy the worker a verdict, and the
+    // now-named worker is not footnoted as absent from the config.
+    let after = run::cost(&f.cfg, &f.st, &CostFilter::default());
+    assert!(
+        after.contains(&format!("{:<14} {:<11} {:.2} {}", "w1", "2/3", 0.67, "-")),
+        "a measured duration is still not a verdict (would be 2/4):\n{after}"
+    );
+    assert!(
+        !after.contains("2/4"),
+        "trust denominator unchanged:\n{after}"
+    );
+    assert!(
+        after.contains("INTERRUPTED"),
+        "still reported distinctly:\n{after}"
+    );
+    assert!(
+        !after.contains("note:"),
+        "w1 is in the config — never footnoted as missing:\n{after}"
+    );
+}
+
+/// A state file without the identity fields (written before this change, or
+/// a crash before the first dispatch save) heals exactly as before: the
+/// placeholder worker, an honest 0.0s, and the original error text.
+// spec: state/cost-receipts#a-state-without-attempt-identity-heals-with-the-placeholder
+#[test]
+fn a_state_without_attempt_identity_heals_as_before() {
+    let f = fixture(&tasks_json(), &worker_json(3));
+    let store = Store::new(f.st.state_dir.clone());
+
+    let mut status = HashMap::new();
+    status.insert(
+        "A".to_string(),
+        TaskStatus {
+            state: TaskState::Running,
+            attempts: 2,
+            last_error: None,
+            phase: Some(AttemptPhase::Spawned),
+            attempt_started_ts: None,
+            attempt_worker: None,
+        },
+    );
+    store.save(&status).unwrap();
+
+    let _ = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
+
+    let receipts = store.load_receipts();
+    let interrupted: Vec<&Receipt> = receipts
+        .iter()
+        .filter(|r| r.outcome == "interrupted")
+        .collect();
+    assert_eq!(
+        interrupted.len(),
+        1,
+        "exactly one lost attempt: {receipts:?}"
+    );
+    assert_eq!(
+        interrupted[0].worker,
+        run::UNKNOWN_WORKER,
+        "no persisted worker → the placeholder"
+    );
+    assert_eq!(
+        interrupted[0].model,
+        run::UNKNOWN_WORKER,
+        "no persisted worker → no model claimed"
+    );
+    assert_eq!(
+        interrupted[0].wall_clock_s, 0.0,
+        "no persisted start → the honest zero"
+    );
+    assert_eq!(
+        interrupted[0].error.as_deref(),
+        Some("orchestrator exited mid-attempt; attempt duration unknown"),
+        "the original error text, exactly"
+    );
 }

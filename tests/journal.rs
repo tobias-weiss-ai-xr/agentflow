@@ -301,6 +301,8 @@ fn phase_serializes_snake_case_in_persisted_state() {
             attempts: 1,
             last_error: None,
             phase: Some(AttemptPhase::AgentDone),
+            attempt_started_ts: None,
+            attempt_worker: None,
         },
     );
     store.save(&m).expect("save journaled state");

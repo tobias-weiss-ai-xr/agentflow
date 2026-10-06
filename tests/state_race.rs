@@ -35,6 +35,8 @@ fn payload(len: usize) -> HashMap<String, TaskStatus> {
             attempts: 1,
             last_error: Some("x".repeat(len)),
             phase: None,
+            attempt_started_ts: None,
+            attempt_worker: None,
         },
     );
     m

@@ -83,6 +83,8 @@ fn status_with(pairs: &[(&str, TaskState, u32)]) -> HashMap<String, TaskStatus> 
                     attempts: *attempts,
                     last_error: None,
                     phase: None,
+                    attempt_started_ts: None,
+                    attempt_worker: None,
                 },
             )
         })

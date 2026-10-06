@@ -40,13 +40,29 @@ Each attempt SHALL append a receipt (task id, attempt number, worker, model, wal
 When startup heal finds a stale `running` attempt whose durable agent
 outcome cannot be resumed (it must re-run the agent — phase `Spawned`, a
 legacy state file with no phase, or missing resume artifacts), `af` SHALL
-append an `interrupted` receipt for that lost attempt — `wall_clock_s` 0.0
-because the true duration is unknown, and an `error` explaining that the
-orchestrator exited mid-attempt. `interrupted` is NOT a verdict on the
-worker: `Receipt::counts_as_verdict` SHALL be false for it, and every trust
-statistic SHALL exclude it from both the numerator and the denominator. A
-resume that finishes from durable state (phase `AgentDone` or `GatePassed`)
-is not lost and records no `interrupted` receipt.
+append an `interrupted` receipt for that lost attempt. Dispatch SHALL
+persist the attempt's identity in the task state in the same save that
+marks the task `running` — BEFORE the agent spawns — as two optional
+fields: `attempt_started_ts` (the unix timestamp the running attempt was
+dispatched) and `attempt_worker` (the worker it was dispatched to), so a
+killed orchestrator still leaves behind who was running and when the
+attempt started. When that identity is present, the healed receipt SHALL
+name the persisted worker, name the configured worker's model (`unknown`
+when that worker is no longer in the config — a healed attempt must never
+claim a model nobody recorded), carry `wall_clock_s` = time since dispatch
+— an UPPER BOUND, because the exit time is unknowable — and an `error`
+saying the duration is the time since dispatch and an upper bound. When
+the identity is absent (a state file from before this change, or a crash
+before the first dispatch save), the receipt keeps the placeholder
+behaviour: worker `unknown`, model `unknown`, `wall_clock_s` 0.0, and an
+`error` explaining that the orchestrator exited mid-attempt and the
+duration is unknown. Either way `interrupted` is NOT a verdict on the
+worker: `Receipt::counts_as_verdict` SHALL be false for it, every trust
+statistic SHALL exclude it from both the numerator and the denominator,
+and the cost report SHALL NOT footnote the now-named worker as missing
+from the config. A resume that finishes from durable state (phase
+`AgentDone` or `GatePassed`) is not lost and records no `interrupted`
+receipt.
 
 #### Scenario: receipt appended per attempt
 
@@ -94,6 +110,18 @@ THEN `cost_micros` equals that amount in micro-USD and the task log's usage line
 GIVEN a task left `running` by a killed orchestrator with no durable resume artifacts
 WHEN the next `af run` heals the stale attempt by re-running the agent
 THEN an `interrupted` receipt naming the task and attempt exists with `wall_clock_s` 0.0 and an `error` explaining the duration is unknown, and `Receipt::counts_as_verdict` is false for it.
+
+#### Scenario: a healed receipt names the worker and an upper-bound duration
+
+GIVEN a task left `running` by a killed orchestrator whose persisted state carries `attempt_worker` and `attempt_started_ts`
+WHEN the next `af run` heals the stale attempt by re-running the agent
+THEN the `interrupted` receipt names that worker and its configured model, carries a `wall_clock_s` at least the time since dispatch with an `error` saying the duration is an upper bound, and still does not enter any `WINS/TOTAL`.
+
+#### Scenario: a state without attempt identity heals with the placeholder
+
+GIVEN a task left `running` by a killed orchestrator whose persisted state carries neither `attempt_worker` nor `attempt_started_ts`
+WHEN the next `af run` heals the stale attempt by re-running the agent
+THEN the `interrupted` receipt records worker `unknown` and `wall_clock_s` 0.0 with an `error` explaining the duration is unknown.
 
 ### Requirement: Single-writer state lock
 

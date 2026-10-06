@@ -373,6 +373,13 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                     // worker commits it before spawning the agent). A crash
                     // in that window resumes as RerunAgent — always safe.
                     s.phase = None;
+                    // Attempt identity (r11-attempt-identity): same save,
+                    // same window. A crash after this point still leaves
+                    // behind WHO ran the attempt and WHEN it started, so
+                    // the startup heal can name the worker and measure an
+                    // upper-bound duration instead of a placeholder.
+                    s.attempt_started_ts = Some(crate::state::now_ts());
+                    s.attempt_worker = Some(worker.name.clone());
                     s.attempts + 1
                 };
                 let _ = store.save(&status);
@@ -740,27 +747,59 @@ fn heal_stale_attempt(
     if !handled {
         // Record the lost attempt (r9-interrupted): heal could not resume
         // its durable agent outcome, so it produced no verdict and the
-        // process died — the duration is genuinely unknown. An honest zero
-        // plus the reason beats an invented number, and the receipt keeps
-        // the attempt visible in `af cost` (interrupted, not a worker
-        // loss). The attempt number is the one dispatch persisted
+        // process died. Attempt identity (r11-attempt-identity): dispatch
+        // persisted WHO ran the attempt and WHEN it started, so the
+        // receipt tells the truth when they are known — the persisted
+        // worker and its configured model, plus a duration measured from
+        // dispatch. That duration is an UPPER BOUND, not a measurement of
+        // the attempt: the exit time is unknowable, only the start is
+        // durable. The receipt keeps the attempt visible in `af cost`
+        // (interrupted, not a worker loss). An older state file (or a
+        // crash before the first dispatch save) has neither field and
+        // keeps the exact pre-change placeholder: `unknown`/0.0s.
+        // The attempt number is the one dispatch persisted
         // (`attempts + 1`), exactly the incremented count above.
         // NOTE: a successful gate/merge resume is NOT lost — its agent work
         // is durable and finishes as merged — so it records no receipt here.
         let store = Store::new(st.state_dir.clone());
         let attempt = status.get(id).map(|s| s.attempts).unwrap_or(0);
+        let identity = status
+            .get(id)
+            .map(|s| (s.attempt_started_ts, s.attempt_worker.clone()));
+        let (started_ts, worker_name) = identity.unwrap_or((None, None));
+        // The worker: the one dispatch chose, when that choice survived.
+        let worker = worker_name
+            .clone()
+            .unwrap_or_else(|| UNKNOWN_WORKER.to_string());
+        // The model: ONLY the configured worker's — a healed attempt must
+        // never claim a model nobody recorded (a worker since removed from
+        // the config keeps the placeholder for the model).
+        let model = worker_name
+            .as_deref()
+            .and_then(|name| cfg.workers.iter().find(|w| w.name == name))
+            .map(|w| w.model.clone())
+            .unwrap_or_else(|| UNKNOWN_WORKER.to_string());
+        let (wall_clock_s, error) = match started_ts {
+            Some(ts) => (
+                crate::state::now_ts().saturating_sub(ts) as f64,
+                "orchestrator exited mid-attempt; duration is time since dispatch (the exit time is unknown, so this is an upper bound)"
+                    .to_string(),
+            ),
+            None => (
+                0.0,
+                "orchestrator exited mid-attempt; attempt duration unknown".to_string(),
+            ),
+        };
         let _ = store.append_receipt(&Receipt {
             task: id.to_string(),
             attempt,
-            // The worker is not persisted in the task state, so the dead
-            // attempt's worker is unknowable at heal time.
-            worker: UNKNOWN_WORKER.to_string(),
-            model: UNKNOWN_WORKER.to_string(),
-            wall_clock_s: 0.0,
+            worker,
+            model,
+            wall_clock_s,
             tokens: None,
             ts: crate::state::now_ts(),
             outcome: OUTCOME_INTERRUPTED.to_string(),
-            error: Some("orchestrator exited mid-attempt; attempt duration unknown".to_string()),
+            error: Some(error),
             cost_micros: None,
         });
         // RerunAgent, or a resume that lost its artifacts (always safe):
@@ -1665,9 +1704,16 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
     let mut unknown: BTreeMap<&str, usize> = BTreeMap::new();
     for r in &selected {
         // `UNKNOWN_WORKER` is the heal's placeholder for "the worker of this
-        // killed attempt is unknowable", not a worker that vanished from the
-        // config: the INTERRUPTED line already accounts for that attempt.
-        if r.worker != UNKNOWN_WORKER && !bases.iter().any(|(name, _)| name == &r.worker) {
+        // killed attempt is unknowable", not a worker that vanished from
+        // the config: the INTERRUPTED line already accounts for that
+        // attempt. The same holds for an interrupted receipt that names a
+        // real worker (r11-attempt-identity: dispatch persists the choice)
+        // — an attempt lost to a killed orchestrator is never evidence of
+        // a worker missing from the config, measured duration or not.
+        if r.counts_as_verdict()
+            && r.worker != UNKNOWN_WORKER
+            && !bases.iter().any(|(name, _)| name == &r.worker)
+        {
             *unknown.entry(r.worker.as_str()).or_insert(0) += 1;
         }
     }
@@ -1853,6 +1899,8 @@ mod tests {
             attempts,
             last_error: None,
             phase,
+            attempt_started_ts: None,
+            attempt_worker: None,
         }
     }
 
@@ -1926,6 +1974,8 @@ mod tests {
                 attempts: 3,
                 last_error: None,
                 phase: None,
+                attempt_started_ts: None,
+                attempt_worker: None,
             },
         );
         status.insert(
@@ -1935,6 +1985,8 @@ mod tests {
                 attempts: 2,
                 last_error: Some("boom".into()),
                 phase: None,
+                attempt_started_ts: None,
+                attempt_worker: None,
             },
         );
         let board = board_of(&cfg, &status);
@@ -1969,6 +2021,8 @@ mod tests {
                 attempts: 2,
                 last_error: Some("nope".into()),
                 phase: None,
+                attempt_started_ts: None,
+                attempt_worker: None,
             },
         );
         Store::new(st.state_dir.clone()).save(&status).unwrap();
