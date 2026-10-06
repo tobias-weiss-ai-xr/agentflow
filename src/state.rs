@@ -102,6 +102,13 @@ pub struct Receipt {
     /// attempts and for legacy receipts.
     #[serde(default)]
     pub error: Option<String>,
+    /// The provider's OWN reported cost for this attempt, in MICRO-USD
+    /// (integer, so the ledger carries no float drift). `None` means the
+    /// provider reported no cost — which is NOT zero: every provider tested
+    /// here reports exactly 0, indistinguishable from "not tracked", so a
+    /// reported 0 is recorded as `None`, never as a measured free run.
+    #[serde(default)]
+    pub cost_micros: Option<u64>,
 }
 
 /// Outcome recorded for an attempt lost because the orchestrator itself died
@@ -512,12 +519,22 @@ mod tests {
         let dir = d.join("receipts");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("A-1-0.json"), body).unwrap();
-        let rs = Store::new(d).load_receipts();
+        let rs = Store::new(d.clone()).load_receipts();
         assert_eq!(rs.len(), 1);
         assert_eq!(
             rs[0].outcome, "merged",
             "pre-routing receipts were success-only"
         );
+        assert_eq!(rs[0].cost_micros, None, "legacy receipts predate the field");
+        // A receipt that DOES carry a measured cost round-trips it exactly —
+        // the integer micro-USD survives the JSON boundary unchanged.
+        std::fs::write(
+            dir.join("A-1-1.json"),
+            r#"{"task":"A","attempt":1,"worker":"w1","model":"m","wall_clock_s":1.0,"tokens":null,"ts":0,"cost_micros":12300}"#,
+        )
+        .unwrap();
+        let rs = Store::new(d).load_receipts();
+        assert_eq!(rs[0].cost_micros, Some(12_300));
     }
 
     #[test]
@@ -534,6 +551,7 @@ mod tests {
                 ts: 1,
                 outcome: "merged".into(),
                 error: None,
+                cost_micros: None,
             })
             .unwrap();
         store
@@ -547,6 +565,7 @@ mod tests {
                 ts: 2,
                 outcome: "failed".into(),
                 error: Some("agent exited 7".into()),
+                cost_micros: None,
             })
             .unwrap();
         let rs = store.load_receipts();

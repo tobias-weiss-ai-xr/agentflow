@@ -122,6 +122,7 @@ mod tests {
             ts: 0,
             outcome: outcome.into(),
             error: None,
+            cost_micros: None,
         }
     }
 

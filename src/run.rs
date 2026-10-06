@@ -10,7 +10,9 @@
 pub const UNKNOWN_WORKER: &str = "unknown";
 
 use crate::config::{Config, Settings, TaskState};
-use crate::cost::{basis as declared_basis, estimate_usd, size_ratio, Basis};
+use crate::cost::{
+    attempt_expense, basis as declared_basis, estimate_usd, size_ratio, Basis, Expense,
+};
 use crate::execute::{self, ExecCtx, Outcome};
 use crate::gate;
 use crate::router::Router;
@@ -759,6 +761,7 @@ fn heal_stale_attempt(
             ts: crate::state::now_ts(),
             outcome: OUTCOME_INTERRUPTED.to_string(),
             error: Some("orchestrator exited mid-attempt; attempt duration unknown".to_string()),
+            cost_micros: None,
         });
         // RerunAgent, or a resume that lost its artifacts (always safe):
         // apply the budget to the now-counted attempt — Ready for a fresh
@@ -1147,11 +1150,48 @@ fn basis_of(worker: &str, bases: &[(String, Option<Basis>)]) -> Option<Basis> {
 }
 
 /// The ONE basis line printed above the tables, so a relative proxy can
-/// never be misread as money. Chosen from the DECLARATIONS alone: any
-/// worker declaring a price puts the report on the prices basis (with a
-/// note when some other worker declares only `params_b`), else the
+/// never be misread as money. A MEASURED cost is real money and outranks
+/// every declared basis: when any selected receipt carries one, the line
+/// names the provider as the source (`provider-reported (USD)`) and counts
+/// the attempts that still ride an estimate from a declared price, so a
+/// mixed report explains its own `~` markers. With no measured cost the
+/// line is chosen from the DECLARATIONS alone — byte-identical to round
+/// 10: any worker declaring a price puts the report on the prices basis
+/// (with a note when some other worker declares only `params_b`), else the
 /// `params_b` proxy, else an honest `none`.
-fn basis_line(bases: &[(String, Option<Basis>)]) -> String {
+fn basis_line(
+    bases: &[(String, Option<Basis>)],
+    selected: &[&Receipt],
+    all_declared: &[Basis],
+) -> String {
+    let measured = selected.iter().filter(|r| r.cost_micros.is_some()).count();
+    if measured > 0 {
+        let mut line = "cost basis: provider-reported (USD)".to_string();
+        let estimated = selected
+            .iter()
+            .filter(|r| {
+                matches!(
+                    attempt_expense(
+                        r.cost_micros,
+                        basis_of(&r.worker, bases),
+                        r.tokens,
+                        all_declared
+                    ),
+                    Some(Expense::Usd {
+                        estimated: true,
+                        ..
+                    })
+                )
+            })
+            .count();
+        if estimated > 0 {
+            line.push_str(&format!(
+                "; {estimated} of {} attempt(s) estimated from a declared price",
+                selected.len()
+            ));
+        }
+        return line;
+    }
     let any_priced = bases
         .iter()
         .any(|(_, b)| matches!(b, Some(Basis::Priced(_))));
@@ -1250,6 +1290,117 @@ fn task_cost_cell(
     }
 }
 
+/// A row's folded expense on a report that carries at least one MEASURED
+/// cost: dollars when EVERY attempt folds to dollars (measured or
+/// estimated), the token-weighted mean ratio when every attempt folds to
+/// a ratio. `None` (rendered `-`) when the attempts are incommensurable —
+/// dollars and a parameter ratio must never be converted into each other —
+/// or any attempt's expense is unknown (no basis, no tokens, an absent
+/// worker): one unknown term must not silently understate a figure that
+/// reads as exact.
+enum RowExpense {
+    Usd { micros: u64, estimated: bool },
+    Ratio(f64),
+}
+
+fn row_expense(
+    rs: &[&Receipt],
+    basis_of_attempt: impl Fn(&Receipt) -> Option<Basis>,
+    all_declared: &[Basis],
+) -> Option<RowExpense> {
+    let mut micros: u64 = 0;
+    let mut estimated = false;
+    let mut any_usd = false;
+    let mut weighted = 0.0; // Σ tokens·ratio
+    let mut tokens = 0.0;
+    let mut any_ratio = false;
+    for r in rs {
+        match attempt_expense(r.cost_micros, basis_of_attempt(r), r.tokens, all_declared)? {
+            Expense::Usd {
+                micros: m,
+                estimated: e,
+            } => {
+                any_usd = true;
+                micros = micros.saturating_add(m);
+                estimated |= e;
+            }
+            // The ladder guarantees tokens here; a defensive 0 weight can
+            // only understate a proxy, never invent one.
+            Expense::Ratio(x) => {
+                any_ratio = true;
+                let t = r.tokens.unwrap_or(0) as f64;
+                weighted += t * x;
+                tokens += t;
+            }
+        }
+    }
+    // A measured dollar amount and a parameter RATIO are incommensurable.
+    if any_usd && any_ratio {
+        return None;
+    }
+    if any_usd {
+        Some(RowExpense::Usd { micros, estimated })
+    } else if tokens > 0.0 {
+        Some(RowExpense::Ratio(weighted / tokens))
+    } else {
+        None
+    }
+}
+
+/// Render one folded [`RowExpense`] as a COST cell: measured dollars carry
+/// no marker; dollars containing ANY estimated term carry `~` so an
+/// assumption is never presented as a measurement; a ratio is `N.NNx`,
+/// never a `$`.
+fn render_row_expense(e: &RowExpense) -> String {
+    match e {
+        RowExpense::Usd { micros, estimated } => format!(
+            "{}${:.4}",
+            if *estimated { "~" } else { "" },
+            *micros as f64 / 1_000_000.0
+        ),
+        RowExpense::Ratio(r) => format!("{r:.2}x"),
+    }
+}
+
+/// The COST cell for one TASK row on a measured report — same position and
+/// placeholder rules as [`task_cost_cell`], but folded through the
+/// truthfulness ladder ([`row_expense`]) so a provider-reported cost
+/// outranks the declared basis for its own attempt.
+fn measured_task_cell(
+    rs: &[&Receipt],
+    bases: &[(String, Option<Basis>)],
+    all_declared: &[Basis],
+) -> String {
+    row_expense(rs, |r| basis_of(&r.worker, bases), all_declared)
+        .as_ref()
+        .map_or_else(|| "-".into(), render_row_expense)
+}
+
+/// The COST cell for one WORKER row on a measured report. Same ladder as
+/// the task rows — a worker's measured receipts sum as dollars, mixed with
+/// an estimate they are `~`-marked — with one worker-specific fallback: a
+/// worker none of whose receipts carries a measured cost and none of which
+/// folds keeps round 10's DECLARED-RATE display (a declared rate is a
+/// property of the worker, not of the tokens that happened to be
+/// recorded — see [`worker_cost_cell`]).
+fn measured_worker_cell(
+    rs: &[&Receipt],
+    basis: Option<Basis>,
+    tokens: Option<u64>,
+    all_declared: &[Basis],
+) -> String {
+    match row_expense(rs, |_| basis, all_declared) {
+        Some(e) => render_row_expense(&e),
+        None => {
+            if rs.iter().all(|r| r.cost_micros.is_none()) {
+                worker_cost_cell(basis, tokens, all_declared)
+            } else {
+                "-".into()
+            }
+        }
+    }
+}
+
 /// `af cost`: aggregate receipts (wall-clock truth, ADR-9). The table rows
 /// honor `filter.task`; the TOTAL line and the per-worker trust block are
 /// computed over the window-selected receipts only — with no window flags
@@ -1270,10 +1421,15 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
     // units of the COST column before any number is read, so a relative
     // proxy can never be misread as money. `all_declared` spans EVERY
     // worker in cfg.workers, so the cheapest declaring worker is always
-    // exactly `1.00x` on the proxy scale.
+    // exactly `1.00x` on the proxy scale. (r11-measured-cost) when any
+    // selected receipt carries a provider-reported cost, the same flag
+    // switches BOTH tables' cells to the truthfulness ladder — measured
+    // money first — and the basis line names the measured source; with no
+    // measured cost anywhere the report stays byte-identical to round 10.
     let bases = worker_bases(cfg);
     let all_declared = declared_bases(&bases);
-    lines.push_str(&basis_line(&bases));
+    let report_measured = selected.iter().any(|r| r.cost_micros.is_some());
+    lines.push_str(&basis_line(&bases, &selected, &all_declared));
     lines.push('\n');
     lines.push_str(&format!(
         "{:<12} {:<9} {:<10} {:<9} {:<8} {}",
@@ -1308,8 +1464,15 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
                 .unwrap_or_else(|| "-".into());
             // Estimated expense for the whole row (dollars when every
             // attempt is Priced, the token-weighted mean rate when every
-            // attempt is Sized, `-` otherwise).
-            let cost_cell = task_cost_cell(&rs, &bases, &all_declared);
+            // attempt is Sized, `-` otherwise). On a measured report the
+            // same cell is folded through the ladder instead: a
+            // provider-reported cost outranks the declared basis for its
+            // own attempt.
+            let cost_cell = if report_measured {
+                measured_task_cell(&rs, &bases, &all_declared)
+            } else {
+                task_cost_cell(&rs, &bases, &all_declared)
+            };
             lines.push_str(&format!(
                 "\n{:<12} {:<9} {:<10.1} {:<9} {:<8} {}",
                 t.id,
@@ -1334,6 +1497,10 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
     // receipts that form its row — the input to its COST cell. `None`
     // until a receipt actually carries tokens (legacy receipts never do).
     let mut worker_tokens: HashMap<String, Option<u64>> = HashMap::new();
+    // The same receipts themselves, grouped per worker: a measured report
+    // folds its COST cell attempt-by-attempt (a provider-reported cost is
+    // a per-attempt fact), which the summed tokens alone cannot express.
+    let mut worker_receipts: HashMap<String, Vec<&Receipt>> = HashMap::new();
     for r in selected.iter().copied().filter(|r| r.counts_as_verdict()) {
         let e = by_worker.iter_mut().find(|(n, _, _)| n == &r.worker);
         let won = r.outcome == "merged";
@@ -1350,6 +1517,7 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
         if let Some(v) = r.tokens {
             *t = Some(t.unwrap_or(0) + v);
         }
+        worker_receipts.entry(r.worker.clone()).or_default().push(r);
     }
     if !by_worker.is_empty() {
         by_worker.sort();
@@ -1362,12 +1530,27 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
             // on the selected window: dollars from a declared price, a
             // relative rate from `params_b`, `-` when neither is declared,
             // the worker is absent from the config, or no tokens were ever
-            // recorded (legacy receipts).
-            let cost_cell = worker_cost_cell(
-                basis_of(&name, &bases),
-                worker_tokens.get(name.as_str()).copied().flatten(),
-                &all_declared,
-            );
+            // recorded (legacy receipts). On a measured report the cell is
+            // folded attempt-by-attempt instead: measured dollars first,
+            // `~` when any term is estimated.
+            let worker_rs: &[&Receipt] = worker_receipts
+                .get(name.as_str())
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let cost_cell = if report_measured {
+                measured_worker_cell(
+                    worker_rs,
+                    basis_of(&name, &bases),
+                    worker_tokens.get(name.as_str()).copied().flatten(),
+                    &all_declared,
+                )
+            } else {
+                worker_cost_cell(
+                    basis_of(&name, &bases),
+                    worker_tokens.get(name.as_str()).copied().flatten(),
+                    &all_declared,
+                )
+            };
             lines.push_str(&format!(
                 "\n{:<14} {:<11} {:.2} {}",
                 name,
@@ -1986,6 +2169,7 @@ mod tests {
             ts: 1,
             outcome: outcome.into(),
             error: None,
+            cost_micros: None,
         };
         store.append_receipt(&receipt("A", 10.0, "merged")).unwrap();
         store.append_receipt(&receipt("A", 5.5, "failed")).unwrap();
@@ -2030,6 +2214,7 @@ mod tests {
             ts: 0,
             outcome: "failed".into(),
             error: error.map(str::to_string),
+            cost_micros: None,
         };
         // No error on the receipt → the literal key.
         assert_eq!(waste_cause(&r(None)), "unknown");
@@ -2124,6 +2309,7 @@ mod tests {
                 ts,
                 outcome: outcome.into(),
                 error: None,
+                cost_micros: None,
             };
         // A: a failed retry then a merge on another worker. B: a same-ts
         // tie between attempts 1/2 — the greater attempt must win. C: two
@@ -2236,6 +2422,7 @@ mod tests {
             ts,
             outcome: outcome.into(),
             error: None,
+            cost_micros: None,
         };
         store
             .append_receipt(&rcpt(1, 1_600_000_000, 100.0, "w1", "failed"))
@@ -2366,6 +2553,7 @@ mod tests {
             ts: 1,
             outcome: "merged".into(),
             error: None,
+            cost_micros: None,
         };
         // Every attempt Priced: the dollars SUM (500k + 250k at $2/Mtok).
         let r1 = rcpt("pw", Some(500_000));
@@ -2412,22 +2600,163 @@ mod tests {
         let sized = vec![("v".to_string(), Some(Basis::Sized(8.0)))];
         let none = vec![("n".to_string(), None)];
         assert_eq!(
-            basis_line(&priced),
+            basis_line(&priced, &[], &[]),
             "cost basis: declared prices (USD per 1M tokens)"
         );
         // Both kinds declared: say so, so the mixed `$` / `N.NNx` cells on
         // one report are explained before they are read.
         assert_eq!(
-            basis_line(&mixed),
+            basis_line(&mixed, &[], &[]),
             "cost basis: declared prices (USD per 1M tokens); some workers declare only params_b"
         );
         assert_eq!(
-            basis_line(&sized),
+            basis_line(&sized, &[], &[]),
             "cost basis: params_b proxy (relative; cheapest declared worker = 1.00x)"
         );
         assert_eq!(
-            basis_line(&none),
+            basis_line(&none, &[], &[]),
             "cost basis: none (no worker declares params_b or price_per_mtok_usd)"
+        );
+    }
+
+    /// (r11-measured-cost) the basis line names the provider as the source
+    /// when a selected receipt carries a measured cost, and counts the
+    /// attempts still riding a declared-price estimate; a measured-only
+    /// window says just `provider-reported`, and no measured cost anywhere
+    /// keeps the round-10 lines byte-for-byte.
+    #[test]
+    fn basis_line_names_the_measured_source_when_one_exists() {
+        let bases = vec![
+            ("pw".to_string(), Some(Basis::Priced(2.0))),
+            ("sw".to_string(), Some(Basis::Sized(8.0))),
+        ];
+        let all = vec![Basis::Sized(8.0)];
+        let rcpt = |worker: &str, tokens: Option<u64>, cost: Option<u64>| Receipt {
+            task: "A".into(),
+            attempt: 1,
+            worker: worker.into(),
+            model: "m".into(),
+            wall_clock_s: 1.0,
+            tokens,
+            ts: 1,
+            outcome: "merged".into(),
+            error: None,
+            cost_micros: cost,
+        };
+        // One measured + one price-estimated attempt → named source plus
+        // the estimate count, exactly the shape the report prints.
+        let measured = rcpt("pw", Some(4242), Some(12_300));
+        let estimated = rcpt("pw", Some(500_000), None);
+        assert_eq!(
+            basis_line(&bases, &[&measured, &estimated], &all),
+            "cost basis: provider-reported (USD); 1 of 2 attempt(s) estimated from a declared price"
+        );
+        // A measured-only window: no estimate note.
+        assert_eq!(
+            basis_line(&bases, &[&measured], &all),
+            "cost basis: provider-reported (USD)"
+        );
+        // Even a measured cost on a worker declaring NOTHING puts the
+        // report on the measured basis (real money is not a proxy).
+        let nobasis = vec![("n".to_string(), None)];
+        assert_eq!(
+            basis_line(&nobasis, &[&measured], &all),
+            "cost basis: provider-reported (USD)"
+        );
+        // No measured cost: the round-10 declaration lines, byte-for-byte
+        // (this bases set declares a price AND a size, so the mixed note
+        // rides along exactly as it did before).
+        assert_eq!(
+            basis_line(&bases, &[&estimated], &all),
+            "cost basis: declared prices (USD per 1M tokens); some workers declare only params_b"
+        );
+    }
+
+    /// (r11-measured-cost) the measured report's cells: a provider-reported
+    /// cost outranks the declared price for its attempt; dollars containing
+    /// an estimated term carry `~`; dollars and ratios never mix.
+    #[test]
+    fn measured_cells_prefer_reported_costs_and_mark_estimates() {
+        let bases = vec![
+            ("pw".to_string(), Some(Basis::Priced(2.0))),
+            ("sw".to_string(), Some(Basis::Sized(8.0))),
+            ("cw".to_string(), Some(Basis::Sized(4.0))),
+        ];
+        let all = vec![Basis::Sized(4.0), Basis::Sized(8.0)];
+        let rcpt = |worker: &str, tokens: Option<u64>, cost: Option<u64>| Receipt {
+            task: "A".into(),
+            attempt: 1,
+            worker: worker.into(),
+            model: "m".into(),
+            wall_clock_s: 1.0,
+            tokens,
+            ts: 1,
+            outcome: "merged".into(),
+            error: None,
+            cost_micros: cost,
+        };
+        // Measured beats declared: 500k tokens at $2/Mtok would estimate to
+        // $1.0000, but the provider reported $0.0123 — the measurement wins
+        // and carries NO `~`.
+        let measured = rcpt("pw", Some(500_000), Some(12_300));
+        assert_eq!(measured_task_cell(&[&measured], &bases, &all), "$0.0123");
+        assert_eq!(
+            measured_worker_cell(&[&measured], basis_of("pw", &bases), Some(500_000), &all),
+            "$0.0123"
+        );
+        // Measured + price-estimated: dollars SUM, marked `~` (an estimate
+        // must never read as a measurement).
+        let estimated = rcpt("pw", Some(500_000), None);
+        assert_eq!(
+            measured_task_cell(&[&measured, &estimated], &bases, &all),
+            "~$1.0123"
+        );
+        assert_eq!(
+            measured_worker_cell(
+                &[&measured, &estimated],
+                basis_of("pw", &bases),
+                Some(1_000_000),
+                &all
+            ),
+            "~$1.0123"
+        );
+        // Measured + sized: dollars and a ratio are incommensurable — `-`,
+        // exactly like a price+sized row.
+        let sized = rcpt("sw", Some(1), None);
+        assert_eq!(measured_task_cell(&[&measured, &sized], &bases, &all), "-");
+        // A measured cost on a worker declaring NOTHING still shows: real
+        // money is not a proxy and does not need a declared basis.
+        let nobases = vec![("nw".to_string(), None)];
+        let m = rcpt("nw", Some(10), Some(12_300));
+        assert_eq!(measured_task_cell(&[&m], &nobases, &all), "$0.0123");
+        // An unknown attempt (no basis, no tokens) makes the row `-`, never
+        // an understated exact-looking figure.
+        let unknown = rcpt("nw", None, None);
+        assert_eq!(measured_task_cell(&[&m, &unknown], &nobases, &all), "-");
+        assert_eq!(
+            measured_worker_cell(&[&m, &unknown], None, Some(10), &all),
+            "-"
+        );
+        // All-ratio rows keep the round-10 blend: 300k at 2x + 100k at 1x
+        // is a 1.75x weighted mean, and the worker rate is its ratio.
+        let big = rcpt("sw", Some(300_000), None);
+        let small = rcpt("cw", Some(100_000), None);
+        assert_eq!(measured_task_cell(&[&big, &small], &bases, &all), "1.75x");
+        assert_eq!(
+            measured_worker_cell(&[&big], basis_of("sw", &bases), Some(300_000), &all),
+            "2.00x"
+        );
+        // Worker fallback: a worker with NO measured receipt and nothing
+        // foldable keeps the round-10 declared-rate display (a rate is a
+        // worker property) — never blanked by the measured report around it.
+        let tokenless = rcpt("pw", None, None);
+        assert_eq!(
+            measured_worker_cell(&[&tokenless], basis_of("pw", &bases), None, &all),
+            "$2.0000/Mtok"
+        );
+        assert_eq!(
+            measured_worker_cell(&[&sized], basis_of("sw", &bases), None, &all),
+            "2.00x"
         );
     }
 }

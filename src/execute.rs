@@ -83,7 +83,7 @@ pub fn execute_task(
     log_path: &Path,
 ) -> Outcome {
     let start = std::time::Instant::now();
-    let (outcome, tokens) = execute_attempt(ctx, worker, id, attempt, log_path);
+    let (outcome, spend) = execute_attempt(ctx, worker, id, attempt, log_path);
     // Receipt for EVERY attempt (merged + failed) — routing/cost substrate.
     let outcome_name = match outcome {
         Outcome::Merged => "merged",
@@ -99,10 +99,11 @@ pub fn execute_task(
         worker: worker.name.clone(),
         model: worker.model.clone(),
         wall_clock_s: start.elapsed().as_secs_f64(),
-        tokens,
+        tokens: spend.tokens,
         ts: now_ts(),
         outcome: outcome_name.to_string(),
         error,
+        cost_micros: spend.cost_micros,
     });
     outcome
 }
@@ -147,20 +148,35 @@ fn record_phase(ctx: &ExecCtx, id: &str, phase: AttemptPhase) {
     let _ = ctx.store.save(&m);
 }
 
-/// One attempt's outcome plus the token usage captured from the agent
-/// CLI's JSON transcript (`None` in text mode, on gate-only retries, and
-/// whenever the stream yielded no usage — missing telemetry never fails
-/// an attempt).
+/// What one attempt spent, lifted out of the agent CLI's JSON transcript
+/// (`None` per field in text mode, on gate-only retries, and whenever the
+/// stream yielded no telemetry — missing telemetry never fails an
+/// attempt). Carried on EVERY failure path after the agent ran: a failed
+/// attempt still spent its tokens and its money, and the receipt is the
+/// cost ledger.
+#[derive(Debug, Clone, Copy, Default)]
+struct Spend {
+    tokens: Option<u64>,
+    cost_micros: Option<u64>,
+}
+
+/// One attempt's outcome plus what it spent (tokens and the provider's
+/// own reported cost), captured from the agent CLI's JSON transcript.
 fn execute_attempt(
     ctx: &ExecCtx,
     worker: &Worker,
     id: &str,
     attempt: u32,
     log_path: &Path,
-) -> (Outcome, Option<u64>) {
+) -> (Outcome, Spend) {
     let task = match ctx.cfg.by_id.get(id) {
         Some(t) => t.clone(),
-        None => return (Outcome::Failed(format!("unknown task {id}")), None),
+        None => {
+            return (
+                Outcome::Failed(format!("unknown task {id}")),
+                Spend::default(),
+            )
+        }
     };
 
     // Multi-repo (ADR-11): worktree, branch, and merge target the task's repo.
@@ -173,18 +189,18 @@ fn execute_attempt(
     let (wt, reused) =
         match materialize_worktree(&repo, &ctx.st.worktree_root, id, &ctx.st.branch_prefix) {
             Ok(w) => w,
-            Err(e) => return (Outcome::Failed(e), None),
+            Err(e) => return (Outcome::Failed(e), Spend::default()),
         };
     let wt_path = wt.path.clone();
     // Token usage lifted out of the agent's JSON transcript, when the
     // worker opted into json output mode. Every failure path that did not
     // run the agent reports `None`.
-    // The tokens the attempt spent, parsed from the CLI's JSON transcript
+    // What the attempt spent, parsed from the CLI's JSON transcript
     // (json output mode). Once the agent has run, this is the cost ledger's
     // record of the attempt, so EVERY failure from here on must carry it: a
     // scope violation, a gate failure or a merge conflict still spent it —
     // and those are the most expensive failures of all.
-    let mut tokens: Option<u64> = None;
+    let mut spend = Spend::default();
     // Effect sandwich, boundary 1 (commit intent BEFORE the effect): the
     // attempt is live — worktree ready, agent about to spawn. A crash from
     // here resumes as RerunAgent (the agent's outcome is not durable yet).
@@ -224,7 +240,10 @@ fn execute_attempt(
         let _ = fs::create_dir_all(ctx.store.prompt_dir());
         if let Err(e) = fs::write(&prompt_path, &prompt) {
             cleanup(&repo, &wt);
-            return (Outcome::Failed(format!("cannot write prompt: {e}")), None);
+            return (
+                Outcome::Failed(format!("cannot write prompt: {e}")),
+                Spend::default(),
+            );
         }
 
         // 2) Agent CLI (external, OpenAI-compatible): --provider P --model M -p @file
@@ -256,7 +275,10 @@ fn execute_attempt(
         // to the legacy behaviour.
         let body = if worker.output == "json" {
             let t = crate::transcript::parse(&agent_out.stdout);
-            tokens = t.usage.map(|u| u.total_tokens);
+            if let Some(u) = t.usage {
+                spend.tokens = Some(u.total_tokens);
+                spend.cost_micros = u.cost_micros;
+            }
             json_log_body(&t, &agent_out.stdout, &agent_out.stderr)
         } else {
             agent_out.combined()
@@ -287,9 +309,9 @@ fn execute_attempt(
                         .unwrap_or_else(|| "-".into())
                 )
             };
-            // The tokens were still spent (and captured) even though the
-            // attempt failed — the receipt is the cost ledger.
-            return (Outcome::Failed(reason), tokens);
+            // The spend was real (and captured) even though the attempt
+            // failed — the receipt is the cost ledger.
+            return (Outcome::Failed(reason), spend);
         }
     }
 
@@ -305,14 +327,14 @@ fn execute_attempt(
             Ok(b) => b,
             Err(e) => {
                 cleanup(&repo, &wt);
-                return (Outcome::Failed(e), tokens);
+                return (Outcome::Failed(e), spend);
             }
         };
         let changed = match changed_paths(&wt_path, &base_branch) {
             Ok(c) => c,
             Err(e) => {
                 cleanup(&repo, &wt);
-                return (Outcome::Failed(e), tokens);
+                return (Outcome::Failed(e), spend);
             }
         };
         let violations = scope_violations(&changed, &task.scope);
@@ -329,7 +351,7 @@ fn execute_attempt(
                     violations.join(", "),
                     task.scope.join(", ")
                 )),
-                tokens,
+                spend,
             );
         }
     }
@@ -379,7 +401,7 @@ fn execute_attempt(
                             .unwrap_or_else(|| "-".into()),
                         gate_out.combined().trim()
                     )),
-                    tokens,
+                    spend,
                 );
             }
             // Effect sandwich, boundary 3 (commit outcome AFTER the gate
@@ -394,11 +416,11 @@ fn execute_attempt(
     if let Err(e) = worktree::merge(&repo, &wt.branch, &ctx.merge_locks, &msg) {
         append(&format!("-- merge failed: {e}"));
         cleanup(&repo, &wt);
-        return (Outcome::Failed(e), tokens);
+        return (Outcome::Failed(e), spend);
     }
     append("-- merged --");
     cleanup(&repo, &wt);
-    (Outcome::Merged, tokens)
+    (Outcome::Merged, spend)
 }
 
 fn cleanup(repo: &Path, wt: &worktree::Worktree) {
@@ -784,6 +806,7 @@ mod tests {
             ts: 0,
             outcome: outcome.into(),
             error: error.map(|e| e.into()),
+            cost_micros: None,
         }
     }
 

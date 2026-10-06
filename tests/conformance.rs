@@ -52,6 +52,7 @@ fn receipt(task: &str, attempt: u32, ts: u64) -> Receipt {
         ts,
         outcome: "merged".to_string(),
         error: None,
+        cost_micros: None,
     }
 }
 

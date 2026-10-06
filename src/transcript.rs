@@ -35,12 +35,20 @@
 
 use serde_json::Value;
 
-/// Token usage reported by the agent CLI.
+/// Token usage reported by the agent CLI, plus the cost the provider
+/// itself reported for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Usage {
     pub input: u64,
     pub output: u64,
     pub total_tokens: u64,
+    /// The provider's OWN reported cost, in MICRO-USD (an integer, so the
+    /// cost ledger never carries float drift). `None` when the provider
+    /// reported no cost: a reported `0` is NOT a measurement — every
+    /// provider tested here reports exactly `0`, indistinguishable from a
+    /// genuinely free run — and neither is a missing/malformed `cost`
+    /// object. Only a finite, STRICTLY POSITIVE `usage.cost.total` counts.
+    pub cost_micros: Option<u64>,
 }
 
 /// A parsed transcript: the human-readable rendering plus the final usage.
@@ -153,10 +161,17 @@ pub fn parse(stdout: &str) -> Transcript {
         lines.push(format!("assistant (truncated): {pending}"));
     }
     if let Some(u) = t.usage {
-        lines.push(format!(
+        let mut line = format!(
             "usage: {} in, {} out, {} total",
             u.input, u.output, u.total_tokens
-        ));
+        );
+        // The cost is appended only when the provider actually reported
+        // one, so the line stays byte-identical to the legacy rendering
+        // for every stream that carries no (usable) cost.
+        if let Some(micros) = u.cost_micros {
+            line.push_str(&format!(" (${:.4})", micros as f64 / 1_000_000.0));
+        }
+        lines.push(line);
     }
     t.rendered = lines.join("\n");
     t
@@ -185,7 +200,19 @@ fn usage_from(u: &Value) -> Option<Usage> {
         input: input.unwrap_or(0),
         output: output.unwrap_or(0),
         total_tokens: total,
+        cost_micros: cost_micros_from(u),
     })
+}
+
+/// A usage object's `cost.total` (USD) to MICRO-USD. Defensive like the
+/// rest of the module: a missing `cost`, a `cost` that is not an object, or
+/// a `total` that is a string/negative/NaN yields `None`. A reported `0`
+/// also yields `None` — it means "not tracked" here, never "free", so it
+/// is not a measurement and must never reach the ledger as one.
+fn cost_micros_from(u: &Value) -> Option<u64> {
+    let total = u.get("cost")?.get("total")?.as_f64()?;
+    let micros = (total * 1_000_000.0).round();
+    (micros.is_finite() && micros > 0.0).then_some(micros as u64)
 }
 
 /// JSON number → u64 (integers directly, floats truncated at zero).
@@ -340,13 +367,18 @@ mod tests {
             Some(Usage {
                 input: 13523,
                 output: 2,
-                total_tokens: 13525
+                total_tokens: 13525,
+                cost_micros: None
             })
         );
         // The final message content is rendered once as prose …
         assert_eq!(t.rendered.matches("assistant: ok, done").count(), 1);
         // … the usage is summarized …
         assert!(t.rendered.contains("usage: 13523 in, 2 out, 13525 total"));
+        // … and, because the captured run's provider reported `cost.total`
+        // 0 (not tracked), the line carries NO cost suffix — byte-identical
+        // to a cost-less stream.
+        assert!(!t.rendered.contains('$'), "rendered: {}", t.rendered);
         // … and NO raw JSONL survives into the rendering.
         assert!(!t.rendered.contains("\"type\""));
         assert!(!t.rendered.contains("totalTokens"));
@@ -508,7 +540,8 @@ mod tests {
             Some(Usage {
                 input: 40,
                 output: 2,
-                total_tokens: 42
+                total_tokens: 42,
+                cost_micros: None
             })
         );
     }
@@ -614,5 +647,71 @@ mod tests {
         // No arguments at all: still a usable line.
         let named_only = serde_json::json!({"toolCall": {"name": "todo"}});
         assert_eq!(tool_call_line(&named_only), "[tool] todo");
+    }
+
+    #[test]
+    fn a_reported_cost_is_captured_in_micro_usd_and_rendered() {
+        // A real reported cost: 0.0123 USD → 12300 micro-USD, on the FINAL
+        // usage event (last one wins, same as the token totals).
+        let stream = "{\"type\":\"turn_end\",\"usage\":{\"input\":4240,\"output\":2,\"totalTokens\":4242,\"cost\":{\"total\":0.0123}}}\n";
+        let t = parse(stream);
+        assert_eq!(
+            t.usage,
+            Some(Usage {
+                input: 4240,
+                output: 2,
+                total_tokens: 4242,
+                cost_micros: Some(12_300),
+            })
+        );
+        // The rendered line appends the cost, four decimals.
+        assert_eq!(t.rendered, "usage: 4240 in, 2 out, 4242 total ($0.0123)");
+        // A float that is not a round micro amount rounds to the nearest
+        // micro-USD — the ledger keeps integers, never float drift. (A cost
+        // so small it rounds to ZERO micros is None — see the test below.)
+        let odd = parse(
+            "{\"type\":\"turn_end\",\"usage\":{\"input\":1,\"output\":1,\"totalTokens\":2,\"cost\":{\"total\":0.0000014}}}\n",
+        );
+        assert_eq!(odd.usage.and_then(|u| u.cost_micros), Some(1));
+        assert_eq!(
+            odd.rendered, "usage: 1 in, 1 out, 2 total ($0.0000)",
+            "a sub-cent cost renders as $0.0000 once captured"
+        );
+    }
+
+    #[test]
+    fn a_zero_or_malformed_reported_cost_is_not_a_measurement() {
+        let line = |cost: &str| {
+            format!(
+                "{{\"type\":\"turn_end\",\"usage\":{{\"input\":1,\"output\":1,\"totalTokens\":2,\"cost\":{cost}}}}}\n"
+            )
+        };
+        // Every provider tested here reports exactly 0 — indistinguishable
+        // from a genuinely free run, so it is NOT a measurement.
+        for zero in ["{\"total\":0}", "{\"total\":0.0}"] {
+            let t = parse(&line(zero));
+            assert_eq!(t.usage.and_then(|u| u.cost_micros), None, "{zero}");
+            assert_eq!(t.rendered, "usage: 1 in, 1 out, 2 total", "{}", t.rendered);
+        }
+        // Negative, string, missing-total, non-object, and absent costs.
+        for bad in [
+            "{\"total\":-0.05}",
+            "{\"total\":\"0.05\"}",
+            "{}",
+            "7",
+            "null",
+        ] {
+            let t = parse(&line(bad));
+            assert_eq!(t.usage.and_then(|u| u.cost_micros), None, "{bad}");
+            assert_eq!(t.rendered, "usage: 1 in, 1 out, 2 total", "{}", t.rendered);
+        }
+        let none = parse(
+            "{\"type\":\"turn_end\",\"usage\":{\"input\":1,\"output\":1,\"totalTokens\":2}}\"}\n",
+        );
+        assert_eq!(none.usage.and_then(|u| u.cost_micros), None);
+        // A cost so small it ROUNDS to zero micro-USD is not a measurement
+        // either — `Some(0)` would read as a free run.
+        let submicro = parse(&line("{\"total\":1e-9}"));
+        assert_eq!(submicro.usage.and_then(|u| u.cost_micros), None);
     }
 }

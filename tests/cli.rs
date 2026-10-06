@@ -113,6 +113,7 @@ impl Cli {
                 ts: 1,
                 outcome: "merged".into(),
                 error: None,
+                cost_micros: None,
             })
             .unwrap();
     }
@@ -283,6 +284,7 @@ fn cost_last_shows_the_latest_attempt_per_task() {
             ts,
             outcome: outcome.into(),
             error: None,
+            cost_micros: None,
         };
     for r in [
         receipt("A", 1, 1_000, 30.0, "w1", "failed"),
@@ -362,6 +364,7 @@ fn cost_since_filters_receipts_by_time() {
         ts,
         outcome: outcome.into(),
         error: None,
+        cost_micros: None,
     };
     for r in [
         receipt(1, 1_600_000_000, 100.0, "w1", "failed"), // 2020-09-13
@@ -447,6 +450,7 @@ fn cost_report_surfaces_wasted_spend() {
                 ts,
                 outcome: outcome.into(),
                 error: error.map(str::to_string),
+                cost_micros: None,
             }
         };
     for r in [
@@ -557,6 +561,7 @@ fn cost_report_shows_relative_expense_when_no_provider_reports_a_price() {
         ts,
         outcome: "merged".into(),
         error: None,
+        cost_micros: None,
     };
     store
         .append_receipt(&receipt("A", 1_000, 1.0, "w1", Some(1_000_000)))
@@ -655,6 +660,7 @@ fn a_declared_price_beats_the_params_proxy_in_the_cost_report() {
         ts,
         outcome: "merged".into(),
         error: None,
+        cost_micros: None,
     };
     // w1: 500k tokens at $2/Mtok = $1.0000.
     store
@@ -749,6 +755,7 @@ fn cost_report_shows_a_declared_rate_even_when_no_tokens_were_recorded() {
                 ts,
                 outcome: "merged".into(),
                 error: None,
+                cost_micros: None,
             })
             .unwrap();
     }
@@ -815,6 +822,7 @@ fn receipts_naming_an_absent_worker_are_footnoted_not_fatal() {
             ts,
             outcome: "merged".into(),
             error: None,
+            cost_micros: None,
         };
     store
         .append_receipt(&receipt("A", 1, 1_000, 1.0, "ghost", 1_000_000))
@@ -863,6 +871,138 @@ fn receipts_naming_an_absent_worker_are_footnoted_not_fatal() {
             "w1", "1/1", 1.00, "$2.0000"
         )),
         "w1 keeps its dollars: {out}"
+    );
+}
+
+/// The cost the provider itself REPORTS is real money and outranks any
+/// DECLARED basis for the attempt it belongs to: a measured receipt on a
+/// worker that also declares a price shows the measured dollars (no `~` —
+/// nothing about it is assumed), a row mixing a measured attempt with an
+/// estimated-priced one sums the dollars but marks them `~` (an assumption
+/// must never be presented as a measurement), a measured+sized row stays
+/// `-` (dollars and a parameter ratio are incommensurable), and the basis
+/// line names the measured source.
+// spec: cli/cost-report#the-cost-report-prefers-a-measured-cost-over-a-declared-one
+#[test]
+fn the_cost_report_prefers_a_measured_cost_over_a_declared_one() {
+    let tasks = r#"{ "tasks": [
+        { "id": "A", "title": "a", "accept": "true" },
+        { "id": "B", "title": "b", "accept": "true" },
+        { "id": "C", "title": "c", "accept": "true" }
+    ] }"#;
+    // w1 ALSO declares a price — its 500k-token receipts would estimate to
+    // $1.0000 each; the provider reported $0.0123 instead. w2 is sized.
+    let workers = r#"{ "defaults": { "max_attempts": 1, "accept_timeout_s": 10 },
+        "workers": [
+            { "name": "w1", "provider": "openai", "model": "gpt-4o", "price_per_mtok_usd": 2.0, "enabled": true, "cli": "unused" },
+            { "name": "w2", "provider": "openai", "model": "o1", "params_b": 8, "enabled": true, "cli": "unused" }
+        ] }"#;
+    let cli = Cli::new_with(tasks, workers);
+    let (_, st) = cli.settings();
+    let store = Store::new(st.state_dir.clone());
+    let receipt = |task: &str,
+                   attempt: u32,
+                   ts: u64,
+                   wall: f64,
+                   worker: &str,
+                   tokens: u64,
+                   cost: Option<u64>| Receipt {
+        task: task.into(),
+        attempt,
+        worker: worker.into(),
+        model: "m".into(),
+        wall_clock_s: wall,
+        tokens: Some(tokens),
+        ts,
+        outcome: "merged".into(),
+        error: None,
+        cost_micros: cost,
+    };
+    // A: one MEASURED attempt on the priced worker — the measurement wins.
+    store
+        .append_receipt(&receipt("A", 1, 1_000, 1.0, "w1", 500_000, Some(12_300)))
+        .unwrap();
+    // B: a measured attempt PLUS an estimated-priced attempt.
+    store
+        .append_receipt(&receipt("B", 1, 2_000, 1.0, "w1", 500_000, Some(12_300)))
+        .unwrap();
+    store
+        .append_receipt(&receipt("B", 2, 3_000, 1.0, "w1", 500_000, None))
+        .unwrap();
+    // C: a measured attempt MIXED with a sized (ratio-only) attempt.
+    store
+        .append_receipt(&receipt("C", 1, 4_000, 1.0, "w1", 100, Some(12_300)))
+        .unwrap();
+    store
+        .append_receipt(&receipt("C", 2, 5_000, 1.0, "w2", 1_000_000, None))
+        .unwrap();
+
+    let (code, out) = cli.af(&["cost"]);
+    assert_eq!(code, 0, "{out}");
+    // The basis line names the measured source and counts the attempts
+    // still riding a declared-price estimate (B's second attempt).
+    assert!(
+        out.contains("cost basis: provider-reported (USD)"),
+        "basis line: {out}"
+    );
+    assert!(
+        out.contains("1 of 5 attempt(s) estimated from a declared price"),
+        "the estimate count explains the report's `~` markers: {out}"
+    );
+    // A: measured dollars, NO `~` — not the $1.0000 its price would have
+    // estimated, and not an estimate at all.
+    let a_row = out
+        .lines()
+        .find(|l| l.starts_with("A "))
+        .unwrap_or_else(|| panic!("A row: {out}"));
+    assert!(
+        a_row.contains(&format!(
+            "{:<12} {:<9} {:<10.1} {:<9} {:<8} {}",
+            "A", 1, 1.0, "500000", "$0.0123", "m"
+        )),
+        "the measured cost outranks the declared price: {a_row}"
+    );
+    assert!(
+        !a_row.contains('~'),
+        "a measurement carries no `~`: {a_row}"
+    );
+    // B: measured + estimated → summed dollars WITH `~`.
+    let b_row = out
+        .lines()
+        .find(|l| l.starts_with("B "))
+        .unwrap_or_else(|| panic!("B row: {out}"));
+    assert!(
+        b_row.contains("~$1.0123"),
+        "summed dollars, marked estimated: {b_row}"
+    );
+    // C: measured + sized → incommensurable → `-`, never a converted figure.
+    let c_row = out
+        .lines()
+        .find(|l| l.starts_with("C "))
+        .unwrap_or_else(|| panic!("C row: {out}"));
+    assert!(
+        c_row.contains(&format!(
+            "{:<12} {:<9} {:<10.1} {:<9} {:<8} {}",
+            "C", 2, 2.0, "1000100", "-", "m"
+        )),
+        "dollars and a parameter ratio never mix: {c_row}"
+    );
+    // The worker rows follow the same ladder: w1's whole selected spend is
+    // 3 measured × $0.0123 + 1 estimate × $1.0000, marked `~`; w2 keeps its
+    // proxy rate (no measured cost of its own).
+    assert!(
+        out.contains(&format!(
+            "{:<14} {:<11} {:.2} {}",
+            "w1", "4/4", 1.00, "~$1.0369"
+        )),
+        "w1 folds measured-first like the task rows: {out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "{:<14} {:<11} {:.2} {}",
+            "w2", "1/1", 1.00, "1.00x"
+        )),
+        "w2 keeps its proxy rate: {out}"
     );
 }
 
@@ -1093,6 +1233,7 @@ fn cost_prints_per_worker_trust_section() {
                 ts: 1,
                 outcome: outcome.into(),
                 error: None,
+                cost_micros: None,
             })
             .unwrap();
     }

@@ -8,6 +8,12 @@
 //! - `FAKE_AGENT_EXIT`: exit code (default 0)
 //! - `FAKE_AGENT_TOUCH`: file to write into the current directory (default `DONE.txt`)
 //! - `FAKE_AGENT_OUT`:   content to write (default a summary line)
+//! - `FAKE_AGENT_JSON`: emit a pi-style `--mode json` JSON Lines transcript
+//!   instead of the plain summary line (see `json_transcript_events`)
+//! - `FAKE_AGENT_JSON_TOKENS`: the transcript's final `totalTokens`
+//! - `FAKE_AGENT_JSON_COST`:   the transcript's `usage.cost.total`, USD as a
+//!   decimal string (e.g. "0.0123"); the default 0 means "not tracked",
+//!   exactly like every real provider that reports no price
 //! - `FAKE_AGENT_ENV` / `FAKE_AGENT_ENV_NAMES`: sandbox env probe (see below)
 //! - `FAKE_AGENT_TOUCH_FROM_MODEL`: when set (and `FAKE_AGENT_TOUCH` unset),
 //!   write `{model}.txt` instead — lets two workers with distinct `--model`s
@@ -94,7 +100,15 @@ fn main() -> ExitCode {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(13_525);
-        emit_json_transcript(&out, total);
+        // The provider's OWN reported cost, USD (default 0 = not tracked,
+        // like the real providers that report no price). Parsing stays this
+        // thin on purpose: llvm-cov does not credit lines inside a spawned
+        // stub binary, so everything real lives in library code.
+        let cost_usd: f64 = std::env::var("FAKE_AGENT_JSON_COST")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0);
+        emit_json_transcript(&out, total, cost_usd);
     } else {
         println!("{out}");
     }
@@ -114,8 +128,8 @@ fn main() -> ExitCode {
 }
 
 /// Emit a realistic pi-style `--mode json` JSON Lines transcript on stdout.
-fn emit_json_transcript(text: &str, total: u64) {
-    for event in json_transcript_events(text, total) {
+fn emit_json_transcript(text: &str, total: u64, cost_usd: f64) {
+    for event in json_transcript_events(text, total, cost_usd) {
         println!("{event}");
     }
 }
@@ -128,7 +142,7 @@ fn emit_json_transcript(text: &str, total: u64) {
 /// a PARTIAL usage on the streaming events and the full/final usage on
 /// `message_end` / `turn_end` / `agent_end` (identical totals — the
 /// authoritative number is the last one seen).
-fn json_transcript_events(text: &str, total: u64) -> Vec<serde_json::Value> {
+fn json_transcript_events(text: &str, total: u64, cost_usd: f64) -> Vec<serde_json::Value> {
     let usage = |t: u64| {
         serde_json::json!({
             "input": t.saturating_sub(2),
@@ -137,7 +151,7 @@ fn json_transcript_events(text: &str, total: u64) -> Vec<serde_json::Value> {
             "cacheWrite": 0,
             "reasoning": 0,
             "totalTokens": t,
-            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}
+            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": cost_usd}
         })
     };
     let partial = total.saturating_sub(1);
@@ -203,7 +217,7 @@ mod tests {
     /// tokens can only mean the real path works.
     #[test]
     fn the_json_fixture_round_trips_through_the_transcript_parser() {
-        let stream: String = json_transcript_events("done", 4242)
+        let stream: String = json_transcript_events("done", 4242, 0.0)
             .iter()
             .map(|e| format!("{e}\n"))
             .collect();
@@ -223,12 +237,46 @@ mod tests {
         for chunk in ["thinking_delta", "toolcall_delta", "text_delta"] {
             assert!(!t.rendered.contains(chunk), "{}", t.rendered);
         }
+        // The default cost is 0 — "not tracked" — so the fixture's default
+        // output stays byte-identical to the pre-cost stub: no `$` anywhere.
+        assert_eq!(t.usage.and_then(|u| u.cost_micros), None);
+        assert!(!t.rendered.contains('$'), "{}", t.rendered);
+    }
+
+    /// `FAKE_AGENT_JSON_COST` (the provider's own reported cost) rides the
+    /// usage objects through to the parser: a positive dollar amount is
+    /// captured as integer micro-USD on the receipt path, and the default
+    /// 0 is captured as NOTHING — a zero is not a measurement.
+    #[test]
+    fn the_fixture_carries_a_reported_cost_through_to_micro_usd() {
+        let stream: String = json_transcript_events("done", 4242, 0.0123)
+            .iter()
+            .map(|e| format!("{e}\n"))
+            .collect();
+        let t = agentflow::transcript::parse(&stream);
+        // 0.0123 USD → 12300 micro-USD, from the FINAL usage (the streaming
+        // events carry the same cost, so last-wins is also exercised).
+        assert_eq!(
+            t.usage,
+            Some(agentflow::transcript::Usage {
+                input: 4240,
+                output: 2,
+                total_tokens: 4242,
+                cost_micros: Some(12_300),
+            })
+        );
+        assert!(
+            t.rendered
+                .contains("usage: 4240 in, 2 out, 4242 total ($0.0123)"),
+            "{}",
+            t.rendered
+        );
     }
 
     /// A multi-byte summary must split at a char boundary, not mid-codepoint.
     #[test]
     fn the_fixture_splits_multibyte_text_without_panicking() {
-        let stream: String = json_transcript_events("fertig \u{2713} \u{2713}", 10)
+        let stream: String = json_transcript_events("fertig \u{2713} \u{2713}", 10, 0.0)
             .iter()
             .map(|e| format!("{e}\n"))
             .collect();
