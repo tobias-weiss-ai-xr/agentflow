@@ -36,6 +36,8 @@ fn sample_map() -> HashMap<String, TaskStatus> {
             attempts: 1,
             last_error: None,
             phase: None,
+            attempt_started_ts: None,
+            attempt_worker: None,
         },
     );
     m

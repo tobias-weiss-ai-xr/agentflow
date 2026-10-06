@@ -28,6 +28,8 @@ fn done_status() -> TaskStatus {
         attempts: 1,
         last_error: None,
         phase: None,
+        attempt_started_ts: None,
+        attempt_worker: None,
     }
 }
 
