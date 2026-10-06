@@ -1335,3 +1335,126 @@ fn merge_conflict_fails_the_task_branch_cleanly() {
     worktree::remove(&repo, &wt);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The merge-conflict arm of the preserve-work contract: when an attempt's
+/// committed branch conflicts with the base branch at merge time, the run
+/// must keep the agent's paid-for work under an archived branch name
+/// (`<branch>-rejected-<now>`) BEFORE removing the original branch, and the
+/// failure message (→ receipt → `af api results`) must name that branch.
+/// The conflict is engineered: this thread advances `main` on the seeded
+/// file while the agent sleeps mid-attempt, so the only way the merge can
+/// go is a genuine conflict (both sides changed the same line differently).
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch#merge-conflict-archives-the-committed-work
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch#archiving-never-fails-the-attempt
+#[test]
+fn a_merge_conflict_keeps_the_agents_work_on_an_archived_branch() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"conflict","scope":["work.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("work.txt")
+        ),
+        &worker_json(1),
+    );
+    // Seed work.txt on the base so the branch AND a concurrent base advance
+    // both edit it (a genuine conflict, not an add-on-both-sides).
+    std::fs::write(f.repo.join("work.txt"), "base\n").unwrap();
+    git(&f.repo, &["add", "work.txt"]);
+    git(&f.repo, &["commit", "-m", "seed work.txt"]);
+    // The agent writes a DIFFERENT value to work.txt and is slowed so this
+    // thread can advance main between the branch-off and the merge.
+    std::env::set_var("FAKE_AGENT_TOUCH", "work.txt");
+    // The stub writes `{out}\n`, so the file content is the single value.
+    std::env::set_var("FAKE_AGENT_OUT", "agent version");
+    std::env::set_var(
+        "TF_AGENT_ENV_PASSTHROUGH",
+        "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES,FAKE_AGENT_SLEEP_MS",
+    );
+    std::env::set_var("FAKE_AGENT_SLEEP_MS", "1500");
+
+    // Drive the orchestrator on a background thread so this thread can move
+    // main while the attempt is mid-flight (exactly like the parallel E2E
+    // tests drive run_loop on a background thread).
+    let cfg = f.cfg.clone();
+    let st = f.st.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<i32>();
+    std::thread::spawn(move || {
+        let code = run::run_loop(&cfg, &st, &RunOptions::default());
+        let _ = tx.send(code);
+    });
+
+    // Wait until the worktree exists (tf/A is at the seeded base), then
+    // advance main on the SAME file the agent will edit. The later merge
+    // then conflicts: both sides changed work.txt differently from base.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if f.st.worktree_root.join("A").join(".git").exists() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "worktree never created within 15s"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    std::fs::write(f.repo.join("work.txt"), "main version\n").unwrap();
+    git(&f.repo, &["add", "work.txt"]);
+    git(&f.repo, &["commit", "-m", "advance main"]);
+
+    let code = rx
+        .recv_timeout(std::time::Duration::from_secs(40))
+        .expect("run completed");
+    assert_eq!(code, 2, "conflicting merge must fail the run");
+
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Failed);
+    let err = st["A"].last_error.clone().unwrap_or_default();
+    assert!(
+        err.contains("work kept on branch") && err.contains("tf/A-rejected-"),
+        "error names the archived branch: {err}"
+    );
+    // Nothing merged: main keeps its own advancing change (never force-pushed).
+    assert_eq!(
+        std::fs::read_to_string(f.repo.join("work.txt")).unwrap(),
+        "main version\n"
+    );
+    // The archived branch is discoverable and really contains the agent work.
+    let list = std::process::Command::new("git")
+        .args(["branch", "--list", "tf/A-rejected-*"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    let names: Vec<String> = String::from_utf8_lossy(&list.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(names.len(), 1, "exactly one archived branch: {names:?}");
+    let name = &names[0];
+    let show = std::process::Command::new("git")
+        .args(["show", &format!("{name}:work.txt")])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    assert!(
+        show.status.success() && String::from_utf8_lossy(&show.stdout) == "agent version\n",
+        "archived branch preserves the agent's conflicting edit, got: {}",
+        String::from_utf8_lossy(&show.stdout)
+    );
+    // The ORIGINAL branch is gone so the retry starts clean from base.
+    let gone = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", "refs/heads/tf/A"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    assert!(
+        !gone.status.success(),
+        "original branch tf/A must be removed so a retry starts clean"
+    );
+
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    std::env::remove_var("FAKE_AGENT_OUT");
+    std::env::remove_var("FAKE_AGENT_SLEEP_MS");
+}

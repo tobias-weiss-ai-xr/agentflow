@@ -344,15 +344,28 @@ fn execute_attempt(
                 violations.join(", "),
                 task.scope.join(", ")
             ));
+            // Preserve the paid-for committed work under an archived name
+            // before the cleanup that follows this failure — the receipt
+            // names exactly what was saved. Archiving is a courtesy: when it
+            // yields `None` the message is unchanged.
+            let archived = worktree::archive_branch(&repo, &wt.branch, now_ts());
+            if let Some(name) = &archived {
+                append(&format!("-- work kept on branch {name}"));
+            }
             cleanup(&repo, &wt);
-            return (
-                Outcome::Failed(format!(
+            let reason = match &archived {
+                Some(name) => format!(
+                    "attempt edited files out of scope: {} (allowed: {}); work kept on branch {name}",
+                    violations.join(", "),
+                    task.scope.join(", ")
+                ),
+                None => format!(
                     "attempt edited files out of scope: {} (allowed: {})",
                     violations.join(", "),
                     task.scope.join(", ")
-                )),
-                spend,
-            );
+                ),
+            };
+            return (Outcome::Failed(reason), spend);
         }
     }
 
@@ -415,8 +428,20 @@ fn execute_attempt(
     let msg = format!("af: {} — {}", task.id, task.title);
     if let Err(e) = worktree::merge(&repo, &wt.branch, &ctx.merge_locks, &msg) {
         append(&format!("-- merge failed: {e}"));
+        // The agent's committed work is real even though the merge failed;
+        // keep a copy under an archived name before the cleanup removes the
+        // branch. The receipt names exactly what was preserved. Archiving is
+        // a courtesy: when it yields `None` the message is unchanged.
+        let archived = worktree::archive_branch(&repo, &wt.branch, now_ts());
+        if let Some(name) = &archived {
+            append(&format!("-- work kept on branch {name}"));
+        }
         cleanup(&repo, &wt);
-        return (Outcome::Failed(e), spend);
+        let reason = match &archived {
+            Some(name) => format!("{e}; work kept on branch {name}"),
+            None => e,
+        };
+        return (Outcome::Failed(reason), spend);
     }
     append("-- merged --");
     cleanup(&repo, &wt);

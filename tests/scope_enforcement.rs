@@ -148,6 +148,90 @@ fn out_of_scope_edit_fails_the_attempt() {
     std::env::remove_var("FAKE_AGENT_TOUCH");
 }
 
+/// A scope violation must NEVER discard the committed work the attempt paid
+/// for. The attempt branch is kept as a COPY under `<branch>-rejected-<now>`
+/// so the work is recoverable, the failure message (and therefore the
+/// receipt → `af api results`) names that branch, and the retry still starts
+/// clean because the ORIGINAL branch is removed.
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch#scope-violation-archives-the-committed-work
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch#archiving-never-fails-the-attempt
+#[test]
+fn a_scope_violation_keeps_the_agents_work_on_an_archived_branch() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"scope","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+    // The agent commits a file OUTSIDE the allowed scope (rogue.txt).
+    std::env::set_var("FAKE_AGENT_TOUCH", "rogue.txt");
+
+    let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
+    assert_eq!(code, 2, "out-of-scope attempt must fail the run");
+
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Failed);
+    let err = st["A"].last_error.clone().unwrap_or_default();
+    assert!(err.contains("out of scope"), "violation surfaced: {err}");
+    assert!(err.contains("rogue.txt"), "offending path named: {err}");
+    assert!(
+        err.contains("work kept on branch") && err.contains("tf/A-rejected-"),
+        "error names the archived branch: {err}"
+    );
+    // The receipt (what `af api results` reads) names the same branch.
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    assert_eq!(receipts.len(), 1);
+    assert!(
+        receipts[0]
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("work kept on branch tf/A-rejected-"),
+        "receipt names the archived branch: {receipts:?}"
+    );
+    // The archived branch is discoverable and really contains the work.
+    let list = std::process::Command::new("git")
+        .args(["branch", "--list", "tf/A-rejected-*"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    let names: Vec<String> = String::from_utf8_lossy(&list.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(names.len(), 1, "exactly one archived branch: {names:?}");
+    let name = &names[0];
+    // The archived branch really contains the agent's commit (recoverable).
+    let show = std::process::Command::new("git")
+        .args(["show", &format!("{name}:rogue.txt")])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    assert!(
+        show.status.success(),
+        "agent's committed change is recoverable on the archived branch: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    // The ORIGINAL branch is gone, so the retry starts clean from base.
+    let gone = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", "refs/heads/tf/A"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    assert!(
+        !gone.status.success(),
+        "original branch tf/A must be removed so a retry starts clean"
+    );
+
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+}
+
 /// Happy path guard: an in-scope edit is still merged and the task is Done.
 // spec: scheduling/scope-enforcement-on-agent-edits#in-scope-edit-still-merges
 #[test]
