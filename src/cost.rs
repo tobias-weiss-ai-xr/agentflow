@@ -83,3 +83,136 @@ pub fn size_ratio(params_b: f64, all_declared: &[Basis]) -> Option<f64> {
 pub fn is_usable(value: f64) -> bool {
     value.is_finite() && value > 0.0
 }
+
+/// What ONE attempt cost, folded from everything known about it — the
+/// cost model's single truthfulness ladder:
+///
+/// * a provider-REPORTED cost (`cost_micros`) is a measurement of real
+///   money and outranks every declared basis for the attempt it belongs
+///   to ([`Expense::Usd`] with `estimated: false`);
+/// * else a declared price plus recorded tokens yields ESTIMATED dollars
+///   (`estimated: true`) — an assumption, marked as one by the report;
+/// * else a declared `params_b` yields a relative [`Expense::Ratio`] — a
+///   proxy rate, never dollars, and incommensurable with them;
+/// * else nothing: unknown is unknown, never zero, never invented.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Expense {
+    /// Dollars, as integer MICRO-USD (no float drift in the ledger).
+    /// `estimated: false` is measured (the provider's own report);
+    /// `estimated: true` is derived from a declared price.
+    Usd { micros: u64, estimated: bool },
+    /// A relative rate (the `params_b` proxy), never a `$`.
+    Ratio(f64),
+}
+
+/// Fold one attempt's [`Expense`], most-truthful-first (see [`Expense`]).
+/// A declared price needs recorded tokens to become dollars; a `Sized`
+/// basis needs them too (its row weight is token-weighted, and a receipt
+/// with no tokens is unknown, not zero).
+pub fn attempt_expense(
+    cost_micros: Option<u64>,
+    basis: Option<Basis>,
+    tokens: Option<u64>,
+    all_declared: &[Basis],
+) -> Option<Expense> {
+    match cost_micros {
+        // Measured money wins outright — even over a declared price on the
+        // same worker, and even on a worker that declares nothing at all.
+        Some(micros) => Some(Expense::Usd {
+            micros,
+            estimated: false,
+        }),
+        None => match basis {
+            Some(Basis::Priced(price)) => tokens.map(|t| Expense::Usd {
+                micros: estimate_usd_micros(t, price),
+                estimated: true,
+            }),
+            Some(Basis::Sized(params)) => {
+                tokens?; // no tokens recorded → unknown, not a rate
+                Some(Expense::Ratio(size_ratio(params, all_declared)?))
+            }
+            None => None,
+        },
+    }
+}
+
+/// Estimated dollars for `tokens` at a price in USD per million tokens,
+/// as integer micro-USD: `tokens × price` (the per-million division and
+/// the micro multiplication cancel). Saturating, like every cast here.
+fn estimate_usd_micros(tokens: u64, price_per_mtok_usd: f64) -> u64 {
+    (tokens as f64 * price_per_mtok_usd).round().max(0.0) as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The truthfulness ladder, top to bottom: a MEASUREMENT beats a
+    /// DECLARATION, a price needs tokens, a size proxy is never money,
+    /// and unknown stays unknown.
+    #[test]
+    fn a_reported_cost_outranks_every_declared_basis() {
+        let all = [Basis::Sized(4.0), Basis::Sized(8.0)];
+        // Measured money, verbatim — even on a worker declaring a price
+        // (the measurement wins) and even on one declaring nothing.
+        for basis in [Some(Basis::Priced(2.0)), Some(Basis::Sized(8.0)), None] {
+            assert_eq!(
+                attempt_expense(Some(12_300), basis, Some(500_000), &all),
+                Some(Expense::Usd {
+                    micros: 12_300,
+                    estimated: false
+                }),
+                "measured beats {basis:?}"
+            );
+        }
+        // Measured money needs NO tokens — it is not derived from them.
+        assert_eq!(
+            attempt_expense(Some(12_300), None, None, &all),
+            Some(Expense::Usd {
+                micros: 12_300,
+                estimated: false
+            })
+        );
+    }
+
+    #[test]
+    fn a_declared_price_with_tokens_yields_estimated_dollars() {
+        let all = [Basis::Sized(4.0)];
+        // 500k tokens at $2/Mtok = $1.0000 = 1,000,000 micro-USD — the same
+        // figure `estimate_usd` produces, kept as an integer.
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Priced(2.0)), Some(500_000), &all),
+            Some(Expense::Usd {
+                micros: 1_000_000,
+                estimated: true
+            })
+        );
+        assert_eq!(estimate_usd(500_000, 2.0), 1.0);
+        // No tokens recorded → no estimate: unknown, never a zero-dollar run.
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Priced(2.0)), None, &all),
+            None
+        );
+    }
+
+    #[test]
+    fn a_sized_basis_yields_a_ratio_and_needs_tokens() {
+        let all = [Basis::Sized(4.0), Basis::Sized(8.0)];
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Sized(8.0)), Some(1), &all),
+            Some(Expense::Ratio(2.0))
+        );
+        // A receipt with no tokens is unknown, not a rate.
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Sized(8.0)), None, &all),
+            None
+        );
+        // No declared Sized basis to relate to: never invent a reference.
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Sized(8.0)), Some(1), &[]),
+            None
+        );
+        // Nothing declared, nothing measured: nothing.
+        assert_eq!(attempt_expense(None, None, Some(1), &all), None);
+    }
+}

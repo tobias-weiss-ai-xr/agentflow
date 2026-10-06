@@ -73,6 +73,28 @@ worker absent from `cfg.workers` SHALL render as `-` and be listed in ONE
 footnote line after the tables (attempt count plus the sorted, deduplicated
 names) — a note, never an error, never blocking the report.
 
+A receipt carrying the provider's OWN reported cost (`cost_micros`, integer
+micro-USD) is a MEASUREMENT of real money and SHALL outrank every declared
+basis for the attempt it belongs to — even on a worker that also declares a
+price, and even on one declaring nothing. On a report where any selected
+receipt carries a measured cost, both tables' COST cells SHALL be folded
+attempt-by-attempt through that truthfulness ladder (measured dollars,
+then price-estimated dollars, then the `params_b` ratio, else unknown),
+keeping round 10's row invariants exactly: a row is in DOLLARS only when
+every attempt in it can be expressed in dollars (measured or estimated) —
+a measured dollar amount and a parameter RATIO are incommensurable, so a
+measured+sized row stays `-` just as a price+sized row does — and a row is
+a RATIO only when every attempt is sized. A dollars figure containing ANY
+estimated term SHALL be marked `~` (for example `~$0.0123`) so an
+assumption is never presented as a measurement, while a row of purely
+measured costs carries no `~`; `-` still means unknown, never free. On
+such a report the basis line SHALL name the measured source —
+`cost basis: provider-reported (USD)` — appending how many of the selected
+attempts were estimated from a declared price (for example `; 1 of 2
+attempt(s) estimated from a declared price`). A report none of whose
+selected receipts carries a measured cost SHALL keep the declared-basis
+lines byte-for-byte.
+
 #### Scenario: trust section lists each worker with history
 
 GIVEN receipts exist for workers w1 (2 merged, 1 failed) and w2 (1 merged)
@@ -120,6 +142,12 @@ THEN one basis line above the tables says `cost basis: params_b proxy (relative;
 GIVEN a worker declaring `price_per_mtok_usd` (and also `params_b`) with a receipt carrying `tokens`
 WHEN `af cost` runs
 THEN its COST cell shows `$<usd>` computed from its tokens with four decimals and never an `x` ratio, and the basis line says `declared prices` (noting any workers that declare only `params_b`).
+
+#### Scenario: The cost report prefers a measured cost over a declared one
+
+GIVEN a receipt carrying a provider-reported `cost_micros` on a worker that ALSO declares `price_per_mtok_usd`, a task row mixing that measured attempt with an estimated-priced attempt, and a task row mixing a measured attempt with a `params_b`-only attempt
+WHEN `af cost` runs
+THEN the measured attempt's COST cell shows its measured dollars with NO `~` (not the figure its declared price would estimate), the mixed measured+estimated row shows the summed dollars marked `~`, the measured+sized row stays `-`, and the basis line says `cost basis: provider-reported (USD)` naming how many attempts were estimated from a declared price.
 
 #### Scenario: Receipts naming a worker absent from the config are footnoted
 

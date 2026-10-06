@@ -35,7 +35,7 @@ THEN startup removes it.
 
 ### Requirement: Cost receipts
 
-Each attempt SHALL append a receipt (task id, attempt number, worker, model, wall-clock elapsed, agent-reported tokens if available) to `state/receipts/` — every attempt end, including failed attempts (wall-clock truth, ADR-9). Receipts carry `outcome` (`"merged"` | `"failed"` | `"interrupted"`) and `error: Option<String>` — the first line of the attempt's failure reason, capped at 200 characters, `None` for merged attempts. Receipts written before this change SHALL deserialize with outcome `"merged"` and `error = None`. `af cost` SHALL aggregate receipts (last run, since date, or per task).
+Each attempt SHALL append a receipt (task id, attempt number, worker, model, wall-clock elapsed, agent-reported tokens if available) to `state/receipts/` — every attempt end, including failed attempts (wall-clock truth, ADR-9). Receipts carry `outcome` (`"merged"` | `"failed"` | `"interrupted"`) and `error: Option<String>` — the first line of the attempt's failure reason, capped at 200 characters, `None` for merged attempts. Receipts written before this change SHALL deserialize with outcome `"merged"` and `error = None`. Receipts also carry `cost_micros` — the provider's OWN reported cost for the attempt, as integer MICRO-USD (so the ledger carries no float drift), recorded ONLY when the transcript's `usage.cost.total` is finite and STRICTLY POSITIVE: a reported `0` means "not tracked" (every provider tested here reports exactly 0, indistinguishable from a genuinely free run) and is recorded as `None`, never as a measured free run; a missing `cost`, a `cost` that is not an object, or a `total` that is a string, negative, or NaN is `None` as well. Receipts written before this change SHALL deserialize with `cost_micros = None`. `af cost` SHALL aggregate receipts (last run, since date, or per task).
 
 When startup heal finds a stale `running` attempt whose durable agent
 outcome cannot be resumed (it must re-run the agent — phase `Spawned`, a
@@ -82,6 +82,12 @@ THEN `error` contains the failure's first line.
 GIVEN a receipt file from before this change
 WHEN receipts are loaded
 THEN `error` is `None`.
+
+#### Scenario: A reported cost is captured and a zero is not
+
+GIVEN an agent whose JSON transcript reports a positive `usage.cost.total` (USD) on its final usage event
+WHEN the attempt's receipt is loaded
+THEN `cost_micros` equals that amount in micro-USD and the task log's usage line appends it as `($0.0123)` with four decimals; and a transcript whose `cost.total` is 0 records `cost_micros` `None` with the usage line unchanged — a reported zero is not a measurement, so it is never recorded as a free run.
 
 #### Scenario: interrupted attempts are recorded as non-verdicts
 

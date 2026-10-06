@@ -76,10 +76,11 @@ fn fixture(tasks_json: &str, workers_json: &str, tag: &str) -> Fixture {
     std::fs::create_dir_all(&dir).unwrap();
     std::env::set_var(
         "TF_AGENT_ENV_PASSTHROUGH",
-        "FAKE_AGENT_JSON,FAKE_AGENT_JSON_TOKENS,FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT",
+        "FAKE_AGENT_JSON,FAKE_AGENT_JSON_TOKENS,FAKE_AGENT_JSON_COST,FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT",
     );
     std::env::remove_var("FAKE_AGENT_JSON");
     std::env::remove_var("FAKE_AGENT_JSON_TOKENS");
+    std::env::remove_var("FAKE_AGENT_JSON_COST");
     std::env::remove_var("FAKE_AGENT_EXIT");
     std::env::remove_var("FAKE_AGENT_TOUCH");
     std::env::remove_var("FAKE_AGENT_OUT");
@@ -193,6 +194,85 @@ fn a_failed_attempt_still_records_the_tokens_it_spent() {
         r.tokens,
         Some(KNOWN_TOTAL),
         "the tokens a failing attempt spent still belong in the ledger: {receipts:?}"
+    );
+}
+
+/// The cost the provider itself reports is real money and must reach the
+/// ledger: with the stub reporting `cost.total = 0.0123`, the receipt
+/// carries it as integer micro-USD (12_300) and the rendered log line
+/// appends it (`($0.0123)`). A reported `0` is NOT a measurement — every
+/// provider tested here reports exactly 0, indistinguishable from "not
+/// tracked" — so the second arm yields `cost_micros: None` with the log
+/// line byte-identical to a cost-less stream.
+// spec: state/cost-receipts#a-reported-cost-is-captured-and-a-zero-is-not
+#[test]
+fn a_reported_cost_is_captured_and_a_zero_is_not() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+
+    // Arm 1: the stub reports a known non-zero cost on the final usage.
+    let f = fixture(&tasks_json(), &workers_json(Some("json")), "cost-measured");
+    std::env::set_var("FAKE_AGENT_JSON", "1");
+    std::env::set_var("FAKE_AGENT_JSON_TOKENS", KNOWN_TOTAL.to_string());
+    std::env::set_var("FAKE_AGENT_JSON_COST", "0.0123");
+
+    assert_eq!(
+        run::run_loop(&f.cfg, &f.st, &RunOptions::default()),
+        0,
+        "the measured-cost campaign must complete end to end"
+    );
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    let receipt = receipts
+        .iter()
+        .find(|r| r.task == "A")
+        .expect("the attempt left a receipt");
+    assert_eq!(
+        receipt.cost_micros,
+        Some(12_300),
+        "0.0123 USD must land in the ledger as integer micro-USD: {receipts:?}"
+    );
+    // The tokens ride along unchanged — the cost is additional telemetry,
+    // not a replacement for it.
+    assert_eq!(receipt.tokens, Some(KNOWN_TOTAL), "receipts: {receipts:?}");
+    let log =
+        std::fs::read_to_string(f.st.state_dir.join("logs").join("A.log")).expect("log exists");
+    assert!(
+        log.contains("usage: 4240 in, 2 out, 4242 total ($0.0123)"),
+        "the rendered line appends the reported cost, four decimals: {log}"
+    );
+
+    // Arm 2: the stub's default `cost.total = 0` — not tracked. The
+    // receipt must record NOTHING (a zero would read as a measured free
+    // run) and the log line keeps its exact legacy shape.
+    let f2 = fixture(&tasks_json(), &workers_json(Some("json")), "cost-zero");
+    std::env::set_var("FAKE_AGENT_JSON", "1");
+    std::env::set_var("FAKE_AGENT_JSON_TOKENS", KNOWN_TOTAL.to_string());
+    // FAKE_AGENT_JSON_COST stays removed — the stub reports cost 0.
+
+    assert_eq!(run::run_loop(&f2.cfg, &f2.st, &RunOptions::default()), 0);
+    let receipts2 = Store::new(f2.st.state_dir.clone()).load_receipts();
+    let receipt2 = receipts2
+        .iter()
+        .find(|r| r.task == "A")
+        .expect("the zero-cost attempt left a receipt");
+    assert_eq!(
+        receipt2.cost_micros, None,
+        "a reported 0 is not a measurement: {receipts2:?}"
+    );
+    assert_eq!(
+        receipt2.tokens,
+        Some(KNOWN_TOTAL),
+        "receipts: {receipts2:?}"
+    );
+    let log2 =
+        std::fs::read_to_string(f2.st.state_dir.join("logs").join("A.log")).expect("log exists");
+    assert_eq!(
+        log2.matches(EXPECTED_USAGE_LINE).count(),
+        1,
+        "the usage line is unchanged: {log2}"
+    );
+    assert!(
+        !log2.contains('$'),
+        "no cost suffix when the provider reports none: {log2}"
     );
 }
 
