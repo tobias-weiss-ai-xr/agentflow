@@ -150,8 +150,11 @@ fn a_killed_attempt_is_recorded_as_interrupted_and_excluded_from_trust() {
 
     let before = run::cost(&f.cfg, &f.st, &CostFilter::default());
     assert!(
-        before.contains(&format!("{:<14} {:<11} {:.2} {}", "w1", "2/3", 0.67, "-")),
-        "seeded trust is 2/3 (COST is `-`: w1 declares no basis):\n{before}"
+        before.contains(&format!(
+            "{:<14} {:<11} {:.2} {} {}",
+            "w1", "2/3", 0.67, "0.0", "-"
+        )),
+        "seeded trust is 2/3 with MEAN_S 0.0 (the seeded receipts carry 0.0s; COST is `-`: w1 declares no basis):\n{before}"
     );
     assert!(
         !before.contains("INTERRUPTED"),
@@ -214,8 +217,11 @@ fn a_killed_attempt_is_recorded_as_interrupted_and_excluded_from_trust() {
 
     let after = run::cost(&f.cfg, &f.st, &CostFilter::default());
     assert!(
-        after.contains(&format!("{:<14} {:<11} {:.2} {}", "w1", "2/3", 0.67, "-")),
-        "interrupted receipts stay out of WINS/TOTAL (would be 2/4):\n{after}"
+        after.contains(&format!(
+            "{:<14} {:<11} {:.2} {} {}",
+            "w1", "2/3", 0.67, "0.0", "-"
+        )),
+        "interrupted receipts stay out of WINS/TOTAL and MEAN_S (would be 2/4):\n{after}"
     );
     assert!(
         !after.contains("2/4"),
@@ -361,8 +367,11 @@ fn the_healed_receipt_names_the_worker_and_an_upper_bound_duration() {
     // now-named worker is not footnoted as absent from the config.
     let after = run::cost(&f.cfg, &f.st, &CostFilter::default());
     assert!(
-        after.contains(&format!("{:<14} {:<11} {:.2} {}", "w1", "2/3", 0.67, "-")),
-        "a measured duration is still not a verdict (would be 2/4):\n{after}"
+        after.contains(&format!(
+            "{:<14} {:<11} {:.2} {} {}",
+            "w1", "2/3", 0.67, "0.0", "-"
+        )),
+        "a measured duration is still not a verdict (would be 2/4; MEAN_S stays over the 0.0s verdicts):\n{after}"
     );
     assert!(
         !after.contains("2/4"),

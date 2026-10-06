@@ -80,8 +80,21 @@ trusted worker), so a cost term in the score itself would penalise a worker
 for being given the hard tasks and starve it. A score tie within a small
 tolerance SHALL prefer the worker with the strictly cheaper DECLARED cost
 basis (`params_b` / `price_per_mtok_usd`) when the two bases are comparable;
-otherwise ties SHALL break in config order, so a fresh state with no
-declared bases reproduces the previous first-free behavior exactly.
+when the costs do not decide — bases incomparable or equal — the tie SHALL
+go to the worker with the strictly lower MEAN wall-clock duration over its
+VERDICT attempts (`merged` or `failed`; an `interrupted` receipt's duration
+is a placeholder, never a measurement, and SHALL NOT enter the mean);
+remaining ties SHALL break in config order, so a fresh state with no
+declared bases reproduces the previous first-free behavior exactly. The
+full tie-break ordering is therefore trust > declared price > duration >
+config order. Duration, like cost, is a tie-break ONLY and never a score
+term: wall-clock is confounded by task difficulty (the hard tasks go to
+the trusted worker), so a duration term in the score itself would
+penalise a worker for being given the hard tasks and starve it — while
+UCB1's exploration term still guarantees an unpicked worker is eventually
+tried, so no tie-break can starve one. A worker with no duration history
+SHALL never displace the incumbent on a tie, and a missing duration SHALL
+never be treated as zero.
 
 #### Scenario: fresh state picks first configured worker
 
@@ -118,6 +131,12 @@ THEN the better-scoring worker is chosen; cost never overrides measured trust.
 GIVEN a score tie where one worker declares a price and the other only a parameter count, or where either worker declares no cost basis at all
 WHEN a task dispatches
 THEN config order decides; a price is never converted into a parameter count.
+
+#### Scenario: faster worker wins only when trust and cost tie
+
+GIVEN two free workers whose scores tie, whose declared cost bases do not decide the tie (both undeclared, or equal), and whose mean verdict-attempt durations differ
+WHEN a task dispatches
+THEN the worker with the strictly lower mean duration is chosen regardless of config order, while a strictly better trust score or a strictly cheaper declared price still beats a faster worker; a worker with no duration history never displaces the incumbent (config order stands), and an `interrupted` receipt never enters the mean.
 
 ### Requirement: Scope enforcement on agent edits
 

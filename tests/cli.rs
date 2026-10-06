@@ -255,7 +255,14 @@ fn cost_prints_table_and_task_filter() {
     assert!(out.contains("TOTAL"));
     let (code, out) = cli.af(&["cost", "--task", "ZZ"]);
     assert_eq!(code, 0);
-    assert!(!out.contains("1.5"), "filter excludes other tasks: {out}");
+    // The task filter narrows the TABLE rows (and with them the TOTAL):
+    // A has no row under a filter naming another task — even though the
+    // per-worker block still spans every selected receipt, so its MEAN_S
+    // keeps reporting the worker's measured mean.
+    assert!(
+        !out.lines().any(|l| l.starts_with("A ")),
+        "filter excludes other tasks' rows: {out}"
+    );
     assert!(out.contains("TOTAL: 0.0s"));
 }
 
@@ -584,19 +591,20 @@ fn cost_report_shows_relative_expense_when_no_provider_reports_a_price() {
         "basis line: {out}"
     );
     // The cheapest declaring worker anchors the scale at exactly 1.00x…
-    // (w1 has two verdict receipts — A and the legacy C — both merged.)
+    // (w1 has two verdict receipts — A at 1.0s and the legacy C at 4.0s,
+    // both merged — so its MEAN_S is (1.0 + 4.0) / 2 = 2.5.)
     assert!(
         out.contains(&format!(
-            "{:<14} {:<11} {:.2} {}",
-            "w1", "2/2", 1.00, "1.00x"
+            "{:<14} {:<11} {:.2} {} {}",
+            "w1", "2/2", 1.00, "2.5", "1.00x"
         )),
         "w1 anchors the proxy at 1.00x: {out}"
     );
-    // …and the 40B worker runs at 40/8 = 5x that rate.
+    // …and the 40B worker runs at 40/8 = 5x that rate (mean 2.0s).
     assert!(
         out.contains(&format!(
-            "{:<14} {:<11} {:.2} {}",
-            "w2", "1/1", 1.00, "5.00x"
+            "{:<14} {:<11} {:.2} {} {}",
+            "w2", "1/1", 1.00, "2.0", "5.00x"
         )),
         "w2 shows its real ratio: {out}"
     );
@@ -688,8 +696,8 @@ fn a_declared_price_beats_the_params_proxy_in_the_cost_report() {
         .unwrap_or_else(|| panic!("w1 worker row: {out}"));
     assert!(
         w1_row.contains(&format!(
-            "{:<14} {:<11} {:.2} {}",
-            "w1", "1/1", 1.00, "$1.0000"
+            "{:<14} {:<11} {:.2} {} {}",
+            "w1", "1/1", 1.00, "1.0", "$1.0000"
         )),
         "w1 shows dollars computed from its tokens: {w1_row}"
     );
@@ -705,11 +713,11 @@ fn a_declared_price_beats_the_params_proxy_in_the_cost_report() {
         )),
         "A row: {out}"
     );
-    // w2 keeps the proxy scale on the SAME report.
+    // w2 keeps the proxy scale on the SAME report (mean 2.0s).
     assert!(
         out.contains(&format!(
-            "{:<14} {:<11} {:.2} {}",
-            "w2", "1/1", 1.00, "1.00x"
+            "{:<14} {:<11} {:.2} {} {}",
+            "w2", "1/1", 1.00, "2.0", "1.00x"
         )),
         "w2 keeps its proxy rate: {out}"
     );
@@ -763,12 +771,13 @@ fn cost_report_shows_a_declared_rate_even_when_no_tokens_were_recorded() {
     let (code, out) = cli.af(&["cost"]);
     assert_eq!(code, 0, "{out}");
     // 400B against the cheapest declared 8B basis is exactly 50x — the
-    // assumption the operator declared, visible with no token data at all.
+    // assumption the operator declared, visible with no token data at all
+    // (every attempt here took 1.0s, so MEAN_S is 1.0).
     for (worker, cell) in [("big", "50.00x"), ("small", "1.00x")] {
         assert!(
             out.contains(&format!(
-                "{:<14} {:<11} {:.2} {}",
-                worker, "1/1", 1.00, cell
+                "{:<14} {:<11} {:.2} {} {}",
+                worker, "1/1", 1.00, "1.0", cell
             )),
             "{worker} must show its declared rate {cell}: {out}"
         );
@@ -849,11 +858,12 @@ fn receipts_naming_an_absent_worker_are_footnoted_not_fatal() {
         ),
         "footnote: {out}"
     );
-    // The unknown workers' rows show `-`, both tables.
+    // The unknown workers' rows show `-`, both tables (ghost's two
+    // attempts took 1.0s and 2.0s → MEAN_S 1.5).
     assert!(
         out.contains(&format!(
-            "{:<14} {:<11} {:.2} {}",
-            "ghost", "2/2", 1.00, "-"
+            "{:<14} {:<11} {:.2} {} {}",
+            "ghost", "2/2", 1.00, "1.5", "-"
         )),
         "ghost worker row: {out}"
     );
@@ -864,11 +874,11 @@ fn receipts_naming_an_absent_worker_are_footnoted_not_fatal() {
         )),
         "A's attempts name an absent worker, so COST is `-`: {out}"
     );
-    // The configured worker's priced row is untouched.
+    // The configured worker's priced row is untouched (mean 4.0s).
     assert!(
         out.contains(&format!(
-            "{:<14} {:<11} {:.2} {}",
-            "w1", "1/1", 1.00, "$2.0000"
+            "{:<14} {:<11} {:.2} {} {}",
+            "w1", "1/1", 1.00, "4.0", "$2.0000"
         )),
         "w1 keeps its dollars: {out}"
     );
@@ -989,20 +999,108 @@ fn the_cost_report_prefers_a_measured_cost_over_a_declared_one() {
     );
     // The worker rows follow the same ladder: w1's whole selected spend is
     // 3 measured × $0.0123 + 1 estimate × $1.0000, marked `~`; w2 keeps its
-    // proxy rate (no measured cost of its own).
+    // proxy rate (no measured cost of its own). Both workers' four/one
+    // verdict attempts each took 1.0s → MEAN_S 1.0.
     assert!(
         out.contains(&format!(
-            "{:<14} {:<11} {:.2} {}",
-            "w1", "4/4", 1.00, "~$1.0369"
+            "{:<14} {:<11} {:.2} {} {}",
+            "w1", "4/4", 1.00, "1.0", "~$1.0369"
         )),
         "w1 folds measured-first like the task rows: {out}"
     );
     assert!(
         out.contains(&format!(
-            "{:<14} {:<11} {:.2} {}",
-            "w2", "1/1", 1.00, "1.00x"
+            "{:<14} {:<11} {:.2} {} {}",
+            "w2", "1/1", 1.00, "1.0", "1.00x"
         )),
         "w2 keeps its proxy rate: {out}"
+    );
+}
+
+/// The WORKER table's MEAN_S column shows the exact duration statistic the
+/// router reads: the MEAN wall-clock seconds over the worker's VERDICT
+/// attempts — interrupted attempts are excluded on both sides (their
+/// duration is a placeholder, not a measurement) — at one decimal, so the
+/// routing tie-break's input is inspectable from the same report.
+// spec: cli/cost-report#the-cost-report-shows-the-duration-the-router-reads
+#[test]
+fn the_cost_report_shows_the_duration_the_router_reads() {
+    let tasks = r#"{ "tasks": [
+        { "id": "A", "title": "a", "accept": "true" },
+        { "id": "B", "title": "b", "accept": "true" }
+    ] }"#;
+    // Neither worker declares a basis, so COST is `-` and MEAN_S is the
+    // only measured figure in the worker rows.
+    let workers = r#"{ "defaults": { "max_attempts": 1, "accept_timeout_s": 10 },
+        "workers": [
+            { "name": "w1", "provider": "openai", "model": "gpt-4o", "enabled": true, "cli": "unused" },
+            { "name": "w2", "provider": "openai", "model": "o1", "enabled": true, "cli": "unused" }
+        ] }"#;
+    let cli = Cli::new_with(tasks, workers);
+    let (_, st) = cli.settings();
+    let store = Store::new(st.state_dir.clone());
+    let receipt = |task: &str, ts: u64, wall: f64, worker: &str, outcome: &str| Receipt {
+        task: task.into(),
+        attempt: 1,
+        worker: worker.into(),
+        model: "m".into(),
+        wall_clock_s: wall,
+        tokens: None,
+        ts,
+        outcome: outcome.into(),
+        error: None,
+        cost_micros: None,
+    };
+    // w1: two verdict attempts (2.0s + 6.0s) → MEAN_S 4.0. w2: one (3.0s).
+    store
+        .append_receipt(&receipt("A", 1_000, 2.0, "w1", "merged"))
+        .unwrap();
+    store
+        .append_receipt(&receipt("A", 2_000, 6.0, "w1", "failed"))
+        .unwrap();
+    store
+        .append_receipt(&receipt("B", 3_000, 3.0, "w2", "merged"))
+        .unwrap();
+    // An interrupted attempt on w1 with a huge placeholder duration: it
+    // must enter NEITHER the mean NOR the wins/total.
+    store
+        .append_receipt(&receipt("A", 4_000, 999.0, "w1", "interrupted"))
+        .unwrap();
+
+    let (code, out) = cli.af(&["cost"]);
+    assert_eq!(code, 0, "{out}");
+    // The header advertises the column between TRUST and COST.
+    assert!(
+        out.contains(&format!(
+            "{:<14} {:<11} {} {} {}",
+            "WORKER", "WINS/TOTAL", "TRUST", "MEAN_S", "COST"
+        )),
+        "worker table header: {out}"
+    );
+    // The cells: the mean over verdict attempts only, ONE decimal. If the
+    // interrupted placeholder entered, w1 would read 335.7 (and 1/3).
+    assert!(
+        out.contains(&format!(
+            "{:<14} {:<11} {:.2} {} {}",
+            "w1", "1/2", 0.50, "4.0", "-"
+        )),
+        "w1's MEAN_S is (2.0 + 6.0) / 2, interrupted excluded: {out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "{:<14} {:<11} {:.2} {} {}",
+            "w2", "1/1", 1.00, "3.0", "-"
+        )),
+        "w2's MEAN_S is its single verdict attempt: {out}"
+    );
+    assert!(
+        !out.contains("335"),
+        "the interrupted placeholder duration never reaches MEAN_S: {out}"
+    );
+    // The interrupted attempt is still accounted for distinctly.
+    assert!(
+        out.contains("INTERRUPTED: 999.0s on 1 attempt(s)"),
+        "the lost attempt keeps its own line: {out}"
     );
 }
 
@@ -1541,15 +1639,15 @@ fn ucb1_selection_matches_the_spec_scenarios() {
     // Unexplored worker is tried before a failing one (exploration term).
     let mut r = Router::default();
     for _ in 0..3 {
-        r.record("a", false); // a: 0/3 wins
+        r.record("a", false, Some(1.0)); // a: 0/3 wins
     }
     assert_eq!(r.pick(pool.iter()).unwrap().name, "b");
 
     // Reliable worker wins at equal counts (exploitation term).
     let mut r = Router::default();
     for _ in 0..3 {
-        r.record("a", true); // a: 3/3
-        r.record("b", false); // b: 0/3
+        r.record("a", true, Some(1.0)); // a: 3/3
+        r.record("b", false, Some(1.0)); // b: 0/3
     }
     assert_eq!(r.pick(pool.iter()).unwrap().name, "a");
 }

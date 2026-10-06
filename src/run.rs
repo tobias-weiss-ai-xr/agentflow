@@ -54,7 +54,7 @@ pub struct RunOptions {
 /// the one extra argument saves.
 #[allow(clippy::too_many_arguments)] // flat bookkeeping bundle, see above
 fn reap(
-    rx: &mpsc::Receiver<(String, String, Outcome)>,
+    rx: &mpsc::Receiver<(String, String, Outcome, f64)>,
     running: &Arc<Mutex<HashMap<String, ()>>>,
     worker_busy: &Arc<Mutex<HashMap<String, bool>>>,
     router: &mut Router,
@@ -67,7 +67,7 @@ fn reap(
         Some(d) => rx.recv_timeout(d).ok(),
         None => rx.try_recv().ok(),
     };
-    for (id, worker_name, outcome) in first
+    for (id, worker_name, outcome, wall_s) in first
         .into_iter()
         .chain(std::iter::from_fn(|| rx.try_recv().ok()))
     {
@@ -76,7 +76,15 @@ fn reap(
             .lock()
             .unwrap()
             .insert(worker_name.clone(), false);
-        router.record(&worker_name, matches!(outcome, Outcome::Merged));
+        // Every reaped attempt is a verdict (merged/failed) WITH its
+        // measured wall-clock — the same span `execute_task` records on
+        // the receipt — so the live duration stat matches a replay from
+        // receipts.
+        router.record(
+            &worker_name,
+            matches!(outcome, Outcome::Merged),
+            Some(wall_s),
+        );
         // Journal reconciliation: attempt threads persist phase boundaries
         // via load-modify-save (see `record_phase`), so this in-memory map
         // has not seen them. Copy every entry's freshest persisted boundary
@@ -198,7 +206,7 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     let _ = std::fs::create_dir_all(&log_dir);
     let _ = std::fs::create_dir_all(store.prompt_dir());
 
-    let (tx, rx) = mpsc::channel::<(String, String, Outcome)>();
+    let (tx, rx) = mpsc::channel::<(String, String, Outcome, f64)>();
     let merge_locks = worktree::MergeLocks::new();
     let worker_busy: Arc<Mutex<HashMap<String, bool>>> = Arc::new(Mutex::new(HashMap::new()));
     let running: Arc<Mutex<HashMap<String, ()>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -401,7 +409,16 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                     worker.name
                 );
                 std::thread::spawn(move || {
+                    // The attempt's wall-clock, measured around the same
+                    // span `execute_task` records on its receipt
+                    // (`wall_clock_s`), so the router's live duration stat
+                    // is the same statistic a replay from receipts would
+                    // build. The retry-pacing wait below is deliberately
+                    // OUTSIDE the measurement — it is post-attempt backoff,
+                    // not work.
+                    let t0 = std::time::Instant::now();
                     let out = execute::execute_task(&ctx2, &wclone, &id, attempt, &log_path);
+                    let wall_s = t0.elapsed().as_secs_f64();
                     // Retry pacing (`retry_delay_s`, default 0): after a
                     // FAILED attempt that will be retried — `attempt <
                     // max_attempts`; reap will count this attempt and send
@@ -439,7 +456,7 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                         }
                         std::thread::sleep(Duration::from_secs(retry_delay_s));
                     }
-                    let _ = tx2.send((id, wname, out));
+                    let _ = tx2.send((id, wname, out, wall_s));
                 });
             }
             if opts.once {
@@ -1440,6 +1457,23 @@ fn measured_worker_cell(
     }
 }
 
+/// The MEAN_S cell for one WORKER row: the mean wall-clock seconds over
+/// the worker's VERDICT attempts in the selection — the same statistic the
+/// router's duration tie-break reads ([`Router::mean_duration_s`]),
+/// printed so the choice is inspectable. ONE decimal; `-` when the worker
+/// has no verdict attempt in the selection (no duration is never a zero
+/// duration — a row itself only exists once one does).
+fn mean_duration_cell(verdicts: &[&Receipt]) -> String {
+    if verdicts.is_empty() {
+        "-".into()
+    } else {
+        format!(
+            "{:.1}",
+            verdicts.iter().map(|r| r.wall_clock_s).sum::<f64>() / verdicts.len() as f64
+        )
+    }
+}
+
 /// `af cost`: aggregate receipts (wall-clock truth, ADR-9). The table rows
 /// honor `filter.task`; the TOTAL line and the per-worker trust block are
 /// computed over the window-selected receipts only — with no window flags
@@ -1561,8 +1595,8 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
     if !by_worker.is_empty() {
         by_worker.sort();
         lines.push_str(&format!(
-            "\n\n{:<14} {:<11} {} {}",
-            "WORKER", "WINS/TOTAL", "TRUST", "COST"
+            "\n\n{:<14} {:<11} {} {} {}",
+            "WORKER", "WINS/TOTAL", "TRUST", "MEAN_S", "COST"
         ));
         for (name, w, n) in by_worker {
             // Estimated expense for the worker's whole recorded token spend
@@ -1591,10 +1625,11 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
                 )
             };
             lines.push_str(&format!(
-                "\n{:<14} {:<11} {:.2} {}",
+                "\n{:<14} {:<11} {:.2} {} {}",
                 name,
                 format!("{w}/{n}"),
                 w as f64 / n as f64,
+                mean_duration_cell(worker_rs),
                 cost_cell
             ));
         }
@@ -2543,6 +2578,29 @@ mod tests {
     }
 
     // --- cost cells (r10-cost-report) -------------------------------------
+
+    #[test]
+    fn mean_duration_cell_formats_the_mean_over_verdict_attempts() {
+        let rcpt = |wall: f64, outcome: &str| Receipt {
+            task: "A".into(),
+            attempt: 1,
+            worker: "w1".into(),
+            model: "m".into(),
+            wall_clock_s: wall,
+            tokens: None,
+            ts: 1,
+            outcome: outcome.into(),
+            error: None,
+            cost_micros: None,
+        };
+        // The mean over the verdict attempts, one decimal.
+        let merged = rcpt(2.0, "merged");
+        let failed = rcpt(6.0, "failed");
+        assert_eq!(mean_duration_cell(&[&merged, &failed]), "4.0");
+        assert_eq!(mean_duration_cell(&[&merged]), "2.0");
+        // No verdict attempt: unknown, never zero.
+        assert_eq!(mean_duration_cell(&[]), "-");
+    }
 
     #[test]
     fn worker_cost_cell_renders_dollars_ratios_and_placeholders() {
