@@ -18,12 +18,19 @@
 //! - `FAKE_AGENT_TOUCH_FROM_MODEL`: when set (and `FAKE_AGENT_TOUCH` unset),
 //!   write `{model}.txt` instead — lets two workers with distinct `--model`s
 //!   produce distinct merged artifacts in a parallel-dispatch test.
+//! - `FAKE_AGENT_TOUCH_FROM_TASK`: when set (and `FAKE_AGENT_TOUCH` unset),
+//!   write `{task_id}.txt` from the prompt's `TASK ID:` line instead — lets a
+//!   single-worker multi-task fixture (e.g. a dependency run) give each task
+//!   its own artifact despite the process-global env.
 //! - `FAKE_AGENT_SLEEP_MS`: optional fixed delay before doing work, so E2E
 //!   tests can hold a task in the `running` state long enough to observe that
 //!   several tasks are genuinely in flight at the same instant.
 //! - `FAKE_AGENT_HANG_MS`: optional delay BEFORE any output at all (capped
 //!   like `FAKE_AGENT_SLEEP_MS`), so a test can present a genuinely stalled
 //!   agent — silent on stdout/stderr far longer than a stall window.
+//! - `FAKE_AGENT_NO_COMMIT`: when set, skip the commit of the touched file so
+//!   the file is left UNCOMMITTED in the worktree. Exercises the orchestrator's
+//!   dirty-worktree durability path (commit-before-judging).
 //!
 //! Like a real agent, it commits its work to the current branch so the
 //! orchestrator's merge actually carries the changes to the base branch.
@@ -39,6 +46,12 @@ fn main() -> ExitCode {
         .find(|w| w[0] == "--model")
         .and_then(|w| w.get(1))
         .cloned();
+    // The prompt handoff (`-p @<path>`): read for the `TASK ID:` line when the
+    // per-task touch knob asks for it.
+    let prompt_text = args
+        .iter()
+        .find(|a| a.starts_with('@'))
+        .and_then(|p| std::fs::read_to_string(&p[1..]).ok());
     let exit: i32 = std::env::var("FAKE_AGENT_EXIT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -50,6 +63,16 @@ fn main() -> ExitCode {
         .or_else(|| {
             if std::env::var("FAKE_AGENT_TOUCH_FROM_MODEL").is_ok() {
                 model.map(|m| format!("{m}.txt"))
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            if std::env::var("FAKE_AGENT_TOUCH_FROM_TASK").is_ok() {
+                prompt_text
+                    .as_deref()
+                    .and_then(task_id_from_prompt_text)
+                    .map(|id| format!("{id}.txt"))
             } else {
                 None
             }
@@ -114,17 +137,42 @@ fn main() -> ExitCode {
     }
 
     // Commit the work so merges carry it (ignore commit failures — the
-    // acceptance gate is the real check).
-    let _ = std::process::Command::new("git")
-        .args(["add", "-A"])
-        .status();
-    let _ = std::process::Command::new("git")
-        .args(["commit", "-m", "example_agent: task work"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
+    // acceptance gate is the real check). `FAKE_AGENT_NO_COMMIT` opts out so a
+    // test can exercise the orchestrator's commit-before-judging path; the
+    // decision is a pure function so the logic stays unit-tested (llvm-cov
+    // does not credit lines inside this spawned binary).
+    if should_commit(std::env::var("FAKE_AGENT_NO_COMMIT").is_ok()) {
+        let _ = std::process::Command::new("git")
+            .args(["add", "-A"])
+            .status();
+        let _ = std::process::Command::new("git")
+            .args(["commit", "-m", "example_agent: task work"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
 
     ExitCode::SUCCESS
+}
+
+/// Should the stub commit its touched file? False only when the no-commit
+/// knob is set — the opt-in that leaves the work dirty for the durability
+/// path. Pure so it is unit-tested in-process.
+fn should_commit(no_commit_knob_set: bool) -> bool {
+    !no_commit_knob_set
+}
+
+/// Task id from a rendered prompt's `TASK ID: <id>` line. Pure (takes the
+/// text, not a path) so it is unit-tested in-process.
+fn task_id_from_prompt_text(text: &str) -> Option<String> {
+    text.lines().map(str::trim).find_map(|l| {
+        let id = l
+            .strip_prefix("TASK ID: ")
+            .or_else(|| l.strip_prefix("TASK ID:"));
+        id.map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    })
 }
 
 /// Emit a realistic pi-style `--mode json` JSON Lines transcript on stdout.
@@ -286,5 +334,29 @@ mod tests {
             "{}",
             t.rendered
         );
+    }
+
+    /// `FAKE_AGENT_NO_COMMIT` is the opt-in that leaves the touched file
+    /// dirty; the pure decision is the whole knob (the two git calls in main
+    /// are the thin printer around it).
+    #[test]
+    fn no_commit_knob_opts_out_of_the_stub_commit() {
+        assert!(should_commit(false), "default stub commits its work");
+        assert!(!should_commit(true), "knob set ⇒ leave the work dirty");
+    }
+
+    /// `TASK ID: <id>` extraction from a rendered prompt (both with and
+    /// without the space), and no false match when the line is absent.
+    #[test]
+    fn task_id_from_prompt_extracts_the_task_id() {
+        let prompt = "TASK ID: A\nTITLE: x\nTASK ID: A\n";
+        assert_eq!(task_id_from_prompt_text(prompt), Some("A".to_string()));
+        // No-space variant and a leading indent.
+        assert_eq!(
+            task_id_from_prompt_text("  TASK ID:B\n"),
+            Some("B".to_string())
+        );
+        assert_eq!(task_id_from_prompt_text("no id here"), None);
+        assert_eq!(task_id_from_prompt_text("TASK ID:\n"), None);
     }
 }

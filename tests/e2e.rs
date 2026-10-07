@@ -128,23 +128,34 @@ fn happy_path_dependency_and_merge() {
     let f = fixture(
         &format!(
             r#"{{ "tasks": [
-                {{"id":"A","title":"create done","scope":["DONE.txt"],"accept":"{g}"}},
-                {{"id":"B","title":"follow on","deps":["A"],"scope":["DONE.txt"],"accept":"{g}"}}
+                {{"id":"A","title":"create a","scope":["A.txt"],"accept":"{ga}"}},
+                {{"id":"B","title":"follow on","deps":["A"],"scope":["B.txt"],"accept":"{gb}"}}
             ] }}"#,
-            g = gate_cmd("DONE.txt")
+            ga = gate_cmd("A.txt"),
+            gb = gate_cmd("B.txt")
         ),
         &worker_json(1),
     );
+    // Give each task its OWN artifact (A.txt / B.txt) so the dependent task B
+    // produces a genuine committed change instead of re-creating A's file (a
+    // no-change attempt must not reach Done). Ride the sandbox passthrough.
+    std::env::set_var(
+        "TF_AGENT_ENV_PASSTHROUGH",
+        "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_TOUCH_FROM_MODEL,FAKE_AGENT_TOUCH_FROM_TASK,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
+    );
+    std::env::set_var("FAKE_AGENT_TOUCH_FROM_TASK", "1");
     let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
     assert_eq!(code, 0, "run should exit 0 (all done)");
 
     let st = Store::new(f.st.state_dir.clone()).load();
     assert_eq!(st["A"].state, TaskState::Done);
     assert_eq!(st["B"].state, TaskState::Done);
-    // Merged artifact exists on the base repo.
-    assert!(f.repo.join("DONE.txt").exists(), "DONE.txt merged to main");
+    // Each task's artifact is merged to main.
+    assert!(f.repo.join("A.txt").exists(), "A.txt merged to main");
+    assert!(f.repo.join("B.txt").exists(), "B.txt merged to main");
     // No leftover worktree.
     assert!(!f.st.worktree_root.join("A").exists());
+    assert!(!f.st.worktree_root.join("B").exists());
     // Receipts were appended (one per merged task), outcome "merged".
     let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
     assert!(receipts.len() >= 2, "one receipt per merged task");
@@ -1457,4 +1468,235 @@ fn a_merge_conflict_keeps_the_agents_work_on_an_archived_branch() {
     std::env::remove_var("FAKE_AGENT_TOUCH");
     std::env::remove_var("FAKE_AGENT_OUT");
     std::env::remove_var("FAKE_AGENT_SLEEP_MS");
+}
+
+/// The FALSE GREEN this round exists to kill: an agent that exits 0 while
+/// producing no change at all must NOT be reported as merged. Before the
+/// fix, the gate passed in a worktree the merge did not carry (the branch
+/// tip IS the base, so `git merge --no-ff` answered "Already up to date")
+/// and the task was recorded Done with nothing in the base.
+// spec: lifecycle/an-attempt-that-produces-no-change-is-not-merged
+// spec: lifecycle/an-attempt-that-produces-no-change-is-not-merged#zero-commit-attempt-fails-never-merged
+// spec: worktree/the-attempt-s-work-is-committed-before-it-is-merged#a-no-op-merge-is-not-reported
+#[test]
+fn an_attempt_that_produces_no_change_never_reports_merged() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_NO_COMMIT");
+    // The stub writes `{out}\n`; the content matches the seeded README.md
+    // byte-for-byte, so it produces NO git change (a clean worktree, zero
+    // commits ahead) while still exiting 0 with a passing gate.
+    std::env::set_var("FAKE_AGENT_TOUCH", "README.md");
+    std::env::set_var("FAKE_AGENT_OUT", "# scratch");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"no change","scope":["README.md"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("README.md")
+        ),
+        &worker_json(1),
+    );
+    // Count commits on main before the run: the run must not add any.
+    let before = std::process::Command::new("git")
+        .args(["rev-list", "--count", "main"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    let before = String::from_utf8_lossy(&before.stdout).trim().to_string();
+
+    let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
+    assert_eq!(code, 2, "a no-change attempt must fail the run");
+
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_ne!(st["A"].state, TaskState::Done, "must not reach done");
+    assert_eq!(st["A"].state, TaskState::Failed);
+    let err = st["A"].last_error.clone().unwrap_or_default();
+    assert!(
+        err.contains("produced no change") && err.contains("0 commits ahead"),
+        "reason names the zero-commit condition: {err}"
+    );
+
+    // The receipt is the routing substrate and must not claim a merge.
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(
+        receipts[0].outcome, "failed",
+        "no-change attempt must not report merged: {receipts:?}"
+    );
+    assert!(receipts[0]
+        .error
+        .as_deref()
+        .unwrap_or("")
+        .contains("0 commits ahead"));
+
+    // The base is untouched: no new commit.
+    let after = std::process::Command::new("git")
+        .args(["rev-list", "--count", "main"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    assert_eq!(
+        String::from_utf8_lossy(&after.stdout).trim(),
+        before,
+        "base must gain no commit from a no-change attempt"
+    );
+
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    std::env::remove_var("FAKE_AGENT_OUT");
+}
+
+/// DURABLE FIRST: an agent that exits 0 leaving its edit UNCOMMITTED must
+/// still land the work. The orchestrator commits the dirty worktree on the
+/// attempt branch before judging it, so the gate sees the committed tree and
+/// the merge carries it into the base — instead of the pre-fix false green
+/// where the gate passed on a dirty file that the merge never carried and
+/// cleanup then destroyed.
+// spec: lifecycle/attempt-work-is-durable-before-it-is-judged
+// spec: lifecycle/attempt-work-is-durable-before-it-is-judged#dirty-worktree-is-committed-before-judging
+// spec: worktree/the-attempt-s-work-is-committed-before-it-is-merged
+// spec: worktree/the-attempt-s-work-is-committed-before-it-is-merged#merge-carries-the-attempt-s-real-content
+#[test]
+fn a_dirty_worktree_is_committed_before_the_attempt_is_judged() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"dirty done","scope":["TOUCHED.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("TOUCHED.txt")
+        ),
+        &worker_json(1),
+    );
+    // The no-commit knob must ride the sandbox passthrough, else the agent
+    // child never sees it (and the test measures nothing).
+    std::env::set_var(
+        "TF_AGENT_ENV_PASSTHROUGH",
+        "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES,FAKE_AGENT_NO_COMMIT",
+    );
+    std::env::set_var("FAKE_AGENT_TOUCH", "TOUCHED.txt");
+    std::env::set_var("FAKE_AGENT_OUT", "dirty but real");
+    std::env::set_var("FAKE_AGENT_NO_COMMIT", "1");
+
+    let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
+    assert_eq!(code, 0, "the dirty work must be committed and merged");
+
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Done);
+
+    // The work is IN THE BASE'S COMMITTED TREE — not merely on a dirty
+    // checkout that cleanup destroyed.
+    let show = std::process::Command::new("git")
+        .args(["show", "main:TOUCHED.txt"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    assert!(
+        show.status.success(),
+        "base's committed tree must contain the agent's file: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&show.stdout), "dirty but real\n");
+
+    // A real merge happened, so the receipt honestly says merged.
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].outcome, "merged", "{receipts:?}");
+
+    // No leftover worktree; the base repo's working tree is clean.
+    assert!(!f.st.worktree_root.join("A").exists());
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    assert_eq!(String::from_utf8_lossy(&status.stdout).trim(), "");
+
+    // The harness committed the dirty work with its own message (the agent
+    // never committed), and the branch was consumed by the merge.
+    let log = std::process::Command::new("git")
+        .args(["log", "--format=%s", "main"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    let log = String::from_utf8_lossy(&log.stdout);
+    assert!(
+        log.contains("af: A attempt 1 — agent left uncommitted work"),
+        "log names the durability commit: {log}"
+    );
+
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    std::env::remove_var("FAKE_AGENT_OUT");
+    std::env::remove_var("FAKE_AGENT_NO_COMMIT");
+    std::env::set_var(
+        "TF_AGENT_ENV_PASSTHROUGH",
+        "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
+    );
+}
+
+/// DURABLE FIRST, uncommittable arm: if the agent's uncommitted work cannot
+/// be committed, the attempt must fail naming the commit error — a tree that
+/// cannot be made durable must not be judged or merged. A rejecting
+/// pre-commit hook (the operator's git hooks are honored; no `--no-verify`)
+/// makes the durability commit fail even though the file is otherwise fine.
+// spec: lifecycle/attempt-work-is-durable-before-it-is-judged#an-uncommittable-tree-fails-the-attempt
+#[test]
+fn an_uncommittable_dirty_tree_fails_the_attempt_cleanly() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"blocked dirty","scope":["B.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("B.txt")
+        ),
+        &worker_json(1),
+    );
+    // Leave the work uncommitted and ride the passthrough so the orchestrator
+    // must commit it for us.
+    std::env::set_var(
+        "TF_AGENT_ENV_PASSTHROUGH",
+        "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES,FAKE_AGENT_NO_COMMIT",
+    );
+    std::env::set_var("FAKE_AGENT_TOUCH", "B.txt");
+    std::env::set_var("FAKE_AGENT_OUT", "can't land");
+    std::env::set_var("FAKE_AGENT_NO_COMMIT", "1");
+    // The operator's pre-commit hook rejects every commit in this repo.
+    let hooks = f.repo.join(".git").join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\nexit 1\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        hooks.join("pre-commit"),
+        std::fs::Permissions::from_mode(0o777),
+    )
+    .unwrap();
+
+    let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
+    assert_eq!(code, 2, "an uncommittable dirty tree must fail the run");
+
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Failed);
+    let err = st["A"].last_error.clone().unwrap_or_default();
+    assert!(
+        err.contains("cannot commit the agent's uncommitted work"),
+        "failure names the commit error: {err}"
+    );
+
+    // Nothing merged: the base has no new commit and no B.txt.
+    assert!(!f.repo.join("B.txt").exists());
+    let count = std::process::Command::new("git")
+        .args(["rev-list", "--count", "main"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    assert_eq!(
+        String::from_utf8_lossy(&count.stdout).trim(),
+        "1",
+        "only the seeded init commit remains"
+    );
+
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    std::env::remove_var("FAKE_AGENT_OUT");
+    std::env::remove_var("FAKE_AGENT_NO_COMMIT");
+    std::env::set_var(
+        "TF_AGENT_ENV_PASSTHROUGH",
+        "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
+    );
 }
