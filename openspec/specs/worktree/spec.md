@@ -107,3 +107,30 @@ GIVEN archived rejected branches `tf/dead-rejected-111` and
 WHEN `af clean` runs
 THEN `tf/dead-rejected-111` is gone and reported as `removed branch tf/dead-rejected-111`
 AND `tf/live-rejected-222` survives and is not reported as removed.
+
+### Requirement: Recovered branches are re-validated then merged
+
+`af recover` SHALL check an archived rejected branch out in a temporary
+worktree on its own tip (the copy is never created or moved — the committed
+work it points at is exactly what re-validation must preserve), re-validate
+its scope and gate, and on success merge that exact branch into the base so
+the agent's committed work — never re-generated — becomes the task's merge
+commit. Selection of which archived branch to recover SHALL parse the numeric
+`<ts>` (then the `-<n>` collision suffix) and pick the NEWEST, never relying
+on git's output order or committer dates. The temporary worktree is removed
+on every exit path; a failed recovery keeps the archived branch in place.
+
+#### Scenario: recovery checks out the archived branch on its own tip
+
+WHEN `af recover` selects an archived rejected branch for re-validation
+THEN the branch is checked out in a throwaway worktree on its own committed tip
+(no new branch), the scope and gate run against that committed state, and the
+worktree is removed whether recovery succeeds or fails.
+
+#### Scenario: an archived branch is consumed by a successful recovery
+
+GIVEN a scope-and-gate passing archived rejected branch
+WHEN `af recover --task <id>` merges it into the base
+THEN the recovered worktree AND the archived branch are removed, because the
+work now lives in the base — leaving the rejected ref behind would be a ghost
+for `af clean`.

@@ -15,6 +15,7 @@ USAGE:
   af attach    ID
   af cost      [--task ID] [--last] [--since DATE|UNIX_TS]
   af clean     [--dry-run]
+  af recover   --task ID [--dry-run]
   af validate  [--worker NAME] [--tasks FILE] [--workers FILE]
   af --help | --version
 
@@ -236,6 +237,13 @@ fn main() -> ExitCode {
             0
         }
         "clean" => run::clean(&cfg, &st, args.dry_run),
+        "recover" => match &args.task {
+            Some(id) => run::recover(&cfg, &st, id, args.dry_run),
+            None => {
+                eprintln!("error: af recover requires --task ID");
+                2
+            }
+        },
         "validate" => {
             // Pre-flight only: load_cfg already loaded + validated the config
             // (hard errors exit 2 before dispatch) and printed its warnings.

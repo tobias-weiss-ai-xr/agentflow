@@ -5,6 +5,80 @@ TBD - created by archiving change rust-orchestrator. Update Purpose after archiv
 
 ## Requirements
 
+### Requirement: recover command
+
+`af recover --task <id> [--dry-run]` SHALL re-validate an archived rejected
+branch — the copy a rejected attempt leaves under `<prefix>/<id>-rejected-<ts>`
+(with an optional `-<n>` collision suffix) — and merge it into the base
+branch when it passes, WITHOUT ever re-invoking the agent. Selection SHALL
+pick the NEWEST archived branch for the task by PARSING the numeric `<ts>`
+(then the `<n>` collision suffix) and never by git output order or committer
+dates, so the same branch set always selects the same branch. `af recover`
+SHALL never push and SHALL leave the failed attempt's receipt untouched
+(history is append-only).
+
+Before any merge, `af recover` SHALL re-validate in this order: (a) SCOPE —
+every path the archived branch changes relative to the merge base with the
+base branch MUST be covered by the task's CURRENT `scope`, using the same
+enforcement helpers and glob matcher the attempt path uses (an empty scope
+means any file); (b) GATE — unless the task is `manual`, run the acceptance
+gate on the checked-out archived branch exactly as the attempt path does
+(including the task's `gate_replay`). The temporary worktree SHALL be removed
+on every exit path. On success `af recover` SHALL merge the archived branch
+into the base with the message `af: <id> — <title>`, set the task's state to
+`Done` with phase `GatePassed`, persist it, remove the recovered worktree and
+the archived branch, and print `✓ <id> recovered to done (agent not re-run)`.
+
+Exit codes: `0` merged (or `--dry-run` reported); `1` re-validation failed
+(scope violation or gate failure — the archived branch stays in place); `2`
+unknown task, missing `--task ID`, or no archived branch to recover (nothing
+to recover is not a failure). With `--dry-run`, `af recover` SHALL perform
+the selection, report exactly what it would do, and exit `0` without touching
+anything — no worktree, no gate run, no merge.
+
+#### Scenario: recover merges an archived branch after revalidating scope and gate
+
+GIVEN task `C` whose `scope` covers `WORK.txt` and whose gate passes when
+`WORK.txt` exists, and an archived `tf/C-rejected-<ts>` branch carrying a
+committed in-scope change that the gate accepts
+WHEN `af recover --task C` runs
+THEN it exits 0, the task is `Done` in the state file, the change is in the
+base branch, and the archived branch is removed.
+
+#### Scenario: out-of-scope branch fails and survives
+
+GIVEN an archived branch whose change includes a file the task's CURRENT
+scope does not cover
+WHEN `af recover --task <id>` runs
+THEN it exits 1, prints the out-of-scope file, and the archived branch
+survives (no merge, no worktree left behind).
+
+#### Scenario: gate-failing branch fails and survives
+
+GIVEN an archived branch whose checked-out content fails the task's acceptance gate
+WHEN `af recover --task <id>` runs
+THEN it exits 1 and the archived branch survives (no merge, no worktree left behind).
+
+#### Scenario: dry run reports without changing anything
+
+GIVEN an archived branch for a task
+WHEN `af recover --task <id> --dry-run` runs
+THEN it exits 0, names the branch it would recover, and changes nothing
+(no worktree, no gate run, no merge; the archived branch survives and the
+task state is untouched).
+
+#### Scenario: unknown task exits two
+
+WHEN `af recover --task <unknown-id>` runs
+THEN it exits 2 with `config error: unknown task '<unknown-id>'`.
+
+#### Scenario: no archived branch exits two
+
+GIVEN a task with no archived rejected branch
+WHEN `af recover --task <id>` runs
+THEN it exits 2 naming the `<prefix>/<id>-rejected-<ts>` pattern searched
+(nothing to recover is not a failure).
+
 ### Requirement: Run commands
 
 `af run` SHALL run the dispatch loop until all tasks are done or deadlock, honoring `--once` (one dispatch round), `--dry-run` (show plan, change nothing), `--worker <name>`, `--task <id>`, and `--poll <secs>`.

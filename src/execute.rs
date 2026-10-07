@@ -508,7 +508,9 @@ fn materialize_worktree(
 /// Paths changed on the attempt branch relative to the base branch's
 /// merge-base (three-dot diff, so concurrent base advances are ignored).
 /// Trusted git op (af's own), so the full environment is inherited.
-fn changed_paths(wt_path: &Path, base_branch: &str) -> Result<Vec<String>, String> {
+/// `pub(crate)` so `af recover` re-validates an archived branch's scope
+/// through the SAME helper the attempt path uses.
+pub(crate) fn changed_paths(wt_path: &Path, base_branch: &str) -> Result<Vec<String>, String> {
     let out = crate::subprocess::run(
         "git",
         &[
@@ -539,8 +541,9 @@ fn changed_paths(wt_path: &Path, base_branch: &str) -> Result<Vec<String>, Strin
 /// Changed paths no scope entry allows. An empty `scope` means "any file"
 /// (current semantics). Uses the SAME matcher as the scheduler
 /// (`crate::scheduler::scope_overlap`) so admission control and enforcement
-/// agree on what "in scope" means.
-fn scope_violations(changed: &[String], scope: &[String]) -> Vec<String> {
+/// agree on what "in scope" means. `pub(crate)` so `af recover` re-validates
+/// an archived branch's scope against the scheduler's glob matcher.
+pub(crate) fn scope_violations(changed: &[String], scope: &[String]) -> Vec<String> {
     if scope.is_empty() {
         return Vec::new();
     }
