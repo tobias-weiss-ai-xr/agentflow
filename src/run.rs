@@ -22,7 +22,7 @@ use crate::state::{
 };
 use crate::subprocess::{self, EnvMode};
 use crate::worktree;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
@@ -143,6 +143,178 @@ pub fn pick_worker<'a>(
     router.pick(eligible)
 }
 
+/// Operator escape hatch for pre-dispatch reuse: `TF_NO_REUSE=1` (also
+/// accepts `true`/`yes`) makes `af run` buy fresh agent work even when a
+/// scope-compatible archived branch exists, for an operator who wants a
+/// clean re-run. Anything else (including unset) leaves reuse ON — that is
+/// the point of the optimisation.
+fn reuse_disabled() -> bool {
+    matches!(
+        std::env::var("TF_NO_REUSE").ok().as_deref(),
+        Some("1") | Some("true") | Some("yes")
+    )
+}
+
+/// Why a pre-dispatch reuse candidate did not let the run skip the agent.
+/// Every outcome except `Reused` falls through to the normal dispatch; the
+/// variants exist so the loop can log the decision without re-deriving it.
+enum ReuseOutcome {
+    /// The archived branch re-passed scope + gate and is now merged.
+    Reused,
+    /// The newest archived branch changes files the CURRENT scope forbids.
+    OutOfScope,
+    /// The newest archived branch failed the acceptance gate.
+    GateFailed,
+    /// A git/worktree error prevented re-validation.
+    Error(String),
+}
+
+/// Re-validate ONE archived rejected branch against the task's CURRENT scope
+/// and gate and merge it when it passes — the pre-dispatch twin of
+/// [`recover`]. The gate remains the SOLE arbiter, so this can only ever save
+/// money, never accept work a fresh attempt would have had to redo.
+///
+/// On success the task is marked `Done`/`GatePassed` in `status` (the run
+/// loop's in-memory map is the source of truth, so the caller's later saves
+/// cannot clobber it) and the archived branch is consumed. On every failure
+/// the temporary worktree is removed but the archived branch is LEFT ALONE
+/// for `af clean` or a later `af recover`. No receipt is written: the
+/// attempt that produced the archive already has one, and reuse is not a new
+/// attempt (round 12's precedent).
+fn reuse_archived_branch(
+    cfg: &Config,
+    st: &Settings,
+    merge_locks: &worktree::MergeLocks,
+    task: &crate::config::Task,
+    branch: &str,
+    status: &mut HashMap<String, TaskStatus>,
+) -> ReuseOutcome {
+    let repo = cfg.repo_dir_for(task, &st.repo_dir);
+    let base_branch = match worktree::current_branch(&repo) {
+        Ok(b) => b,
+        Err(e) => return ReuseOutcome::Error(e),
+    };
+    let wt = match worktree::attach_existing(&repo, &st.worktree_root, &task.id, branch) {
+        Ok(w) => w,
+        Err(e) => return ReuseOutcome::Error(e),
+    };
+    // (a) SCOPE: every path the archived branch changes relative to the merge
+    // base must be covered by the task's CURRENT scope (the operator widened
+    // it). Reuses the SAME helpers the attempt path enforces with.
+    let changed = match execute::changed_paths(&wt.path, &base_branch) {
+        Ok(c) => c,
+        Err(e) => {
+            worktree::remove_worktree_only(&repo, &wt);
+            return ReuseOutcome::Error(e);
+        }
+    };
+    if !execute::scope_violations(&changed, &task.scope).is_empty() {
+        worktree::remove_worktree_only(&repo, &wt);
+        return ReuseOutcome::OutOfScope;
+    }
+    // (b) GATE: unless the task is manual, re-run the acceptance gate exactly
+    // as the attempt path does (including the task's `gate_replay`). Nothing
+    // is merged that the CURRENT gate does not pass.
+    if !task.manual {
+        if let Some(accept) = &task.accept {
+            let gate_out = gate::run_accept(
+                accept,
+                &wt.path,
+                &st.gate_env,
+                Duration::from_secs(cfg.defaults.accept_timeout_s),
+                task.gate_replay,
+            );
+            if !gate_out.passed() {
+                worktree::remove_worktree_only(&repo, &wt);
+                return ReuseOutcome::GateFailed;
+            }
+        }
+    }
+    // Success: merge with the standard message, mark the task done, persist,
+    // and consume the archived branch (its content now lives in the base).
+    let msg = format!("af: {} \u{2014} {}", task.id, task.title);
+    if let Err(e) = worktree::merge(&repo, branch, merge_locks, &msg) {
+        worktree::remove_worktree_only(&repo, &wt);
+        return ReuseOutcome::Error(e);
+    }
+    let store = Store::new(st.state_dir.clone());
+    let s = status.entry(task.id.clone()).or_default();
+    s.state = TaskState::Done;
+    s.last_error = None;
+    s.phase = Some(AttemptPhase::GatePassed);
+    let _ = store.save(status);
+    worktree::remove(&repo, &wt);
+    ReuseOutcome::Reused
+}
+
+/// Pre-dispatch reuse decision for one ready task: `true` means the task's
+/// work was recovered from an archived branch and the caller must skip the
+/// agent dispatch. At most ONE decision is made per task per run: an archive
+/// created BY a failed attempt in this same run is the gate-only retry
+/// machinery's business (scheduling spec), and this also keeps the WHY line
+/// to one per attempt so a long campaign log stays readable.
+fn reuse_before_dispatch(
+    cfg: &Config,
+    st: &Settings,
+    merge_locks: &worktree::MergeLocks,
+    task: &crate::config::Task,
+    status: &mut HashMap<String, TaskStatus>,
+    considered: &mut HashSet<String>,
+) -> bool {
+    if matches!(
+        status.get(&task.id).map(|s| &s.state),
+        Some(TaskState::Done)
+    ) {
+        // Defensive: a done task is never re-dispatched or reused.
+        return false;
+    }
+    if !considered.insert(task.id.clone()) {
+        // Already judged this task this run: never retry an archive, and
+        // never re-log the reason.
+        return false;
+    }
+    let repo = cfg.repo_dir_for(task, &st.repo_dir);
+    let branches = worktree::archived_branches(&repo, &st.branch_prefix);
+    let Some(branch) = worktree::newest_archived_branch(&branches, &st.branch_prefix, &task.id)
+    else {
+        println!(
+            "  \u{21ba} {} no archived branch to reuse (searched {}/{}-rejected-<ts>); dispatching agent",
+            task.id, st.branch_prefix, task.id
+        );
+        return false;
+    };
+    match reuse_archived_branch(cfg, st, merge_locks, task, &branch, status) {
+        ReuseOutcome::Reused => {
+            println!(
+                "\u{21ba} {} reused archived branch {} (scope allows it; gate re-run, agent not re-run)",
+                task.id, branch
+            );
+            true
+        }
+        ReuseOutcome::OutOfScope => {
+            println!(
+                "  \u{21ba} {} archived branch {} rejected: out of scope; dispatching agent",
+                task.id, branch
+            );
+            false
+        }
+        ReuseOutcome::GateFailed => {
+            println!(
+                "  \u{21ba} {} archived branch {} rejected: gate failed; dispatching agent",
+                task.id, branch
+            );
+            false
+        }
+        ReuseOutcome::Error(e) => {
+            println!(
+                "  \u{21ba} {} archived branch {} not reused: {}; dispatching agent",
+                task.id, branch, e
+            );
+            false
+        }
+    }
+}
+
 /// `af run`: execute tasks until all done or deadlock. Returns process exit code.
 pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     if opts.dry_run {
@@ -259,6 +431,13 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     }
 
     // --- dispatch loop ---
+    // Pre-dispatch archived-branch reuse (r13-auto-recover): ON by default,
+    // switchable off with TF_NO_REUSE=1. `reuse_considered` holds the task
+    // ids already judged this run, so a task's archive is considered at most
+    // once, a rejected candidate is never retried, and its reason is logged
+    // at most once.
+    let reuse_enabled = !reuse_disabled();
+    let mut reuse_considered: HashSet<String> = HashSet::new();
     // Measured routing (ADR-12): replay receipts into per-worker stats.
     // Interrupted attempts are NOT worker verdicts (r9-interrupted): a kill
     // that says nothing about the worker must not dent its rate, so filter
@@ -365,8 +544,27 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                         continue;
                     }
                 }
+                if matches!(status.get(&t.id).map(|s| &s.state), Some(TaskState::Done)) {
+                    continue;
+                }
                 if running.lock().unwrap().len() >= max_parallel {
                     break;
+                }
+                // PRE-DISPATCH REUSE: a rejected attempt's work is already on
+                // disk under an archived branch, so re-buying it from a fresh
+                // agent is pure waste. Checked before a worker is picked
+                // (reuse consumes no worker slot); the gate still decides.
+                if reuse_enabled
+                    && reuse_before_dispatch(
+                        cfg,
+                        st,
+                        &merge_locks,
+                        &t,
+                        &mut status,
+                        &mut reuse_considered,
+                    )
+                {
+                    continue;
                 }
                 let worker =
                     match pick_worker(cfg, &worker_busy, &router, opts.worker_filter.as_deref()) {
