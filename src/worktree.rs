@@ -153,6 +153,21 @@ pub fn archive_branch(repo: &Path, branch: &str, now: u64) -> Option<String> {
 /// numeric tail the archiver generated) and validates that tail as `<ts>` or
 /// `<ts>-<n>`. This is why `tf/x-rejected-1-2` yields `x`, not `x-rejected-1`.
 pub fn archived_task_id(branch: &str, prefix: &str) -> Option<String> {
+    parse_archived_branch(branch, prefix).map(|(id, _, _)| id)
+}
+
+/// Parse an archived rejected branch name built by [`archive_branch`]:
+/// `<prefix>/<id>-rejected-<unix-ts>`, with an optional `-<n>` collision
+/// suffix (round 11 appends one). Returns `(task_id, ts, n)` where `n` is
+/// the collision suffix (0 when absent). `None` for anything that is not an
+/// archived rejected branch of `prefix` — a plain branch (`tf/x`), a foreign
+/// prefix (`other/x-rejected-1`), or a malformed tail.
+///
+/// Task ids contain hyphens (`r11-measured-cost`), so the parser cannot count
+/// hyphens: it locates the LAST `-rejected-` marker (everything after it is a
+/// numeric tail the archiver generated) and validates that tail as `<ts>` or
+/// `<ts>-<n>`. This is why `tf/x-rejected-1-2` yields `x`, not `x-rejected-1`.
+pub fn parse_archived_branch(branch: &str, prefix: &str) -> Option<(String, u64, u64)> {
     let rest = branch.strip_prefix(prefix)?.strip_prefix('/')?;
     const MARKER: &str = "-rejected-";
     let at = rest.rfind(MARKER)?;
@@ -167,15 +182,59 @@ pub fn archived_task_id(branch: &str, prefix: &str) -> Option<String> {
     if !is_digits(ts) || parts.next().is_some() {
         return None;
     }
-    if suffix.is_some_and(|n| !is_digits(n)) {
-        return None;
-    }
-    Some(id.to_string())
+    let ts: u64 = ts.parse().ok()?;
+    let n = match suffix {
+        Some(s) if !is_digits(s) => return None,
+        Some(s) => s.parse().ok()?,
+        None => 0,
+    };
+    Some((id.to_string(), ts, n))
 }
 
 /// A non-empty run of ASCII digits (the unix ts the archiver writes).
 fn is_digits(s: &str) -> bool {
     !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Every local branch under `<prefix>/` in `repo`, as full short names
+/// (deterministic input for [`newest_archived_branch`]). A git error yields
+/// an empty list — selection is best-effort, never fatal.
+pub fn archived_branches(repo: &Path, prefix: &str) -> Vec<String> {
+    let out = git(
+        repo,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            &format!("refs/heads/{prefix}/"),
+        ],
+    );
+    if !out.passed() {
+        return Vec::new();
+    }
+    out.stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The NEWEST archived rejected branch for task `id` among `branches`,
+/// decided PURESTLY by parsing the numeric `<ts>` (then the `-<n>` collision
+/// suffix) — never by git's output order and never by committer dates, so
+/// the same branch set always selects the same branch. Returns the full
+/// branch name. Foreign prefixes and non-rejected names are ignored by
+/// [`parse_archived_branch`].
+pub fn newest_archived_branch(branches: &[String], prefix: &str, id: &str) -> Option<String> {
+    branches
+        .iter()
+        .filter_map(|b| {
+            parse_archived_branch(b, prefix)
+                .filter(|(bid, _, _)| bid == id)
+                .map(|(_, ts, n)| (ts, n, b.clone()))
+        })
+        .max_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)))
+        .map(|(_, _, b)| b)
 }
 
 /// Does `branch` exist as a local branch in `repo`?
@@ -215,10 +274,24 @@ pub fn commits_ahead(repo: &Path, base: &str, branch: &str) -> Result<u64, Strin
 /// dir/registration at `wt_root/<id>` is cleared first so the branch can be
 /// checked out fresh from its own tip.
 pub fn attach(repo: &Path, wt_root: &Path, id: &str, prefix: &str) -> Result<Worktree, String> {
+    attach_existing(repo, wt_root, id, &format!("{prefix}/{id}"))
+}
+
+/// Attach a worktree to an arbitrary EXISTING branch at `wt_root/<id>` —
+/// the [`attach`] generalisation used by `af recover` to check out an
+/// archived rejected branch for re-validation. The branch is never created
+/// or moved: the committed work it points at is exactly what re-validation
+/// must preserve. Any leftover dir/registration at `wt_root/<id>` is cleared
+/// first so the branch can be checked out fresh from its own tip.
+pub fn attach_existing(
+    repo: &Path,
+    wt_root: &Path,
+    id: &str,
+    branch: &str,
+) -> Result<Worktree, String> {
     if !is_repo(repo) {
         return Err(format!("{} is not a git repository", repo.display()));
     }
-    let branch = format!("{prefix}/{id}");
     let path = wt_root.join(id);
     if path.exists() {
         let _ = git(
@@ -231,7 +304,7 @@ pub fn attach(repo: &Path, wt_root: &Path, id: &str, prefix: &str) -> Result<Wor
     // Prune stale registrations (same reason as `create`) so the branch is
     // free to check out in the new worktree.
     let _ = git(repo, &["worktree", "prune"]);
-    let out = git(repo, &["worktree", "add", path.to_str().unwrap(), &branch]);
+    let out = git(repo, &["worktree", "add", path.to_str().unwrap(), branch]);
     if !out.passed() {
         return Err(format!(
             "worktree attach failed ({:?}): {}",
@@ -239,7 +312,10 @@ pub fn attach(repo: &Path, wt_root: &Path, id: &str, prefix: &str) -> Result<Wor
             out.combined().trim()
         ));
     }
-    Ok(Worktree { path, branch })
+    Ok(Worktree {
+        path,
+        branch: branch.to_string(),
+    })
 }
 
 /// Serialized merge of `branch` into the repo's current checkout branch.
@@ -701,6 +777,57 @@ mod tests {
         assert_eq!(archived_task_id("tf/x-rejected-1-abc", "tf"), None);
         assert_eq!(archived_task_id("tf/x-rejected-1-2-3", "tf"), None);
         assert_eq!(archived_task_id("tf/-rejected-1", "tf"), None);
+    }
+
+    /// `af recover` selection is a pure decision on the PARSED `<ts>` (then
+    /// the `-<n>` collision suffix) — never git output order, never committer
+    /// dates. The same branch set always selects the same branch.
+    // spec: worktree/recovered-branches-are-re-validated-then-merged
+    #[test]
+    fn newest_archived_branch_picks_by_parsed_ts_then_collision() {
+        // Newest ts wins regardless of list order.
+        let branches = vec![
+            "tf/A-rejected-111".to_string(),
+            "tf/A-rejected-222".to_string(),
+            "tf/A-rejected-333".to_string(),
+        ];
+        assert_eq!(
+            newest_archived_branch(&branches, "tf", "A").as_deref(),
+            Some("tf/A-rejected-333")
+        );
+        // The `-<n>` collision suffix breaks a ts tie: `-2` is newer than `-1`.
+        let branches = vec![
+            "tf/A-rejected-222-1".to_string(),
+            "tf/A-rejected-222-2".to_string(),
+        ];
+        assert_eq!(
+            newest_archived_branch(&branches, "tf", "A").as_deref(),
+            Some("tf/A-rejected-222-2")
+        );
+        // A bare (collision-less) name sorts before the `-n` forms under the
+        // same ts (n=0 < n=1).
+        let branches = vec![
+            "tf/A-rejected-222-1".to_string(),
+            "tf/A-rejected-222".to_string(),
+        ];
+        assert_eq!(
+            newest_archived_branch(&branches, "tf", "A").as_deref(),
+            Some("tf/A-rejected-222-1")
+        );
+        // Only this task's archived branches are considered: a foreign
+        // prefix and a plain branch of this prefix are ignored.
+        let branches = vec![
+            "other/A-rejected-999".to_string(),
+            "tf/A".to_string(),
+            "tf/B-rejected-999".to_string(),
+            "tf/A-rejected-444".to_string(),
+        ];
+        assert_eq!(
+            newest_archived_branch(&branches, "tf", "A").as_deref(),
+            Some("tf/A-rejected-444")
+        );
+        // No matching archived branch at all.
+        assert_eq!(newest_archived_branch(&branches, "tf", "Z"), None);
     }
 
     #[test]

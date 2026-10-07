@@ -906,6 +906,127 @@ pub fn clean(cfg: &Config, st: &Settings, dry_run: bool) -> i32 {
     0
 }
 
+/// `af recover --task ID [--dry-run]`: re-validate an archived rejected
+/// branch — the copy round 11's failure paths keep under
+/// `<prefix>/<id>-rejected-<ts>[-<n>]` — against the task's CURRENT scope
+/// and gate, and merge it into the base when it passes. The agent is never
+/// re-invoked: the operator already paid for this work once; recovery just
+/// un-blocks it when the reason it was rejected is gone.
+///
+/// Selection picks the NEWEST archived branch for `id` by parsing the
+/// numeric `<ts>` (then the `-<n>` suffix), never by git order or dates.
+///
+/// Exit codes: 0 merged / dry-run reported; 1 re-validation failed (scope
+/// violation or gate failure), with the archived branch AND its worktree
+/// handled so no failure leaves a worktree behind (the archived branch itself
+/// survives a rejection); 2 unknown task or no archived branch to recover
+/// (nothing to recover is not a failure).
+pub fn recover(cfg: &Config, st: &Settings, id: &str, dry_run: bool) -> i32 {
+    let Some(task) = cfg.by_id.get(id).cloned() else {
+        eprintln!("config error: unknown task '{id}'");
+        return 2;
+    };
+    let repo = cfg.repo_dir_for(&task, &st.repo_dir);
+    let branches = worktree::archived_branches(&repo, &st.branch_prefix);
+    let Some(branch) = worktree::newest_archived_branch(&branches, &st.branch_prefix, id) else {
+        eprintln!("no archived branch for task '{id}' (searched <prefix>/<id>-rejected-<ts>)");
+        return 2;
+    };
+
+    // --dry-run: selection only — report exactly what recovery WOULD do and
+    // touch nothing (no worktree, no gate run, no merge).
+    if dry_run {
+        println!("would recover {branch} to done (agent not re-run)");
+        return 0;
+    }
+
+    // Re-validation, in order, before any merge. The archived branch is
+    // checked out in a throwaway worktree so both the scope diff and the
+    // acceptance gate run against its committed state, exactly as an
+    // attempt path would.
+    let base_branch = match worktree::current_branch(&repo) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let wt = match worktree::attach_existing(&repo, &st.worktree_root, id, &branch) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("error: cannot check out {branch}: {e}");
+            return 1;
+        }
+    };
+    // (a) SCOPE: every path the archived branch changes relative to the base
+    // must be covered by the task's CURRENT scope (the whole point: the
+    // operator widened it). An empty scope allows any file.
+    let changed = match execute::changed_paths(&wt.path, &base_branch) {
+        Ok(c) => c,
+        Err(e) => {
+            worktree::remove_worktree_only(&repo, &wt);
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let violations = execute::scope_violations(&changed, &task.scope);
+    if !violations.is_empty() {
+        eprintln!(
+            "recover {id}: attempt edited files out of scope: {} (allowed: {})",
+            violations.join(", "),
+            task.scope.join(", ")
+        );
+        worktree::remove_worktree_only(&repo, &wt);
+        return 1;
+    }
+    // (b) GATE: unless the task is manual, re-run the acceptance gate exactly
+    // as the attempt path does (including the task's `gate_replay`). A
+    // non-zero gate rejects the recovery.
+    if !task.manual {
+        if let Some(accept) = &task.accept {
+            let gate_out = gate::run_accept(
+                accept,
+                &wt.path,
+                &st.gate_env,
+                Duration::from_secs(cfg.defaults.accept_timeout_s),
+                task.gate_replay,
+            );
+            if !gate_out.passed() {
+                eprintln!(
+                    "acceptance gate failed (exit {}): {}",
+                    gate_out
+                        .code
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "-".into()),
+                    gate_out.combined().trim()
+                );
+                worktree::remove_worktree_only(&repo, &wt);
+                return 1;
+            }
+        }
+    }
+    // Success path: merge the archived branch into the base with the standard
+    // merge message, mark the task Done (phase = GatePassed), persist it, and
+    // remove the recovered worktree + the archived branch (its content is now
+    // in the base — leaving it behind would be a ghost for `af clean`).
+    let msg = format!("af: {} — {}", task.id, task.title);
+    if let Err(e) = worktree::merge(&repo, &branch, &worktree::MergeLocks::new(), &msg) {
+        worktree::remove_worktree_only(&repo, &wt);
+        eprintln!("error: {e}");
+        return 1;
+    }
+    let store = Store::new(st.state_dir.clone());
+    let mut status = store.load();
+    let s = status.entry(id.to_string()).or_default();
+    s.state = TaskState::Done;
+    s.last_error = None;
+    s.phase = Some(AttemptPhase::GatePassed);
+    let _ = store.save(&status);
+    worktree::remove(&repo, &wt);
+    println!("✓ {id} recovered to done (agent not re-run)");
+    0
+}
+
 pub fn dry_run(cfg: &Config, st: &Settings) -> i32 {
     let depths = scheduler::compute_depths(cfg).unwrap_or_default();
     let store = Store::new(st.state_dir.clone());

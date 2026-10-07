@@ -1401,6 +1401,191 @@ fn dry_run_reflects_persisted_state_in_readiness() {
 }
 
 // ---------------------------------------------------------------------------
+// `af recover` — re-validate an archived rejected branch and merge it
+// without re-running the agent (r12-recover-rejected).
+// --------------------------------------------------------------------------
+
+/// Create a scratch git repo at `repo` and return a closure that runs git
+/// verbatim in it (failing hard on any git error).
+fn scratch_repo(repo: &std::path::Path) -> impl Fn(&[&str]) {
+    std::fs::create_dir_all(repo).unwrap();
+    let repo = repo.to_path_buf();
+    let run_git = move |args: &[&str]| {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run_git(&["init", "-b", "main"]);
+    run_git(&["commit", "--allow-empty", "-m", "init"]);
+    run_git
+}
+
+/// An archived rejected branch carrying a committed change that is in scope
+/// and passes the gate; `scope` and `accept` are the task's current config.
+fn fixture_recover_task(cli: &Cli, id: &str) {
+    let repo = cli.dir.join("repo");
+    let git = scratch_repo(&repo);
+    git(&["checkout", "-b", &format!("tf/{id}")]);
+    std::fs::write(repo.join("WORK.txt"), "done\n").unwrap();
+    git(&["add", "WORK.txt"]);
+    git(&["commit", "-m", "agent work"]);
+    git(&["branch", &format!("tf/{id}-rejected-1791259017")]);
+    git(&["checkout", "main"]);
+}
+
+// spec: cli/recover-command
+// spec: cli/recover-command#recover-merges-an-archived-branch-after-revalidating-scope-and-gate
+// spec: worktree/recovered-branches-are-re-validated-then-merged#recovery-checks-out-the-archived-branch-on-its-own-tip
+// spec: worktree/recovered-branches-are-re-validated-then-merged#an-archived-branch-is-consumed-by-a-successful-recovery
+#[test]
+fn recover_merges_an_archived_branch_after_revalidating_scope_and_gate() {
+    let tasks = r#"{ "tasks": [
+        { "id": "C", "title": "recover me", "scope": ["WORK.txt"], "accept": "test -f WORK.txt" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    fixture_recover_task(&cli, "C");
+    let repo = cli.dir.join("repo");
+
+    let (code, out) = cli.af(&["recover", "--task", "C"]);
+    assert_eq!(code, 0, "recover must exit 0: {out}");
+    assert!(
+        out.contains("C recovered to done (agent not re-run)"),
+        "success message: {out}"
+    );
+    // The task is Done in the state file.
+    let (_, st) = cli.settings();
+    let status = Store::new(st.state_dir.clone()).load();
+    assert_eq!(
+        status["C"].state,
+        agentflow::config::TaskState::Done,
+        "task marked done: {out}"
+    );
+    // The change is in the base branch.
+    assert!(repo.join("WORK.txt").exists(), "change merged into base");
+    // The archived branch is gone (its work now lives in the base).
+    assert!(
+        !branch_exists(&repo, "tf/C-rejected-1791259017"),
+        "archived branch removed after recovery"
+    );
+}
+
+// spec: cli/recover-command#out-of-scope-branch-fails-and-survives
+#[test]
+fn recover_out_of_scope_branch_fails_and_survives() {
+    let tasks = r#"{ "tasks": [
+        { "id": "O", "title": "t", "scope": ["OK.txt"], "accept": "true" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    let repo = cli.dir.join("repo");
+    let git = scratch_repo(&repo);
+    git(&["checkout", "-b", "tf/O"]);
+    std::fs::write(repo.join("OUT.txt"), "x\n").unwrap();
+    git(&["add", "OUT.txt"]);
+    git(&["commit", "-m", "out of scope"]);
+    git(&["branch", "tf/O-rejected-111"]);
+    git(&["checkout", "main"]);
+
+    let (code, out) = cli.af(&["recover", "--task", "O"]);
+    assert_eq!(code, 1, "out-of-scope recover exits 1: {out}");
+    assert!(out.contains("OUT.txt"), "names the offending file: {out}");
+    assert!(
+        branch_exists(&repo, "tf/O-rejected-111"),
+        "archived branch survives a failed recover"
+    );
+    assert!(
+        !repo.join("OUT.txt").exists(),
+        "out-of-scope change not merged"
+    );
+}
+
+// spec: cli/recover-command#gate-failing-branch-fails-and-survives
+#[test]
+fn recover_gate_failing_branch_fails_and_survives() {
+    let tasks = r#"{ "tasks": [
+        { "id": "G", "title": "t", "scope": [], "accept": "test -f MISSING.txt" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    let repo = cli.dir.join("repo");
+    let git = scratch_repo(&repo);
+    git(&["checkout", "-b", "tf/G"]);
+    std::fs::write(repo.join("IN.txt"), "x\n").unwrap();
+    git(&["add", "IN.txt"]);
+    git(&["commit", "-m", "in scope but gate fails"]);
+    git(&["branch", "tf/G-rejected-222"]);
+    git(&["checkout", "main"]);
+
+    let (code, out) = cli.af(&["recover", "--task", "G"]);
+    assert_eq!(code, 1, "gate-failing recover exits 1: {out}");
+    assert!(out.contains("acceptance gate"), "names the gate: {out}");
+    assert!(
+        branch_exists(&repo, "tf/G-rejected-222"),
+        "branch survives a gate-failing recover"
+    );
+    assert!(!repo.join("IN.txt").exists(), "not merged");
+}
+
+// spec: cli/recover-command#dry-run-reports-without-changing-anything
+#[test]
+fn recover_dry_run_reports_without_changing_anything() {
+    let tasks = r#"{ "tasks": [
+        { "id": "D", "title": "t", "scope": ["WORK.txt"], "accept": "test -f WORK.txt" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    fixture_recover_task(&cli, "D");
+    let repo = cli.dir.join("repo");
+
+    let (code, out) = cli.af(&["recover", "--task", "D", "--dry-run"]);
+    assert_eq!(code, 0, "dry run exits 0: {out}");
+    assert!(
+        out.contains("tf/D-rejected-1791259017"),
+        "names the branch: {out}"
+    );
+    // Nothing changed: branch survives, change not merged, task not Done.
+    assert!(branch_exists(&repo, "tf/D-rejected-1791259017"));
+    assert!(!repo.join("WORK.txt").exists(), "no merge on dry run");
+    let (_, st) = cli.settings();
+    let status = Store::new(st.state_dir.clone()).load();
+    assert_ne!(
+        status.get("D").map(|s| &s.state),
+        Some(&agentflow::config::TaskState::Done),
+        "dry run must not mark the task done"
+    );
+}
+
+// spec: cli/recover-command#unknown-task-exits-two
+#[test]
+fn recover_unknown_task_exits_two() {
+    let cli = Cli::new_with_tasks(TASKS);
+    let (code, out) = cli.af(&["recover", "--task", "NOPE"]);
+    assert_eq!(code, 2, "unknown task exits 2: {out}");
+    assert!(out.contains("unknown task 'NOPE'"), "names the task: {out}");
+}
+
+// spec: cli/recover-command#no-archived-branch-exits-two
+#[test]
+fn recover_with_no_archived_branch_exits_two() {
+    let tasks = r#"{ "tasks": [ { "id": "E", "title": "t", "accept": "true" } ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    let repo = cli.dir.join("repo");
+    let _git = scratch_repo(&repo);
+    let (code, out) = cli.af(&["recover", "--task", "E"]);
+    assert_eq!(code, 2, "no archived branch exits 2: {out}");
+    assert!(out.contains("E"), "names the task: {out}");
+    assert!(
+        out.contains("rejected"),
+        "names the pattern searched: {out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Spec-coverage gap tests (see docs/spec-traceability.md).
 //
 // Small library-level tests for requirements whose only existing coverage
