@@ -26,8 +26,9 @@
 //! here is shared between tests. Uses only std + the crate; no new deps.
 
 use agentflow::worktree::{
-    archive_branch, archived_task_id, branch_exists, clean, clean_all, clean_rejected, create,
-    current_branch, heal, is_repo, merge, orphan_ids, remove, MergeLocks, Worktree,
+    archive_branch, archived_branches, archived_task_id, branch_exists, clean, clean_all,
+    clean_rejected, create, current_branch, heal, is_repo, merge, orphan_ids, remove, MergeLocks,
+    Worktree,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -454,6 +455,59 @@ fn orphan_clean_and_heal_preserve_keep_listed_worktrees() {
     let all = clean(&repos, &s.wt_root, "tf", &[], false);
     assert_eq!(all, vec!["E".to_string(), "F".to_string()]);
     assert!(!s.wt_root.exists(), "empty keep wipes the root");
+}
+
+/// Startup heal must PRESERVE, not just delete: a stale worktree whose task is
+/// no longer running is exactly the “af was killed mid-attempt” case, where
+/// the agent may have committed real work. `heal` archives that branch under
+/// `<branch>-rejected-<now>` BEFORE deleting it, while the running-task rule
+/// is unchanged — a task still marked running is never touched and never
+/// archived.
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch#startup-heal-archives-an-interrupted-attempt-s-work
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch
+#[test]
+fn heal_archives_a_stale_worktrees_committed_work_before_removing_it() {
+    let s = Scratch::new("heal-archive");
+    let repos = vec![("main".to_string(), s.repo.clone())];
+
+    // A stale attempt (task no longer running) committed real work.
+    let stale = create_ok(&s.repo, &s.wt_root, "A", "tf");
+    std::fs::write(stale.path.join("f.txt"), "interrupted work\n").unwrap();
+    git(&stale.path, &["commit", "-am", "attempt work"]);
+    let tip = git(&s.repo, &["rev-parse", "tf/A"]).trim().to_string();
+
+    // A RUNNING attempt with committed work must be left entirely alone.
+    let running = create_ok(&s.repo, &s.wt_root, "B", "tf");
+    std::fs::write(running.path.join("g.txt"), "live work\n").unwrap();
+    git(&running.path, &["add", "."]);
+    git(&running.path, &["commit", "-m", "live work"]);
+
+    heal(&repos, &s.wt_root, "tf", &["B".to_string()]);
+
+    // Stale worktree + branch are gone, but the committed work survives on an
+    // archived ref pointing at the SAME tip (a copy, never a rename).
+    assert!(!stale.path.exists(), "stale worktree removed");
+    assert!(!branch_exists(&s.repo, "tf/A"), "stale branch removed");
+    let branches = archived_branches(&s.repo, "tf");
+    let a_archived: Vec<String> = branches
+        .iter()
+        .filter(|b| b.starts_with("tf/A-rejected-"))
+        .cloned()
+        .collect();
+    assert_eq!(a_archived.len(), 1, "stale work archived: {branches:?}");
+    assert_eq!(
+        git(&s.repo, &["rev-parse", a_archived[0].as_str()]).trim(),
+        tip,
+        "archived copy points at the interrupted attempt's tip"
+    );
+
+    // The running task is never touched and never archived.
+    assert!(running.path.exists(), "running worktree kept");
+    assert!(branch_exists(&s.repo, "tf/B"), "running branch kept");
+    assert!(
+        !branches.iter().any(|b| b.starts_with("tf/B-rejected-")),
+        "a running task's branch is never archived: {branches:?}"
+    );
 }
 
 /// `is_repo` / `current_branch` are the cheap probes callers use to decide

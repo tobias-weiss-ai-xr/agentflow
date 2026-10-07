@@ -56,12 +56,18 @@ THEN `aux` reports the worktree removed and `aux`'s stale branch is deleted.
 
 ### Requirement: Rejected work is preserved on an archived branch
 
-A rejected attempt's committed work SHALL survive the cleanup that follows
-its failure, preserved as a COPY under `<branch>-rejected-<now>` (never a
+An attempt's committed work SHALL survive the cleanup that follows EVERY
+failure path, preserved as a COPY under `<branch>-rejected-<now>` (never a
 rename — the original branch, the cleanup, and the retry are unaffected),
 so the retry still starts clean from the current base while the paid-for
-work stays recoverable and the receipt names the archived branch. Archiving
-SHALL be best-effort and can never fail the attempt.
+work stays recoverable and the receipt names the archived branch. The
+failure paths are: a scope violation, a merge conflict, an agent that exits
+non-zero, the stall-watchdog kill, the total agent timeout, a second gate
+failure of a reused (gate-only retry) attempt, and startup self-heal sweeping
+a stale worktree whose task is no longer running. Any uncommitted change is
+committed first so it is part of the preserved tip. Archiving SHALL be
+best-effort and can never fail the attempt; a branch that carries no work
+beyond the base SHALL NOT be archived.
 
 #### Scenario: scope violation archives the committed work
 
@@ -84,6 +90,46 @@ WHEN a rejected attempt cannot be archived (a git error, or a name collision
 that cannot be resolved)
 THEN the attempt still fails with its original message unchanged and no empty
 suffix, exactly as if archiving had not been attempted.
+
+#### Scenario: a stalled agent archives the committed work
+
+WHEN the agent commits work and then stops producing output until the stall
+watchdog kills the attempt
+THEN the committed branch is archived as `<branch>-rejected-<now>` before
+cleanup, the receipt names that branch, the archived tip contains the agent's
+work, the task does NOT reach `done`, and the original branch is removed.
+
+#### Scenario: a timed out agent archives the committed work
+
+WHEN the agent commits work and then runs past the total agent timeout with
+the stall watchdog disabled
+THEN the committed branch is archived as `<branch>-rejected-<now>` before
+cleanup, the receipt names that branch, the archived tip contains the agent's
+work, and the task does NOT reach `done`.
+
+#### Scenario: a second gate failure archives the reused work
+
+WHEN a gate-only retry re-runs the gate on a kept attempt branch and the gate
+fails a second time
+THEN the reused branch is archived as `<branch>-rejected-<now>` before it is
+dropped, the failure message names that branch, and the work remains
+recoverable even though the next attempt starts fresh.
+
+#### Scenario: startup heal archives an interrupted attempt's work
+
+WHEN startup self-heal finds a stale worktree whose task is no longer running
+AND its branch carries commits beyond the base
+THEN the branch is archived as `<branch>-rejected-<now>` before the worktree
+and branch are removed, while a task still marked running is never touched
+and never archived.
+
+#### Scenario: the work survives every failure path
+
+WHEN an attempt fails after the agent has committed work (scope violation,
+merge conflict, non-zero exit, stall, timeout, a second gate failure, or
+startup heal of an interrupted attempt)
+THEN the work is preserved under `<branch>-rejected-<now>` rather than being
+destroyed by cleanup.
 
 ### Requirement: af clean sweeps archived rejected branches
 

@@ -108,6 +108,71 @@ fn worker_json(max_attempts: u32) -> String {
     )
 }
 
+/// Write a shell "worker" that first runs the real stub to WRITE AND COMMIT
+/// its work, then re-execs the stub with `FAKE_AGENT_HANG_MS` armed so the
+/// attempt commits real work and THEN stalls silently. `exec` replaces the
+/// shell with the hanging stub, so the watchdog's kill reaches the process it
+/// measured (no orphaned grandchild still editing the worktree). The stub's
+/// env knobs must ride `TF_AGENT_ENV_PASSTHROUGH` — the agent child's env is
+/// stripped otherwise and the test would silently measure nothing.
+#[cfg(unix)]
+fn work_then_hang_agent(dir: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let script = dir.join("work-then-hang.sh");
+    let body = format!(
+        "#!/bin/sh\n\"{real}\" \"$@\"\nexport FAKE_AGENT_HANG_MS=2000\nexec \"{real}\" \"$@\"\n",
+        real = AGENT
+    );
+    std::fs::write(&script, body).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    script
+}
+
+/// Every `tf/A-rejected-*` branch in `repo`, sorted. The archived form every
+/// preserved failure path uses (`<branch>-rejected-<now>`).
+fn archived_refs(repo: &Path) -> Vec<String> {
+    let out = std::process::Command::new("git")
+        .args(["branch", "--list", "tf/A-rejected-*"])
+        .current_dir(repo)
+        .output()
+        .expect("git runs");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The archived branch's committed tree contains `file` with `content`,
+/// proving the preserved ref really carries the agent's work.
+fn archived_holds(repo: &Path, branch: &str, file: &str, content: &str) {
+    let out = std::process::Command::new("git")
+        .args(["show", &format!("{branch}:{file}")])
+        .current_dir(repo)
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "archived branch {branch} must contain {file}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), content);
+}
+
+/// The original attempt branch is gone, so a retry starts clean from base.
+fn original_branch_gone(repo: &Path) {
+    let gone = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", "refs/heads/tf/A"])
+        .current_dir(repo)
+        .output()
+        .expect("git runs");
+    assert!(
+        !gone.status.success(),
+        "original branch tf/A must be removed so a retry starts clean"
+    );
+}
+
 /// Gate exit-0 after agent writes DONE.txt → merged to main, all done.
 // spec: lifecycle/execute-pipeline
 // spec: lifecycle/execute-pipeline#happy-path
@@ -1032,11 +1097,14 @@ fn unset_sandbox_wrapper_leaves_the_agent_argv_unchanged() {
 // spec: scheduling/retry-reuses-verified-agent-work
 // spec: scheduling/retry-reuses-verified-agent-work#a-second-gate-failure-falls-back-to-a-fresh-attempt
 // spec: state/cost-receipts#failed-attempts-are-recorded
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch#a-second-gate-failure-archives-the-reused-work
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch#the-work-survives-every-failure-path
 #[test]
 fn retry_after_gate_failure_runs_fresh_attempts_until_it_passes() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     std::env::remove_var("FAKE_AGENT_EXIT");
     std::env::remove_var("FAKE_AGENT_TOUCH");
+    std::env::remove_var("FAKE_AGENT_OUT");
     let dir = std::env::temp_dir().join(format!("af-e2e-retry-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -1072,6 +1140,31 @@ fn retry_after_gate_failure_runs_fresh_attempts_until_it_passes() {
         outcomes,
         vec!["failed", "failed", "merged"],
         "spec sequence"
+    );
+
+    // The gate-only retry's SECOND failure archives the very work the retry
+    // was built to preserve: the receipt names the archived branch and the
+    // ref survives the fresh attempt 3. `cleanup()` used to delete it.
+    let second = receipts.iter().find(|r| r.attempt == 2).unwrap();
+    assert!(
+        second
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("work kept on branch tf/A-rejected-"),
+        "the reused-gate failure names the archived branch: {second:?}"
+    );
+    let archived = archived_refs(&f.repo);
+    assert_eq!(
+        archived.len(),
+        1,
+        "the reused work was archived: {archived:?}"
+    );
+    archived_holds(
+        &f.repo,
+        &archived[0],
+        "DONE.txt",
+        "example-agent: task complete\n",
     );
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -1699,4 +1792,143 @@ fn an_uncommittable_dirty_tree_fails_the_attempt_cleanly() {
         "TF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
     );
+}
+
+/// THE stall failure path keeps the work. A worker that commits real work and
+/// THEN stops producing output is killed by the stall watchdog — before the
+/// fix the `!agent_out.passed()` arm ran `cleanup()`, whose `git branch -D`
+/// destroyed the most expensive failure the harness has. Now the committed
+/// branch is archived first (`<branch>-rejected-<now>`), the receipt names it,
+/// and the work is recoverable even though the task is NOT `done`.
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch#a-stalled-agent-archives-the-committed-work
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch#the-work-survives-every-failure-path
+#[cfg(unix)]
+#[test]
+fn a_stalled_attempt_keeps_its_work_under_an_archived_branch() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_HANG_MS");
+    // The stub knobs must ride the sandbox passthrough: the agent child's env
+    // is stripped otherwise and the test would silently measure nothing.
+    std::env::set_var(
+        "TF_AGENT_ENV_PASSTHROUGH",
+        "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
+    );
+    std::env::set_var("FAKE_AGENT_TOUCH", "DONE.txt");
+    std::env::set_var("FAKE_AGENT_OUT", "committed before the stall");
+
+    let mut f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"stall","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1), // max_attempts=1 → a single stalled attempt fails the task
+    );
+    f.cfg.workers[0].cli = work_then_hang_agent(&f.dir).to_string_lossy().to_string();
+    f.st.agent_stall_s = 1; // the stall window (the stub hangs 2000ms)
+    f.st.agent_timeout_s = 60;
+
+    let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
+    assert_eq!(code, 2, "a stalled attempt must fail the campaign");
+
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_ne!(st["A"].state, TaskState::Done, "task must NOT be Done");
+    assert_eq!(st["A"].state, TaskState::Failed);
+    let err = st["A"].last_error.clone().unwrap_or_default();
+    assert!(
+        err.contains("work kept on branch") && err.contains("tf/A-rejected-"),
+        "error names the archived branch: {err}"
+    );
+    // The receipt (what `af api results` reads) names the same branch.
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    assert_eq!(receipts.len(), 1, "one receipt for the stalled attempt");
+    assert!(
+        receipts[0]
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("work kept on branch tf/A-rejected-"),
+        "receipt names the archived branch: {receipts:?}"
+    );
+
+    // The archived branch exists, its tip really contains the committed work,
+    // and the original attempt branch is gone so a retry starts clean.
+    let names = archived_refs(&f.repo);
+    assert_eq!(names.len(), 1, "exactly one archived branch: {names:?}");
+    archived_holds(
+        &f.repo,
+        &names[0],
+        "DONE.txt",
+        "committed before the stall\n",
+    );
+    original_branch_gone(&f.repo);
+
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    std::env::remove_var("FAKE_AGENT_OUT");
+}
+
+/// THE total-timeout failure path keeps the work too: with the stall watchdog
+/// DISABLED (`agent_stall_s=0`), a worker that commits and then runs past
+/// `agent_timeout_s` is killed by the total timeout — the same
+/// `!agent_out.passed()` arm, and the same preservation. The receipt names the
+/// archived branch and the work is recoverable.
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch#a-timed-out-agent-archives-the-committed-work
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch#the-work-survives-every-failure-path
+#[cfg(unix)]
+#[test]
+fn a_timed_out_attempt_keeps_its_work_under_an_archived_branch() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_HANG_MS");
+    std::env::set_var(
+        "TF_AGENT_ENV_PASSTHROUGH",
+        "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
+    );
+    std::env::set_var("FAKE_AGENT_TOUCH", "DONE.txt");
+    std::env::set_var("FAKE_AGENT_OUT", "committed before the timeout");
+
+    let mut f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"timeout","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+    f.cfg.workers[0].cli = work_then_hang_agent(&f.dir).to_string_lossy().to_string();
+    f.st.agent_stall_s = 0; // watchdog off: the TOTAL timeout is the bound under test
+    f.st.agent_timeout_s = 1; // the stub hangs 2000ms, so the total timeout fires first
+
+    let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
+    assert_eq!(code, 2, "a timed-out attempt must fail the campaign");
+
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_ne!(st["A"].state, TaskState::Done, "task must NOT be Done");
+    assert_eq!(st["A"].state, TaskState::Failed);
+    let err = st["A"].last_error.clone().unwrap_or_default();
+    assert!(
+        err.contains("work kept on branch") && err.contains("tf/A-rejected-"),
+        "error names the archived branch: {err}"
+    );
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    assert_eq!(receipts.len(), 1, "one receipt for the timed-out attempt");
+    assert!(
+        receipts[0]
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("work kept on branch tf/A-rejected-"),
+        "receipt names the archived branch: {receipts:?}"
+    );
+    let names = archived_refs(&f.repo);
+    assert_eq!(names.len(), 1, "exactly one archived branch: {names:?}");
+    archived_holds(
+        &f.repo,
+        &names[0],
+        "DONE.txt",
+        "committed before the timeout\n",
+    );
+    original_branch_gone(&f.repo);
+
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    std::env::remove_var("FAKE_AGENT_OUT");
 }

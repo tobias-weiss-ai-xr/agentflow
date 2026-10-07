@@ -297,6 +297,12 @@ fn execute_attempt(
             append(&body);
         }
         if !agent_out.passed() {
+            // Preserve the paid-for committed (and any dirty) work before
+            // the cleanup that follows this failure: a stall-watchdog kill,
+            // the total timeout, and any non-zero exit land here, and a
+            // worker that committed before it stalled must not lose its
+            // work. Best-effort — `None` leaves the message unchanged.
+            let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
             cleanup(&repo, &wt);
             // Same single failure path, distinct diagnosis: a stall names
             // the configured window (it is a different disease than "ran
@@ -321,7 +327,7 @@ fn execute_attempt(
             };
             // The spend was real (and captured) even though the attempt
             // failed — the receipt is the cost ledger.
-            return (Outcome::Failed(reason), spend);
+            return (Outcome::Failed(format!("{reason}{kept}")), spend);
         }
     }
 
@@ -343,8 +349,11 @@ fn execute_attempt(
         let base_branch = match worktree::current_branch(&repo) {
             Ok(b) => b,
             Err(e) => {
+                // The agent already ran: preserve whatever it committed (and
+                // any dirty edit) before cleanup removes the branch.
+                let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
                 cleanup(&repo, &wt);
-                return (Outcome::Failed(e), spend);
+                return (Outcome::Failed(format!("{e}{kept}")), spend);
             }
         };
         // Durable first. A commit failure (e.g. a pre-commit hook rejected
@@ -355,9 +364,12 @@ fn execute_attempt(
             &wt_path,
             &format!("af: {id} attempt {attempt} — agent left uncommitted work"),
         ) {
+            let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
             cleanup(&repo, &wt);
             return (
-                Outcome::Failed(format!("cannot commit the agent's uncommitted work: {e}")),
+                Outcome::Failed(format!(
+                    "cannot commit the agent's uncommitted work: {e}{kept}"
+                )),
                 spend,
             );
         }
@@ -370,8 +382,9 @@ fn execute_attempt(
         let ahead = match worktree::commits_ahead(&repo, &base_branch, &wt.branch) {
             Ok(n) => n,
             Err(e) => {
+                let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
                 cleanup(&repo, &wt);
-                return (Outcome::Failed(e), spend);
+                return (Outcome::Failed(format!("{e}{kept}")), spend);
             }
         };
         if ahead == 0 {
@@ -400,15 +413,17 @@ fn execute_attempt(
         let base_branch = match worktree::current_branch(&repo) {
             Ok(b) => b,
             Err(e) => {
+                let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
                 cleanup(&repo, &wt);
-                return (Outcome::Failed(e), spend);
+                return (Outcome::Failed(format!("{e}{kept}")), spend);
             }
         };
         let changed = match changed_paths(&wt_path, &base_branch) {
             Ok(c) => c,
             Err(e) => {
+                let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
                 cleanup(&repo, &wt);
-                return (Outcome::Failed(e), spend);
+                return (Outcome::Failed(format!("{e}{kept}")), spend);
             }
         };
         let violations = scope_violations(&changed, &task.scope);
@@ -422,24 +437,16 @@ fn execute_attempt(
             // before the cleanup that follows this failure — the receipt
             // names exactly what was saved. Archiving is a courtesy: when it
             // yields `None` the message is unchanged.
-            let archived = worktree::archive_branch(&repo, &wt.branch, now_ts());
-            if let Some(name) = &archived {
-                append(&format!("-- work kept on branch {name}"));
-            }
+            let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
             cleanup(&repo, &wt);
-            let reason = match &archived {
-                Some(name) => format!(
-                    "attempt edited files out of scope: {} (allowed: {}); work kept on branch {name}",
+            return (
+                Outcome::Failed(format!(
+                    "attempt edited files out of scope: {} (allowed: {}){kept}",
                     violations.join(", "),
                     task.scope.join(", ")
-                ),
-                None => format!(
-                    "attempt edited files out of scope: {} (allowed: {})",
-                    violations.join(", "),
-                    task.scope.join(", ")
-                ),
-            };
-            return (Outcome::Failed(reason), spend);
+                )),
+                spend,
+            );
         }
     }
 
@@ -464,12 +471,16 @@ fn execute_attempt(
                 append(&out_lines);
             }
             if !gate_out.passed() {
+                let mut kept = String::new();
                 if reused {
                     // The reused agent work failed the gate a SECOND time:
                     // drop the branch so the NEXT attempt is a full agent
                     // run. This bounds the optimisation to at most one
                     // cheap gate re-run, so genuinely wrong agent work is
-                    // still recoverable.
+                    // still recoverable. The work the retry was built to
+                    // preserve is archived BEFORE it is dropped — the
+                    // receipt names exactly where it survives.
+                    kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
                     cleanup(&repo, &wt);
                 } else {
                     // The agent succeeded and its change is committed
@@ -481,7 +492,7 @@ fn execute_attempt(
                 }
                 return (
                     Outcome::Failed(format!(
-                        "acceptance gate failed (exit {}): {}",
+                        "acceptance gate failed (exit {}): {}{kept}",
                         gate_out
                             .code
                             .map(|c| c.to_string())
@@ -506,27 +517,22 @@ fn execute_attempt(
         // keep a copy under an archived name before the cleanup removes the
         // branch. The receipt names exactly what was preserved. Archiving is
         // a courtesy: when it yields `None` the message is unchanged.
-        let archived = worktree::archive_branch(&repo, &wt.branch, now_ts());
-        if let Some(name) = &archived {
-            append(&format!("-- work kept on branch {name}"));
-        }
+        let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
         cleanup(&repo, &wt);
-        let reason = match &archived {
-            Some(name) => format!("{e}; work kept on branch {name}"),
-            None => e,
-        };
-        return (Outcome::Failed(reason), spend);
+        return (Outcome::Failed(format!("{e}{kept}")), spend);
     }
     // BELT AND BRACES (r13): `Merged` is a claim that the base contains the
     // attempt's work. Prove the branch tip really is an ancestor of the
     // base before making the claim; a discrepancy is reported as a failure
     // rather than a merge that did not happen. Verified BEFORE cleanup,
-    // which deletes the branch being checked.
+    // which deletes the branch being checked. The branch still carries the
+    // work, so it is preserved exactly like every other failure path.
     if !crate::run::branch_merged_into_head(&repo, &wt.branch) {
+        let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
         cleanup(&repo, &wt);
         return (
             Outcome::Failed(format!(
-                "merge of {} reported success but the base does not contain it",
+                "merge of {} reported success but the base does not contain it{kept}",
                 wt.branch
             )),
             spend,
@@ -539,6 +545,48 @@ fn execute_attempt(
 
 fn cleanup(repo: &Path, wt: &worktree::Worktree) {
     worktree::remove(repo, wt);
+}
+
+/// Preserve an attempt's work before the cleanup that follows a failure:
+/// commit any uncommitted change (a stall or a killed agent can leave a real
+/// edit dirty) so it is durable on the attempt branch, then archive a COPY of
+/// the branch tip under `<branch>-rejected-<now>` when the branch carries work
+/// beyond the base branch. Returns the archived branch name, or `None` when
+/// there is nothing to keep (no branch, zero commits ahead, detached HEAD) or
+/// git refuses. Best-effort by construction: a failure here never replaces the
+/// attempt's own failure reason. Shared by every failure arm so "the work
+/// survives" holds on all of them.
+fn preserve_work(repo: &Path, wt: &worktree::Worktree, id: &str, attempt: u32) -> Option<String> {
+    let _ = worktree::commit_all(
+        &wt.path,
+        &format!("af: {id} attempt {attempt} — work preserved before cleanup"),
+    );
+    let base = worktree::current_branch(repo).ok()?;
+    if !matches!(worktree::commits_ahead(repo, &base, &wt.branch), Ok(n) if n > 0) {
+        return None;
+    }
+    worktree::archive_branch(repo, &wt.branch, now_ts())
+}
+
+/// Preserve an attempt's work and name it in the log, returning the failure
+/// reason suffix `"; work kept on branch <name>"` (empty when there is
+/// nothing to keep). Callers append it to their own reason after `cleanup`,
+/// so a preserved attempt is discoverable from the receipt while a
+/// preservation that yields `None` leaves the message byte-identical.
+fn preserve_and_note(
+    repo: &Path,
+    wt: &worktree::Worktree,
+    id: &str,
+    attempt: u32,
+    append: &mut impl FnMut(&str),
+) -> String {
+    match preserve_work(repo, wt, id, attempt) {
+        Some(name) => {
+            append(&format!("-- work kept on branch {name}"));
+            format!("; work kept on branch {name}")
+        }
+        None => String::new(),
+    }
 }
 
 /// Log body for a JSON-mode agent run: the RENDERED transcript (raw JSONL
