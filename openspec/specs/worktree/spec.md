@@ -84,3 +84,26 @@ WHEN a rejected attempt cannot be archived (a git error, or a name collision
 that cannot be resolved)
 THEN the attempt still fails with its original message unchanged and no empty
 suffix, exactly as if archiving had not been attempted.
+
+### Requirement: af clean sweeps archived rejected branches
+
+`af clean [--dry-run]` SHALL also remove the archived rejected branches that
+rejected-work preservation leaves behind — local branches named
+`<prefix>/<id>-rejected-<unix-ts>` (with an optional `-<n>` collision
+suffix). A branch whose recovered task id is still marked `running` in the
+state file SHALL be kept, exactly like a running worktree. With `--dry-run`
+af SHALL report each branch it would remove as `would remove branch <name>`
+and mutate no ref; without it af SHALL remove each branch (`git branch -D`)
+and report `removed branch <name>`. The sweep SHALL be best-effort: a git
+error is never fatal and the exit code stays 0. The existing orphan-worktree
+output, ordering, and messages SHALL stay byte-identical, and a repository
+with archived branches but no orphan worktrees SHALL still do the work
+rather than short-circuiting on the `no orphaned worktrees` message.
+
+#### Scenario: sweeps archived branches but keeps a running task's
+
+GIVEN archived rejected branches `tf/dead-rejected-111` and
+`tf/live-rejected-222`, where task `live` is still marked `running`
+WHEN `af clean` runs
+THEN `tf/dead-rejected-111` is gone and reported as `removed branch tf/dead-rejected-111`
+AND `tf/live-rejected-222` survives and is not reported as removed.

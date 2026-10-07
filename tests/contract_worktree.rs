@@ -26,8 +26,8 @@
 //! here is shared between tests. Uses only std + the crate; no new deps.
 
 use agentflow::worktree::{
-    archive_branch, clean, clean_all, create, current_branch, heal, is_repo, merge, orphan_ids,
-    remove, MergeLocks, Worktree,
+    archive_branch, archived_task_id, branch_exists, clean, clean_all, clean_rejected, create,
+    current_branch, heal, is_repo, merge, orphan_ids, remove, MergeLocks, Worktree,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -532,4 +532,75 @@ fn archive_branch_copies_the_tip_without_touching_the_original() {
     assert!(archive_branch(&s.repo, "tf/does-not-exist", 999).is_none());
 
     remove(&s.repo, &wt);
+}
+
+/// `af clean` also sweeps the archived rejected refs round 11 leaves behind:
+/// `clean_rejected` lists `<prefix>/<id>-rejected-<ts>[-<n>]` branches, skips
+/// the ones whose task is still Running (the running-worktree rule applied to
+/// refs), deletes the rest best-effort, and touches nothing on a dry run. The
+/// pure `archived_task_id` parser recovers the id through hyphens and the
+/// collision suffix and ignores foreign prefixes / non-rejected names.
+// spec: worktree/af-clean-sweeps-archived-rejected-branches
+// spec: worktree/af-clean-sweeps-archived-rejected-branches#sweeps-archived-branches-but-keeps-a-running-task-s
+#[test]
+fn clean_removes_archived_rejected_branches() {
+    let s = Scratch::new("rejected-clean");
+    let repos = vec![("main".to_string(), s.repo.clone())];
+
+    // Parser contract: the id contains hyphens, the tail is the archiver's
+    // numeric `-<ts>[-<n>]`, and a foreign prefix or a non-rejected name is
+    // not ours to sweep.
+    assert_eq!(
+        archived_task_id("tf/r11-measured-cost-rejected-1791259017", "tf"),
+        Some("r11-measured-cost".to_string())
+    );
+    assert_eq!(
+        archived_task_id("tf/x-rejected-1-2", "tf"),
+        Some("x".to_string())
+    );
+    assert_eq!(archived_task_id("tf/x", "tf"), None);
+    assert_eq!(archived_task_id("other/x-rejected-1", "tf"), None);
+    assert_eq!(archived_task_id("tf/x-rejected-abc", "tf"), None);
+    assert_eq!(archived_task_id("tf/x-rejected-1-abc", "tf"), None);
+
+    // Two archived rejected refs of this prefix, a plain branch that must
+    // stay, and a FOREIGN-prefixed rejected ref that is not ours.
+    let dead = create_ok(&s.repo, &s.wt_root, "dead", "tf");
+    let live = create_ok(&s.repo, &s.wt_root, "live", "tf");
+    git(&dead.path, &["commit", "--allow-empty", "-m", "dead work"]);
+    git(&live.path, &["commit", "--allow-empty", "-m", "live work"]);
+    let dead_archived = archive_branch(&s.repo, "tf/dead", 111).expect("archive dead");
+    let live_archived = archive_branch(&s.repo, "tf/live", 222).expect("archive live");
+    git(&s.repo, &["branch", "other/x-rejected-1"]);
+
+    // Dry run lists exactly the two archived refs (sorted) and removes none.
+    let dry = clean_rejected(&repos, "tf", &[], true);
+    assert_eq!(
+        dry,
+        vec![dead_archived.clone(), live_archived.clone()],
+        "dry run lists both archived refs"
+    );
+    assert!(
+        branch_exists(&s.repo, &dead_archived) && branch_exists(&s.repo, &live_archived),
+        "dry run leaves every archived ref in place"
+    );
+
+    // A task still marked Running keeps its archived ref; the other is swept.
+    let removed = clean_rejected(&repos, "tf", &["live".to_string()], false);
+    assert_eq!(removed, vec![dead_archived.clone()]);
+    assert!(
+        !branch_exists(&s.repo, &dead_archived),
+        "the dead task's archived ref is removed"
+    );
+    assert!(
+        branch_exists(&s.repo, &live_archived),
+        "the running task's archived ref survives"
+    );
+
+    // A foreign prefix and a plain (non-rejected) branch are never touched.
+    assert!(branch_exists(&s.repo, "other/x-rejected-1"));
+    assert!(branch_exists(&s.repo, "tf/dead"));
+
+    remove(&s.repo, &dead);
+    remove(&s.repo, &live);
 }

@@ -10,6 +10,7 @@
 use agentflow::config;
 use agentflow::config::{Config, Settings};
 use agentflow::state::{Receipt, Store, TaskStatus};
+use agentflow::worktree::branch_exists;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -92,6 +93,18 @@ impl Cli {
         let mut map = HashMap::new();
         let s = TaskStatus {
             state: agentflow::config::TaskState::Done,
+            attempts: 1,
+            ..Default::default()
+        };
+        map.insert(id.to_string(), s);
+        Store::new(st.state_dir.clone()).save(&map).unwrap();
+    }
+
+    fn seed_running_task(&self, id: &str) {
+        let (_, st) = self.settings();
+        let mut map = HashMap::new();
+        let s = TaskStatus {
+            state: agentflow::config::TaskState::Running,
             attempts: 1,
             ..Default::default()
         };
@@ -1276,6 +1289,95 @@ fn clean_with_nothing_to_do_exits_zero() {
     assert!(
         out.contains("no orphaned worktrees"),
         "reports nothing: {out}"
+    );
+}
+
+/// The user-visible half of the archived-ref sweep: `--dry-run` prints
+/// `would remove branch <name>` and touches nothing; the real run prints
+/// `removed branch <name>` and the ref is gone; a ref whose task is still
+/// Running is kept (and never reported as removed), exactly like the
+/// running-worktree rule. A foreign-prefixed ref is not ours to sweep.
+// spec: worktree/af-clean-sweeps-archived-rejected-branches
+// spec: worktree/af-clean-sweeps-archived-rejected-branches#sweeps-archived-branches-but-keeps-a-running-task-s
+#[test]
+fn clean_sweeps_archived_rejected_branches_and_keeps_running_ones() {
+    let tasks = r#"{ "tasks": [
+        { "id": "dead", "title": "d", "accept": "true" },
+        { "id": "live", "title": "l", "accept": "true" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+
+    // A real scratch repo: `af clean` sweeps refs in TF_REPO_DIR.
+    let repo = cli.dir.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let run_git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run_git(&["init", "-b", "main"]);
+    run_git(&["commit", "--allow-empty", "-m", "init"]);
+    for b in [
+        "tf/dead-rejected-111",
+        "tf/live-rejected-222",
+        "other/x-rejected-1",
+    ] {
+        run_git(&["branch", b]);
+    }
+    // `live` is still Running: its archived ref must survive the sweep.
+    cli.seed_running_task("live");
+
+    // Dry run reports every ref that would go, and removes none of them.
+    let (code, out) = cli.af(&["clean", "--dry-run"]);
+    assert_eq!(code, 0, "dry run exits 0: {out}");
+    assert!(
+        out.contains("would remove branch tf/dead-rejected-111"),
+        "dry run names the dead ref: {out}"
+    );
+    assert!(
+        !out.contains("live-rejected-222"),
+        "a running task's ref would not be removed, so dry run must not name it: {out}"
+    );
+    assert!(
+        !out.contains("other/x-rejected-1"),
+        "a foreign prefix is not ours: {out}"
+    );
+    assert!(
+        branch_exists(&repo, "tf/dead-rejected-111")
+            && branch_exists(&repo, "tf/live-rejected-222"),
+        "dry run touches nothing: {out}"
+    );
+
+    // Real clean removes the dead task's ref and keeps the running one.
+    let (code, out) = cli.af(&["clean"]);
+    assert_eq!(code, 0, "clean exits 0: {out}");
+    assert!(
+        out.contains("removed branch tf/dead-rejected-111"),
+        "clean reports the removed ref: {out}"
+    );
+    assert!(
+        !out.contains("removed branch tf/live-rejected-222"),
+        "a running task's ref is never reported as removed: {out}"
+    );
+    assert!(
+        !branch_exists(&repo, "tf/dead-rejected-111"),
+        "the dead task's archived ref is gone"
+    );
+    assert!(
+        branch_exists(&repo, "tf/live-rejected-222"),
+        "the running task's archived ref survives"
+    );
+    assert!(
+        branch_exists(&repo, "other/x-rejected-1"),
+        "the foreign-prefixed ref survives"
     );
 }
 
