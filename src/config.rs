@@ -76,6 +76,17 @@ pub struct Task {
     pub title: String,
     pub deps: Vec<String>,
     pub scope: Vec<String>,
+    /// The files the operator BELIEVES the agent must edit (round-12).
+    /// Optional and purely declarative: absent/empty = the normal case,
+    /// no behaviour change at all. Its only consumer is `validate`, which
+    /// REJECTS (hard error, so `af validate` exits 2) a `touch` entry that
+    /// no `scope` entry covers — such a task is unpassable by construction:
+    /// it must edit a file its own scope forbids, so the failure is caught
+    /// at config time, before any agent is paid. Coverage is decided by
+    /// the SAME matcher enforcement uses (`scheduler::scope_overlap`), so
+    /// validation can never accept a config enforcement will later reject.
+    #[serde(default)]
+    pub touch: Vec<String>,
     pub accept: Option<String>,
     pub acceptance_prose: Option<String>,
     pub manual: bool,
@@ -288,6 +299,37 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
                 "task '{}': no acceptance gate and not manual — gate will be skipped",
                 t.id
             ));
+        }
+    }
+
+    // A declared `touch` entry no `scope` entry covers is a hard error, not
+    // a warning: the task would be unpassable by construction (it must edit
+    // a file its own scope forbids), so it must fail at config time, before
+    // any agent is paid. Coverage uses the SAME matcher as enforcement
+    // (`scheduler::scope_overlap`, see `execute::scope_violations`) — never
+    // a second glob implementation — so admission control and enforcement
+    // agree on what "in scope" means. An EMPTY `scope` means "any file"
+    // (existing semantics): every `touch` entry is covered, nothing is
+    // rejected. An empty/absent `touch` is the normal case: no output
+    // change at all. Tasks are visited in file order, `touch` entries in
+    // declaration order, so the first offender is reported deterministically.
+    for t in tasks {
+        if t.scope.is_empty() {
+            continue;
+        }
+        for entry in &t.touch {
+            if !t
+                .scope
+                .iter()
+                .any(|s| crate::scheduler::scope_overlap(entry, s))
+            {
+                return Err(format!(
+                    "task '{}': touch entry '{}' is covered by no scope entry ({}) — widen scope or drop the entry",
+                    t.id,
+                    entry,
+                    t.scope.join(", ")
+                ));
+            }
         }
     }
     detect_cycle(tasks)?;
