@@ -44,6 +44,14 @@ const AGENT_ENV_BASE: &[&str] = &[
     "GIT_AUTHOR_EMAIL",
     "GIT_COMMITTER_NAME",
     "GIT_COMMITTER_EMAIL",
+    // llvm-cov (coverage-gate.sh) sets this so the instrumented test process
+    // writes its .profraw to the coverage output dir. It must reach the agent
+    // child too: an instrumented stub that loses it falls back to writing
+    // `default_*.profraw` into its current directory — the WORKTREE — which
+    // becomes an uncommitted edit the orchestrator (correctly) commits and the
+    // scope check rightly flags. Inheritance (the `%p` per-pid pattern) keeps
+    // coverage out of the worktree without concurrent-writer collisions.
+    "LLVM_PROFILE_FILE",
 ];
 
 /// Sandbox policy for the agent child (ADR-10): env allowlist that exposes
@@ -169,6 +177,8 @@ fn execute_attempt(
     attempt: u32,
     log_path: &Path,
 ) -> (Outcome, Spend) {
+    // Attempt start: the no-change failure names how long the attempt ran.
+    let attempt_start = std::time::Instant::now();
     let task = match ctx.cfg.by_id.get(id) {
         Some(t) => t.clone(),
         None => {
@@ -315,6 +325,70 @@ fn execute_attempt(
         }
     }
 
+    // 2a) WORK INTEGRITY (r13): make the agent's work durable BEFORE it is
+    // judged, then refuse to call a zero-commit attempt "merged".
+    //
+    // An agent that exits 0 without committing leaves its edit in the dirty
+    // worktree only: `changed_paths` (three-dot diff) sees nothing, so the
+    // scope check passes vacuously; the gate runs in the worktree and sees
+    // the dirty file; but the merge command `git merge --no-ff <branch>`
+    // answers "Already up to date" (the branch tip IS the base) and exits 0
+    // — a FALSE GREEN that reports a merge which carried nothing, after
+    // which cleanup destroys the agent's work. Committing here first means
+    // the scope check, the gate and the merge all judge EXACTLY the same
+    // committed tree instead of the gate judging the worktree while the
+    // merge carries nothing. The same fix closes the scope-enforcement
+    // bypass: an uncommitted out-of-scope edit is now visible to the check.
+    {
+        let base_branch = match worktree::current_branch(&repo) {
+            Ok(b) => b,
+            Err(e) => {
+                cleanup(&repo, &wt);
+                return (Outcome::Failed(e), spend);
+            }
+        };
+        // Durable first. A commit failure (e.g. a pre-commit hook rejected
+        // the work) fails the attempt rather than judging a tree we could
+        // not make durable. No `--no-verify`: the operator's hooks are
+        // theirs to run.
+        if let Err(e) = worktree::commit_all(
+            &wt_path,
+            &format!("af: {id} attempt {attempt} — agent left uncommitted work"),
+        ) {
+            cleanup(&repo, &wt);
+            return (
+                Outcome::Failed(format!("cannot commit the agent's uncommitted work: {e}")),
+                spend,
+            );
+        }
+        // NO CHANGE IS NOT SUCCESS. `Merged` is the harness's claim that the
+        // base now contains the agent's work; with zero commits beyond the
+        // base there is nothing to contain. A task that genuinely needs no
+        // change is a `manual: true` task; the "already merged by an earlier
+        // attempt whose Done was lost" case is handled by the resume
+        // machinery before a fresh agent attempt, so it never reaches here.
+        let ahead = match worktree::commits_ahead(&repo, &base_branch, &wt.branch) {
+            Ok(n) => n,
+            Err(e) => {
+                cleanup(&repo, &wt);
+                return (Outcome::Failed(e), spend);
+            }
+        };
+        if ahead == 0 {
+            let secs = attempt_start.elapsed().as_secs();
+            append(&format!(
+                "-- agent produced no change: 0 commits ahead of {base_branch} after {secs}s"
+            ));
+            cleanup(&repo, &wt);
+            return (
+                Outcome::Failed(format!(
+                    "agent produced no change: 0 commits ahead of {base_branch} after {secs}s"
+                )),
+                spend,
+            );
+        }
+    }
+
     // 2b) Scope enforcement: the prompt's "do not touch files outside the
     // allowed scope" is now an enforced contract. The agent's committed
     // change must stay within `task.scope` (empty scope means any file).
@@ -442,6 +516,21 @@ fn execute_attempt(
             None => e,
         };
         return (Outcome::Failed(reason), spend);
+    }
+    // BELT AND BRACES (r13): `Merged` is a claim that the base contains the
+    // attempt's work. Prove the branch tip really is an ancestor of the
+    // base before making the claim; a discrepancy is reported as a failure
+    // rather than a merge that did not happen. Verified BEFORE cleanup,
+    // which deletes the branch being checked.
+    if !crate::run::branch_merged_into_head(&repo, &wt.branch) {
+        cleanup(&repo, &wt);
+        return (
+            Outcome::Failed(format!(
+                "merge of {} reported success but the base does not contain it",
+                wt.branch
+            )),
+            spend,
+        );
     }
     append("-- merged --");
     cleanup(&repo, &wt);

@@ -134,3 +134,21 @@ WHEN `af recover --task <id>` merges it into the base
 THEN the recovered worktree AND the archived branch are removed, because the
 work now lives in the base — leaving the rejected ref behind would be a ghost
 for `af clean`.
+
+### Requirement: The attempt's work is committed before it is merged
+
+`af` SHALL commit any uncommitted agent work on the attempt branch before
+merging it, so a merge carries real content rather than reporting success for
+a branch that is already the base. `af` SHALL verify that the attempt branch
+tip is an ancestor of the base branch before reporting the attempt as merged,
+and SHALL NOT report a merge that the base does not contain.
+
+#### Scenario: merge carries the attempt's real content
+
+WHEN an attempt's worktree is dirty at judgment time
+THEN the work is committed on the attempt branch and the merge carries it into the base, where `git show <base>:<path>` finds the committed file.
+
+#### Scenario: a no-op merge is not reported
+
+WHEN the attempt branch carries nothing beyond the base branch
+THEN the attempt fails rather than reporting a merge that contains no work.

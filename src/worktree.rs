@@ -267,6 +267,43 @@ pub fn commits_ahead(repo: &Path, base: &str, branch: &str) -> Result<u64, Strin
         .map_err(|e| format!("cannot parse rev-list count for {base}..{branch}: {e}"))
 }
 
+/// Any uncommitted change (staged, unstaged, or untracked) in the worktree
+/// at `path`? `git status --porcelain` is non-empty exactly when the tree
+/// differs from its HEAD. An unreadable status is an error, never "clean".
+pub fn is_dirty(path: &Path) -> Result<bool, String> {
+    let out = git(path, &["status", "--porcelain"]);
+    if !out.passed() {
+        return Err(format!(
+            "cannot read worktree status in {}: {}",
+            path.display(),
+            out.combined().trim()
+        ));
+    }
+    Ok(!out.stdout.trim().is_empty())
+}
+
+/// Make the agent's work DURABLE on the attempt branch: commit every
+/// uncommitted change in the worktree at `path` so the scope check, the
+/// acceptance gate and the merge all judge exactly the same committed tree.
+/// A clean worktree is a no-op. Never passes `--no-verify`: the operator's
+/// git hooks are theirs to run (a hook that rejects the work fails the
+/// attempt, which is the honest outcome). An error carries git's output so
+/// the caller can name the reason.
+pub fn commit_all(path: &Path, msg: &str) -> Result<(), String> {
+    if !is_dirty(path)? {
+        return Ok(());
+    }
+    let add = git(path, &["add", "-A"]);
+    if !add.passed() {
+        return Err(add.combined().trim().to_string());
+    }
+    let commit = git(path, &["commit", "-m", msg]);
+    if !commit.passed() {
+        return Err(commit.combined().trim().to_string());
+    }
+    Ok(())
+}
+
 /// Attach a worktree to an EXISTING branch — the gate-only-retry
 /// counterpart of [`create`]: the branch is never deleted or recreated,
 /// because the agent's committed work on it is exactly what the retry must
@@ -682,6 +719,34 @@ mod tests {
             commits_ahead(&repo, "main", &wt.branch).unwrap(),
             0,
             "merged branch is fully reachable from the base"
+        );
+        remove(&repo, &wt);
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    /// `commit_all` makes a dirty worktree durable under the given message
+    /// and is a no-op on a clean one; `is_dirty` reports both states.
+    #[test]
+    fn commit_all_makes_a_dirty_worktree_durable_and_is_a_noop_when_clean() {
+        let repo = scratch_repo();
+        let wt_root = repo.parent().unwrap().join("wt");
+        let wt = create_ok(&repo, &wt_root, "D1");
+        // Fresh worktree sits at the base tip: clean, and commit_all is a
+        // no-op that does not invent a commit.
+        assert!(!is_dirty(&wt.path).unwrap(), "fresh worktree is clean");
+        commit_all(&wt.path, "af: D1 attempt 1 — agent left uncommitted work").unwrap();
+        assert_eq!(commits_ahead(&repo, "main", &wt.branch).unwrap(), 0);
+        // A dirty edit is committed under the harness message and becomes
+        // real work beyond the base.
+        std::fs::write(wt.path.join("dirty.txt"), "agent work\n").unwrap();
+        assert!(is_dirty(&wt.path).unwrap(), "uncommitted edit is dirty");
+        commit_all(&wt.path, "af: D1 attempt 1 — agent left uncommitted work").unwrap();
+        assert!(!is_dirty(&wt.path).unwrap(), "commit cleaned the tree");
+        assert_eq!(commits_ahead(&repo, "main", &wt.branch).unwrap(), 1);
+        let msg = git(&wt.path, &["log", "-1", "--format=%s"]);
+        assert_eq!(
+            msg.stdout.trim(),
+            "af: D1 attempt 1 — agent left uncommitted work"
         );
         remove(&repo, &wt);
         let _ = std::fs::remove_dir_all(repo.parent().unwrap());

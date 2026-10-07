@@ -71,16 +71,17 @@ fn a_finished_task_wakes_the_dispatcher_immediately() {
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "init"]);
 
-    // A's gate: the stub writes DONE.txt by default, so `test -f DONE.txt`
-    // passes. B's gate cannot fail — its branch may carry no new commit
-    // (the stub rewrites the identical DONE.txt), and only the wake-up
+    // A's gate: the stub writes its own artifact A.txt, so `test -f A.txt`
+    // passes. B writes B.txt: each task must produce a GENUINE committed
+    // change (a no-change attempt must not reach Done), and only the wake-up
     // latency is under test here.
     let tasks = format!(
         r#"{{ "tasks": [
-            {{"id":"A","title":"create done","scope":["DONE.txt"],"accept":"{ga}"}},
-            {{"id":"B","title":"follow on","deps":["A"],"scope":["DONE.txt"],"accept":"true"}}
+            {{"id":"A","title":"create a","scope":["A.txt"],"accept":"{ga}"}},
+            {{"id":"B","title":"follow on","deps":["A"],"scope":["B.txt"],"accept":"{gb}"}}
         ] }}"#,
-        ga = gate_cmd("DONE.txt")
+        ga = gate_cmd("A.txt"),
+        gb = gate_cmd("B.txt")
     );
     // Windows paths contain backslashes — escape them for JSON.
     let workers = format!(
@@ -114,6 +115,13 @@ fn a_finished_task_wakes_the_dispatcher_immediately() {
         max_wall_clock_s: 0,
         sandbox_cmd: vec![],
     };
+    // Per-task artifacts: the stub knob must ride the sandbox env
+    // allowlist (ADR-10).
+    std::env::set_var(
+        "TF_AGENT_ENV_PASSTHROUGH",
+        "FAKE_AGENT_TOUCH,FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH_FROM_TASK",
+    );
+    std::env::set_var("FAKE_AGENT_TOUCH_FROM_TASK", "1");
 
     // Measured: 60.4s before the wake-on-completion fix (two full 30s
     // sleeps, one per dispatch, wasted on ~0s of agent work), ~1-2s after.

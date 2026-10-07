@@ -105,3 +105,44 @@ THEN `af` warns on stderr and appends auto-filled scope, acceptance and gate-com
 
 WHEN a task declares no scope entries
 THEN the rendered prompt shows `*` for the file scope.
+
+### Requirement: Attempt work is durable before it is judged
+
+Before an attempt is judged, `af` SHALL make the agent's work durable on the
+attempt branch. When the agent exits 0 leaving uncommitted changes in its
+worktree, `af` SHALL stage and commit those changes on the attempt branch
+(without passing `--no-verify`, so the operator's git hooks still run) so the
+scope check, the acceptance gate and the merge all judge exactly the same
+committed tree. If that commit fails, the attempt SHALL fail with a reason
+naming the commit error; a tree that cannot be made durable SHALL NOT be
+judged or merged.
+
+#### Scenario: dirty worktree is committed before judging
+
+WHEN the agent exits 0 leaving uncommitted work in its worktree
+THEN the work is committed on the attempt branch before the scope check, the gate and the merge, and a passing attempt merges with the change present in the base branch's committed tree.
+
+#### Scenario: an uncommittable tree fails the attempt
+
+WHEN the agent's uncommitted work cannot be committed
+THEN the attempt fails with a reason naming the commit error and no merge happens.
+
+### Requirement: An attempt that produces no change is not merged
+
+`af` SHALL count the commits the attempt branch carries beyond the base branch
+after the agent's work is made durable and BEFORE the scope check. A count of
+zero SHALL fail the attempt with a deterministic reason naming the zero-commit
+condition; such an attempt SHALL NOT be reported as merged and its task SHALL
+NOT reach `done`. Before reporting an attempt as merged, `af` SHALL verify that
+the attempt branch tip is an ancestor of the base branch, and SHALL fail the
+attempt naming the discrepancy when it is not.
+
+#### Scenario: zero-commit attempt fails, never merged
+
+WHEN the agent exits 0 but the attempt branch carries zero commits beyond the base branch
+THEN the task does not reach `done`, the receipt outcome is not `merged`, and the failure reason names the zero-commit condition.
+
+#### Scenario: a reported merge is verified in the base
+
+WHEN the attempt's merge succeeds
+THEN `af` verifies the attempt branch tip is an ancestor of the base branch before reporting the attempt as merged.

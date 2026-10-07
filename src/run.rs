@@ -515,7 +515,10 @@ fn branch_exists(repo: &Path, branch: &str) -> bool {
 }
 
 /// Is `branch` already fully contained in the repo's checked-out base?
-fn branch_merged_into_head(repo: &Path, branch: &str) -> bool {
+/// `pub(crate)` so `execute_attempt`'s belt-and-braces merge verification
+/// ("only report merged when the base really contains the work") reuses the
+/// exact same ancestor check as the resume machinery.
+pub(crate) fn branch_merged_into_head(repo: &Path, branch: &str) -> bool {
     git_run(repo, &["merge-base", "--is-ancestor", branch, "HEAD"]).passed()
 }
 
@@ -2005,6 +2008,39 @@ mod tests {
         if let Some(base) = repo.parent() {
             let _ = std::fs::remove_dir_all(base);
         }
+    }
+
+    /// BELT AND BRACES (r13): `Merged` is only trusted after the attempt
+    /// branch tip is verified to be an ancestor of the base. Verify the exact
+    /// check `execute_attempt` uses: false for a branch with unmerged work,
+    /// true once that work is merged.
+    // spec: lifecycle/an-attempt-that-produces-no-change-is-not-merged#a-reported-merge-is-verified-in-the-base
+    #[test]
+    fn branch_merged_into_head_is_true_only_after_the_merge() {
+        let repo = scratch_repo();
+        // A tip equal to HEAD is already an ancestor (nothing to merge).
+        git_cmd(&repo, &["branch", "done"]);
+        assert!(
+            branch_merged_into_head(&repo, "done"),
+            "an equal tip is an ancestor"
+        );
+        // A branch carrying real work is NOT an ancestor until merged.
+        git_cmd(&repo, &["checkout", "-b", "work", "main"]);
+        std::fs::write(repo.join("work.txt"), "x\n").unwrap();
+        git_cmd(&repo, &["add", "work.txt"]);
+        git_cmd(&repo, &["commit", "-m", "work"]);
+        git_cmd(&repo, &["checkout", "main"]);
+        assert!(
+            !branch_merged_into_head(&repo, "work"),
+            "unmerged work is not an ancestor"
+        );
+        // After `git merge --no-ff` the tip IS an ancestor of the base.
+        git_cmd(&repo, &["merge", "--no-ff", "work", "-m", "af: T — merge"]);
+        assert!(
+            branch_merged_into_head(&repo, "work"),
+            "a merged branch is an ancestor of the base"
+        );
+        cleanup(&repo);
     }
 
     fn task(id: &str) -> Task {
