@@ -371,6 +371,13 @@ pub fn merge(repo: &Path, branch: &str, locks: &MergeLocks, msg: &str) -> Result
 /// Startup self-heal: remove worktrees whose task is not currently running
 /// (dead attempts / prior crashes). Tries every repo (multi-repo, ADR-11):
 /// `git worktree remove` fails harmlessly in repos that don't own the dir.
+///
+/// Before a stale branch is deleted, its committed work is archived under
+/// `<branch>-rejected-<now>` ([`archive_branch`]) so an interrupted attempt —
+/// the orchestrator was killed mid-flight, or the task is no longer marked
+/// running — does not silently lose the agent's commits. Preserving is
+/// best-effort and never fatal, and the running-task rule is unchanged: a
+/// task still marked running is never touched.
 pub fn heal(
     repos: &[(String, PathBuf)],
     wt_root: &Path,
@@ -386,13 +393,34 @@ pub fn heal(
             continue;
         }
         for (_, repo) in repos {
+            let branch = format!("{branch_prefix}/{id}");
+            // Preserve the branch's committed work BEFORE it is removed:
+            // the stale worktree is exactly the "af was killed mid-attempt"
+            // case, where the agent may have committed real work.
+            archive_stale_branch(repo, &branch);
             let _ = git(
                 repo,
                 &["worktree", "remove", "--force", e.path().to_str().unwrap()],
             );
-            let _ = git(repo, &["branch", "-D", &format!("{branch_prefix}/{id}")]);
+            let _ = git(repo, &["branch", "-D", &branch]);
         }
     }
+}
+
+/// Best-effort preservation of a stale branch's committed work before
+/// [`heal`] deletes it. Archives a COPY under `<branch>-rejected-<now>` only
+/// when `branch` exists AND carries commits beyond the repo's current branch
+/// (a fresh worktree with no work must not leave a meaningless ref). Never
+/// fails the caller: an unanswerable base (`detached HEAD`, missing branch,
+/// git error) preserves nothing — deletion still proceeds.
+fn archive_stale_branch(repo: &Path, branch: &str) {
+    let Ok(base) = current_branch(repo) else {
+        return;
+    };
+    if !matches!(commits_ahead(repo, &base, branch), Ok(n) if n > 0) {
+        return;
+    }
+    let _ = archive_branch(repo, branch, crate::state::now_ts());
 }
 
 /// Best-effort removal of every worktree dir under `wt_root` at startup.
