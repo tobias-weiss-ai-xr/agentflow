@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "round": 12,
+    "note": "Same two real workers as rounds 10-11. params_b and price_per_mtok_usd are ILLUSTRATIVE operator assumptions, not vendor data."
+  },
+  "defaults": {
+    "accept_timeout_s": 3000,
+    "max_attempts": 6,
+    "retry_delay_s": 15,
+    "agent_timeout_s": 4200
+  },
+  "workers": [
+    {
+      "name": "opencode-go",
+      "provider": "opencode-go",
+      "model": "deepseek-v4-flash",
+      "api_base": "",
+      "api_key_env": "",
+      "enabled": true,
+      "cli": "pi",
+      "output": "json",
+      "params_b": 32,
+      "price_per_mtok_usd": 0.28
+    },
+    {
+      "name": "zai",
+      "provider": "zai",
+      "model": "glm-5.2",
+      "api_base": "",
+      "api_key_env": "",
+      "enabled": true,
+      "cli": "pi",
+      "params_b": 400,
+      "price_per_mtok_usd": 0.6
+    }
+  ]
+}
