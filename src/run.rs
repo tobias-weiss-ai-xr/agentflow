@@ -867,7 +867,10 @@ pub fn clean(cfg: &Config, st: &Settings, dry_run: bool) -> i32 {
         &running,
         dry_run,
     );
-    if ids.is_empty() {
+    // Round 11 leaves `<prefix>/<id>-rejected-<ts>[-<n>]` refs behind; sweep
+    // them too. The running-task rule is identical to the worktree rule.
+    let rejected = worktree::clean_rejected(&repo_list, &st.branch_prefix, &running, dry_run);
+    if ids.is_empty() && rejected.is_empty() {
         println!(
             "clean: no orphaned worktrees under {}",
             st.worktree_root.display()
@@ -883,13 +886,22 @@ pub fn clean(cfg: &Config, st: &Settings, dry_run: bool) -> i32 {
             println!("removed {} (branch {branch})", path.display());
         }
     }
-    if dry_run {
-        println!(
-            "dry run: {} orphan(s) would be removed; nothing changed",
-            ids.len()
-        );
-    } else {
-        println!("clean: removed {} orphan(s)", ids.len());
+    for branch in &rejected {
+        if dry_run {
+            println!("would remove branch {branch}");
+        } else {
+            println!("removed branch {branch}");
+        }
+    }
+    if !ids.is_empty() {
+        if dry_run {
+            println!(
+                "dry run: {} orphan(s) would be removed; nothing changed",
+                ids.len()
+            );
+        } else {
+            println!("clean: removed {} orphan(s)", ids.len());
+        }
     }
     0
 }

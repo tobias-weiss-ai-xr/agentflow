@@ -141,6 +141,43 @@ pub fn archive_branch(repo: &Path, branch: &str, now: u64) -> Option<String> {
     }
 }
 
+/// Recover the task id from an archived rejected branch name built by
+/// [`archive_branch`]: `<prefix>/<id>-rejected-<unix-ts>`, with an optional
+/// `-<n>` suffix when the first choice of name was already taken (round 11
+/// appends one). Returns `None` for anything that is not an archived
+/// rejected branch of `prefix` — a plain branch (`tf/x`), a foreign prefix
+/// (`other/x-rejected-1`), or a malformed tail.
+///
+/// Task ids contain hyphens (`r11-measured-cost`), so the parser cannot count
+/// hyphens: it locates the LAST `-rejected-` marker (everything after it is a
+/// numeric tail the archiver generated) and validates that tail as `<ts>` or
+/// `<ts>-<n>`. This is why `tf/x-rejected-1-2` yields `x`, not `x-rejected-1`.
+pub fn archived_task_id(branch: &str, prefix: &str) -> Option<String> {
+    let rest = branch.strip_prefix(prefix)?.strip_prefix('/')?;
+    const MARKER: &str = "-rejected-";
+    let at = rest.rfind(MARKER)?;
+    let id = &rest[..at];
+    if id.is_empty() {
+        return None;
+    }
+    let tail = &rest[at + MARKER.len()..];
+    let mut parts = tail.split('-');
+    let ts = parts.next().unwrap_or("");
+    let suffix = parts.next();
+    if !is_digits(ts) || parts.next().is_some() {
+        return None;
+    }
+    if suffix.is_some_and(|n| !is_digits(n)) {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+/// A non-empty run of ASCII digits (the unix ts the archiver writes).
+fn is_digits(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Does `branch` exist as a local branch in `repo`?
 pub fn branch_exists(repo: &Path, branch: &str) -> bool {
     git(
@@ -263,6 +300,58 @@ pub fn orphan_ids(wt_root: &Path, keep: &[String]) -> Vec<String> {
         .collect();
     ids.sort();
     ids
+}
+
+/// Archived rejected branches under `<prefix>/` whose task id is not in
+/// `keep` (tasks still marked Running), sorted and de-duplicated across
+/// repos. With `dry_run`, only LISTS. Otherwise each branch is deleted
+/// best-effort (`git branch -D`) in every repo that owns it — a git error
+/// never fails the caller, exactly like [`archive_branch`]. Returns the full
+/// branch names that were listed (and, when not `dry_run`, targeted for
+/// removal).
+pub fn clean_rejected(
+    repos: &[(String, PathBuf)],
+    branch_prefix: &str,
+    keep: &[String],
+    dry_run: bool,
+) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for (_, repo) in repos {
+        let out = git(
+            repo,
+            &[
+                "for-each-ref",
+                "--format=%(refname:short)",
+                &format!("refs/heads/{branch_prefix}/"),
+            ],
+        );
+        if !out.passed() {
+            continue;
+        }
+        for line in out.stdout.lines() {
+            let name = line.trim();
+            if name.is_empty() || names.iter().any(|n| n == name) {
+                continue;
+            }
+            match archived_task_id(name, branch_prefix) {
+                Some(id) if !keep.iter().any(|k| k == &id) => names.push(name.to_string()),
+                // Not an archived rejected branch, or its task is running:
+                // the running-worktree rule applies to archived refs too.
+                _ => {}
+            }
+        }
+    }
+    names.sort();
+    if dry_run {
+        return names;
+    }
+    for name in &names {
+        // Only one repo owns the ref; the others fail harmlessly.
+        for (_, repo) in repos {
+            let _ = git(repo, &["branch", "-D", name]);
+        }
+    }
+    names
 }
 
 /// `af clean [--dry-run]`: remove orphaned worktrees + their branches left by
@@ -584,6 +673,34 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(&wt_root);
+    }
+
+    #[test]
+    fn archived_task_id_recovers_ids_and_rejects_foreign_names() {
+        // Task ids contain hyphens; the numeric tail after the LAST marker
+        // is what separates the id from the archiver's `-<ts>[-<n>]`.
+        assert_eq!(
+            archived_task_id("tf/r11-measured-cost-rejected-1791259017", "tf"),
+            Some("r11-measured-cost".to_string())
+        );
+        // Collision form `-<ts>-<n>`: the suffix is not part of the id.
+        assert_eq!(
+            archived_task_id("tf/x-rejected-1-2", "tf"),
+            Some("x".to_string())
+        );
+        // An id may itself contain the marker; the LAST one wins.
+        assert_eq!(
+            archived_task_id("tf/a-rejected-b-rejected-7", "tf"),
+            Some("a-rejected-b".to_string())
+        );
+        // Not archived rejected branches of this prefix.
+        assert_eq!(archived_task_id("tf/x", "tf"), None);
+        assert_eq!(archived_task_id("other/x-rejected-1", "tf"), None);
+        assert_eq!(archived_task_id("tf/x-rejected", "tf"), None);
+        assert_eq!(archived_task_id("tf/x-rejected-abc", "tf"), None);
+        assert_eq!(archived_task_id("tf/x-rejected-1-abc", "tf"), None);
+        assert_eq!(archived_task_id("tf/x-rejected-1-2-3", "tf"), None);
+        assert_eq!(archived_task_id("tf/-rejected-1", "tf"), None);
     }
 
     #[test]
