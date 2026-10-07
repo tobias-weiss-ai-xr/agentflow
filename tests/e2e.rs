@@ -1932,3 +1932,93 @@ fn a_timed_out_attempt_keeps_its_work_under_an_archived_branch() {
     std::env::remove_var("FAKE_AGENT_TOUCH");
     std::env::remove_var("FAKE_AGENT_OUT");
 }
+
+/// Seed an archived rejected branch `tf/<id>-rejected-<ts>` off the fixture
+/// repo's current base, carrying a committed `file` = `content` and leaving
+/// the checkout back on `main`. Models exactly what round 11's failure paths
+/// leave on disk when an attempt is rejected.
+fn seed_archived_branch(repo: &Path, id: &str, ts: u64, file: &str, content: &str) {
+    let branch = format!("tf/{id}");
+    git(repo, &["checkout", "-b", &branch]);
+    std::fs::write(repo.join(file), content).unwrap();
+    git(repo, &["add", file]);
+    git(repo, &["commit", "-m", "agent work"]);
+    git(repo, &["branch", &format!("tf/{id}-rejected-{ts}")]);
+    git(repo, &["checkout", "main"]);
+    // Production's failure cleanup deletes the original attempt branch after
+    // archiving; only the rejected copy survives.
+    git(repo, &["branch", "-D", &branch]);
+}
+
+/// THE core cost test for r13-auto-recover: `af run` must find an archived
+/// rejected branch that satisfies the task's CURRENT scope and gate, re-run
+/// the gate on it, merge it, and NEVER invoke the agent — the money for that
+/// work was already spent by the attempt that archived it. The gate remains
+/// the sole arbiter, so the merged content is exactly what the gate passed.
+// spec: lifecycle/pre-dispatch-reuse-of-an-archived-branch
+// spec: lifecycle/pre-dispatch-reuse-of-an-archived-branch#an-in-scope-archive-is-reused-without-an-agent
+// spec: cli/run-commands#pre-dispatch-reuse-never-re-pays-for-archived-work
+#[test]
+fn a_run_reuses_a_scope_compatible_archived_branch_without_paying_an_agent() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    std::env::remove_var("FAKE_AGENT_OUT");
+    std::env::remove_var("TF_NO_REUSE");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"reuse me","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+    // The archive already carries work the CURRENT scope allows and the
+    // CURRENT gate accepts.
+    seed_archived_branch(
+        &f.repo,
+        "A",
+        1791259017,
+        "DONE.txt",
+        "example-agent: task complete\n",
+    );
+
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
+
+    // The task reached Done from the ARCHIVE, not from a fresh attempt.
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Done, "archived work landed");
+    // The base contains the change …
+    assert!(
+        f.repo.join("DONE.txt").exists(),
+        "base contains the archived change"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.repo.join("DONE.txt")).unwrap(),
+        "example-agent: task complete\n"
+    );
+    // … and the archived branch was consumed (its content now lives in base).
+    assert!(
+        archived_refs(&f.repo).is_empty(),
+        "archived branch removed after reuse: {:?}",
+        archived_refs(&f.repo)
+    );
+    // THE point: the agent was NEVER invoked. `execute_attempt` appends the
+    // marker `-- agent --` immediately before every spawn and reuse never
+    // reaches that code, so the attempt log carries zero markers (it may not
+    // even exist).
+    let log =
+        std::fs::read_to_string(f.st.state_dir.join("logs").join("A.log")).unwrap_or_default();
+    assert_eq!(
+        log.matches("-- agent --").count(),
+        0,
+        "reuse must not pay an agent again:\n{log}"
+    );
+    // Reuse is not a new attempt and must not double-count a receipt: the
+    // archived work's own receipt already exists, and reuse writes none.
+    assert!(
+        Store::new(f.st.state_dir.clone())
+            .load_receipts()
+            .is_empty(),
+        "reuse must not append a receipt"
+    );
+}

@@ -146,3 +146,62 @@ THEN the task does not reach `done`, the receipt outcome is not `merged`, and th
 
 WHEN the attempt's merge succeeds
 THEN `af` verifies the attempt branch tip is an ancestor of the base branch before reporting the attempt as merged.
+
+### Requirement: Pre-dispatch reuse of an archived branch
+
+When a task becomes ready and a worker is about to be picked/dispatched,
+`af run` SHALL FIRST look for an archived rejected branch for that task in
+its repository (`<branch_prefix>/<id>-rejected-<ts>`, with an optional `-<n>`
+collision suffix) and select the NEWEST by PARSING the numeric `<ts>` (then
+the `<n>` suffix) and never by git's output order or committer dates. It
+SHALL re-validate that branch against the task's CURRENT scope and gate
+exactly as `af recover` does, reusing the same enforcement helpers: (a)
+SCOPE — every path the archived branch changes relative to the merge base
+with the base branch MUST be covered by the task's CURRENT `scope` (an empty
+scope means any file); (b) GATE — unless the task is `manual`, the
+acceptance gate MUST pass on the checked-out archived branch, including the
+task's `gate_replay`. When it qualifies, `af run` SHALL merge it with the
+message `af: <id> — <title>`, set the task to `Done` with phase `GatePassed`,
+consume (delete) the archived branch, and take NO agent dispatch for it. The
+gate remains the SOLE arbiter, so reuse can only ever save money and never
+accept work a fresh attempt would have had to redo. When the newest archive
+is out of scope or fails the gate, `af run` SHALL leave the archived branch
+in place for `af clean`/a later `af recover` and fall through to the normal
+agent dispatch, without retrying that branch again in the same run, and SHALL
+log the reason at most once per candidate. A task SHALL be considered for
+pre-dispatch reuse at most once per run — the first time it becomes ready — so
+an archive produced by an attempt within the SAME run is left to the retry
+machinery (`scheduling`) instead of being re-validated in a loop. Reuse SHALL
+NOT fire for a task with no archive, a task already `Done`, or when
+`TF_NO_REUSE=1` is set (the operator's explicit escape hatch for a clean
+re-run). Reuse SHALL NOT append
+a receipt: the attempt that produced the archive already has one, and reuse
+is not a new attempt. The temporary worktree SHALL be removed on every path.
+
+#### Scenario: an in-scope archive is reused without an agent
+
+GIVEN a ready task whose CURRENT scope covers the archived branch's change
+and whose CURRENT gate passes on it
+WHEN `af run` dispatches the task
+THEN the archive is merged, the task reaches `done`, the archived branch is
+deleted, and no agent is invoked.
+
+#### Scenario: an out-of-scope archive falls through to the agent
+
+GIVEN a ready task with an archived branch whose change includes a file the
+task's CURRENT scope does not cover
+WHEN `af run` dispatches the task
+THEN the archived branch survives and the run dispatches the agent normally.
+
+#### Scenario: a gate-failing archive falls through to the agent
+
+GIVEN a ready task with an archived branch that fails the task's CURRENT
+acceptance gate
+WHEN `af run` dispatches the task
+THEN the archived branch survives and the run dispatches the agent normally.
+
+#### Scenario: TF_NO_REUSE opts out
+
+GIVEN `TF_NO_REUSE=1` and a ready task with a reusable archived branch
+WHEN `af run` dispatches the task
+THEN the archive is not reused and the agent is dispatched normally.

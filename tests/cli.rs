@@ -41,8 +41,15 @@ impl Cli {
     }
 
     fn af(&self, args: &[&str]) -> (i32, String) {
-        let out = Command::new(env!("CARGO_BIN_EXE_af"))
-            .args(args)
+        self.af_env(args, &[])
+    }
+
+    /// Run `af` like [`Cli::af`], layered with extra environment variables
+    /// (used to exercise the `TF_NO_REUSE=1` escape hatch). The child still
+    /// inherits the test process env for everything not overridden here.
+    fn af_env(&self, args: &[&str], env: &[(&str, &str)]) -> (i32, String) {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_af"));
+        cmd.args(args)
             .env("TF_TASKS_JSON", self.dir.join("config").join("tasks.json"))
             .env(
                 "TF_WORKERS_JSON",
@@ -50,9 +57,11 @@ impl Cli {
             )
             .env("TF_STATE_DIR", self.dir.join("state"))
             .env("TF_REPO_DIR", self.dir.join("repo"))
-            .env("TF_WORKTREE_ROOT", self.dir.join("wt"))
-            .output()
-            .expect("spawn af");
+            .env("TF_WORKTREE_ROOT", self.dir.join("wt"));
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("spawn af");
         (
             out.status.code().unwrap_or(-1),
             format!(
@@ -1583,6 +1592,120 @@ fn recover_with_no_archived_branch_exits_two() {
         out.contains("rejected"),
         "names the pattern searched: {out}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Pre-dispatch archived-branch reuse — `af run` re-validates an archive
+// instead of paying an agent again (r13-auto-recover).
+// ---------------------------------------------------------------------------
+
+/// Seed exactly the on-disk state a rejected attempt leaves behind: an
+/// archived rejected branch `tf/<id>-rejected-<ts>` carrying a committed
+/// `file` = `content`, `main` checked out, and NO original attempt branch
+/// (round 11's `cleanup` deletes `tf/<id>` after archiving).
+fn seed_rejected_branch(cli: &Cli, id: &str, ts: u64, file: &str, content: &str) {
+    let repo = cli.dir.join("repo");
+    let git = scratch_repo(&repo);
+    git(&["checkout", "-b", &format!("tf/{id}")]);
+    std::fs::write(repo.join(file), content).unwrap();
+    git(&["add", file]);
+    git(&["commit", "-m", "agent work"]);
+    git(&["branch", &format!("tf/{id}-rejected-{ts}")]);
+    git(&["checkout", "main"]);
+    git(&["branch", "-D", &format!("tf/{id}")]);
+}
+
+/// The `-- agent --` marker in a task's attempt log counts agent spawns
+/// (`execute_attempt` appends it immediately before every spawn); a missing
+/// log is zero.
+fn agent_spawns(cli: &Cli, id: &str) -> usize {
+    std::fs::read_to_string(cli.dir.join("state").join("logs").join(format!("{id}.log")))
+        .unwrap_or_default()
+        .matches("-- agent --")
+        .count()
+}
+
+// spec: lifecycle/pre-dispatch-reuse-of-an-archived-branch#an-out-of-scope-archive-falls-through-to-the-agent
+#[test]
+fn run_falls_through_an_out_of_scope_archived_branch() {
+    let tasks = r#"{ "tasks": [
+        { "id": "O", "title": "t", "scope": ["OK.txt"], "accept": "true" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    seed_rejected_branch(&cli, "O", 111, "OUT.txt", "x\n");
+    let repo = cli.dir.join("repo");
+
+    let (code, out) = cli.af(&["run"]);
+    // The archive is out of scope, so the run must NOT merge it. It falls
+    // through to a normal agent dispatch; the harness worker is a missing
+    // binary, the attempt fails, and max_attempts=1 deadlocks the campaign.
+    assert_ne!(code, 0, "out-of-scope archive must not merge: {out}");
+    assert!(
+        out.contains("out of scope") && out.contains("tf/O-rejected-111"),
+        "names the rejected candidate: {out}"
+    );
+    assert!(
+        branch_exists(&repo, "tf/O-rejected-111"),
+        "the rejected archive survives for a later recover/clean"
+    );
+    assert!(
+        !repo.join("OUT.txt").exists(),
+        "out-of-scope change not merged"
+    );
+    assert_eq!(agent_spawns(&cli, "O"), 1, "the agent WAS dispatched");
+}
+
+// spec: lifecycle/pre-dispatch-reuse-of-an-archived-branch#a-gate-failing-archive-falls-through-to-the-agent
+#[test]
+fn run_falls_through_a_gate_failing_archived_branch() {
+    let tasks = r#"{ "tasks": [
+        { "id": "G", "title": "t", "scope": [], "accept": "test -f MISSING.txt" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    seed_rejected_branch(&cli, "G", 222, "IN.txt", "x\n");
+    let repo = cli.dir.join("repo");
+
+    let (code, out) = cli.af(&["run"]);
+    assert_ne!(code, 0, "gate-failing archive must not merge: {out}");
+    assert!(
+        out.contains("gate failed") && out.contains("tf/G-rejected-222"),
+        "names the rejected candidate: {out}"
+    );
+    assert!(
+        branch_exists(&repo, "tf/G-rejected-222"),
+        "the rejected archive survives"
+    );
+    assert!(
+        !repo.join("IN.txt").exists(),
+        "gate-failing change not merged"
+    );
+    assert_eq!(agent_spawns(&cli, "G"), 1, "the agent WAS dispatched");
+}
+
+// spec: lifecycle/pre-dispatch-reuse-of-an-archived-branch#tf-no-reuse-opts-out
+#[test]
+fn run_with_tf_no_reuse_never_reuses_an_archived_branch() {
+    let tasks = r#"{ "tasks": [
+        { "id": "N", "title": "t", "scope": ["WORK.txt"], "accept": "true" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    seed_rejected_branch(&cli, "N", 333, "WORK.txt", "done\n");
+    let repo = cli.dir.join("repo");
+
+    let (code, out) = cli.af_env(&["run"], &[("TF_NO_REUSE", "1")]);
+    // The archive is perfectly reusable (in scope, gate would pass), but the
+    // escape hatch forces a fresh agent — which fails here.
+    assert_ne!(code, 0, "opt-out buys a fresh agent: {out}");
+    assert!(
+        !out.contains("reused archived branch"),
+        "TF_NO_REUSE=1 must never reuse: {out}"
+    );
+    assert!(
+        branch_exists(&repo, "tf/N-rejected-333"),
+        "the archive is left untouched"
+    );
+    assert!(!repo.join("WORK.txt").exists(), "nothing merged");
+    assert_eq!(agent_spawns(&cli, "N"), 1, "the agent WAS dispatched");
 }
 
 // ---------------------------------------------------------------------------
