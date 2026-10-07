@@ -28,10 +28,10 @@ providers directly.
 - **Dependency DAG** — `deps` ordering, critical-path priority, deadlock detection
 - **Contention avoidance** — tasks with overlapping `scope` globs are not dispatched concurrently
 - **Retry** — `max_attempts` per task, fresh branch + worktree on every attempt
-- **Self-healing** — atomic JSON state; crash-safe resume; orphan worktree cleanup at startup, plus `af clean [--dry-run]` to sweep leftovers from crashed runs
+- **Self-healing** — atomic JSON state; crash-safe resume; orphan worktree cleanup at startup, plus `af clean [--dry-run]` to sweep leftovers from crashed runs — including the archived `<branch>-rejected-*` refs, whose branches are kept while their task is still running
 - **Validated config** — `af validate` pre-flights tasks/workers (dependency cycles, duplicate ids, no enabled workers) without dispatching anything
 - **Observable** — status board (`af status [--json]`), live `attach`, per-task logs, wall-clock cost receipts
-- **Sound by construction** — spec → contract → test pyramid (300 tests, incl. E2E against a stub agent + scratch git repos; no network in CI)
+- **Sound by construction** — spec → contract → test pyramid (313 tests, incl. E2E against a stub agent + scratch git repos; no network in CI)
 
 ## Quick start
 
@@ -59,6 +59,7 @@ af api status [--json] | results --task ID
 af attach ID
 af cost [--task ID] [--last] [--since DATE|UNIX_TS]
 af clean [--dry-run]
+af recover --task ID [--dry-run]
 af validate [--worker NAME]
 ```
 
@@ -168,6 +169,16 @@ persisted at dispatch the receipt names that worker (and its model) and
 reports `wall_clock_s` as an upper bound — time since dispatch, since the exit
 time is unknown. `interrupted` is not a verdict, so it never lowers trust.
 
+`af recover --task ID` puts that archived work back to use: it re-checks the
+archived branch against the task's CURRENT scope and re-runs its acceptance
+gate, then merges it on success — without re-invoking the agent. This is what
+makes an operator's over-narrow scope cost one re-validation instead of a
+re-run. It selects the newest archived branch by parsing the timestamp (never
+by git's ordering), exits 2 when there is nothing to recover (or no such task),
+and exits 1 when the work still fails its re-check, keeping the branch. The
+failed attempt's receipt is left untouched: recovery does not rewrite history,
+it reuses it. `--dry-run` reports what it would do and changes nothing.
+
 A receipt file that cannot be parsed (a torn write from an interrupted
 campaign) is reported by name with one `warning:` line — `af cost` and
 `af status` load receipts through the checked loader — and is never allowed
@@ -181,6 +192,7 @@ to block the command: the readable history is still accounted for.
 | `title` | Human-readable description (injected into the prompt) |
 | `deps` | Task ids that must reach `done` first |
 | `scope` | File globs the task may modify (contention + advisory) |
+| `touch` | Optional declaration of the files you believe the task MUST edit; `af validate` rejects the config when one is covered by no `scope` entry (that task cannot pass) |
 | `accept` | Shell command run in the task's worktree; exit 0 = pass |
 | `acceptance_prose` | Natural-language success criteria (injected into the prompt) |
 | `manual` | Skip the acceptance gate (manual sign-off) |
@@ -374,7 +386,7 @@ so you can watch routing adapt between campaigns.
 ## Testing
 
 ```sh
-cargo test        # 300 tests: unit (scheduler DAG, contention, deadlock, state,
+cargo test        # 313 tests: unit (scheduler DAG, contention, deadlock, state,
                   # receipts, config validation, sandbox policy, multi-repo,
                   # UCB1 router, retry context, subprocess contracts) + E2E
                   # (fake agent + scratch git repos — no network)
