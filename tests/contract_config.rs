@@ -675,6 +675,142 @@ fn load_repos_maps_names_to_paths_and_rejects_malformed() {
     assert!(err.contains("read"), "{err}");
 }
 
+/// A declared `touch` entry that no `scope` entry covers is UNPASSABLE BY
+/// CONSTRUCTION — the task must edit a file its own scope forbids — so it
+/// is a hard load error (exit 2 from `af validate`), never a warning. The
+/// headline round-12 contract: fail fast, before any agent is paid.
+// spec: config/task-schema-loading#touch-entry-not-covered-by-scope-is-rejected
+#[test]
+fn validate_rejects_a_touch_entry_the_scope_does_not_cover() {
+    let d = fresh_dir("touch-reject");
+    let (tasks, workers) = write_config(
+        &d,
+        r#"{ "tasks": [{
+            "id":"T","title":"t","accept":"true",
+            "scope":["src/config.rs","tests/contract_config.rs"],
+            "touch":["src/config.rs","src/router.rs"]
+        }] }"#,
+        ONE_WORKER,
+    );
+    let err = load(&tasks, &workers)
+        .expect_err("an uncovered touch entry is a hard config error, not a warning");
+    assert!(err.contains("task 'T'"), "names the task: {err}");
+    assert!(err.contains("src/router.rs"), "names the path: {err}");
+    assert!(
+        err.contains("is covered by no scope entry"),
+        "states the rule: {err}"
+    );
+    // Deterministic message: the scope entries are named, joined with ", ",
+    // so the fix (widen scope or drop the entry) is obvious.
+    assert!(
+        err.contains("(src/config.rs, tests/contract_config.rs)"),
+        "names the scope: {err}"
+    );
+    // The covered entry never appears as the offender — only the uncovered
+    // one does (first uncovered entry in declaration order wins).
+    let first = err
+        .lines()
+        .find(|l| l.contains("touch entry"))
+        .expect("the error names a touch entry");
+    assert!(
+        first.contains("src/router.rs"),
+        "first offender only: {first}"
+    );
+}
+
+/// The covered arm: a `touch` entry the scope covers — by an EXACT path,
+/// a DIRECTORY PREFIX, or a GLOB — loads cleanly (the declared entries
+/// survive loading), because enforcement (`scope_violations`) would accept
+/// an edit to each of those paths. Only the uncovered shape is an error.
+// spec: config/task-schema-loading#touch-entry-not-covered-by-scope-is-rejected
+#[test]
+fn touch_entries_covered_by_scope_load() {
+    let d = fresh_dir("touch-covered");
+    // One scope entry per coverage kind: exact, directory prefix, glob.
+    let (tasks, workers) = write_config(
+        &d,
+        r#"{ "tasks": [{
+            "id":"T","title":"t","accept":"true",
+            "scope":["src/config.rs","docs/","src/*.rs"],
+            "touch":["src/config.rs","docs/deep/nested/guide.md","src/anything.rs"]
+        }] }"#,
+        ONE_WORKER,
+    );
+    let cfg = load(&tasks, &workers).expect("fully covered touch entries load");
+    // The declaration is data too: it survives loading verbatim.
+    assert_eq!(
+        cfg.by_id["T"].touch,
+        vec![
+            "src/config.rs".to_string(),
+            "docs/deep/nested/guide.md".to_string(),
+            "src/anything.rs".to_string(),
+        ],
+        "touch survives loading in declaration order"
+    );
+    // And it adds no warning of its own — the check is silent when happy.
+    assert!(
+        !cfg.warnings.iter().any(|w| w.contains("touch")),
+        "a covered touch never warns: {:?}",
+        cfg.warnings
+    );
+}
+
+/// The inert arms: an absent/empty `touch` is the normal case (all 51
+/// existing campaign tasks declare none) — no warning, no error, no output
+/// change at all; and an EMPTY `scope` means "any file" (existing
+/// semantics), so EVERY `touch` entry is covered and nothing is rejected.
+// spec: config/task-schema-loading#touch-entry-not-covered-by-scope-is-rejected
+#[test]
+fn empty_touch_and_empty_scope_arms_are_inert() {
+    let d = fresh_dir("touch-inert");
+
+    // --- Absent touch: byte-for-byte the legacy behaviour.
+    let (t_absent, w) = write_config(
+        &d.join("absent"),
+        r#"{ "tasks": [{"id":"T","title":"t","accept":"true","scope":["src/"]}] }"#,
+        ONE_WORKER,
+    );
+    let cfg = load(&t_absent, &w).expect("absent touch is the normal case");
+    assert!(cfg.by_id["T"].touch.is_empty(), "absent => empty vec");
+    assert_eq!(
+        cfg.warnings.len(),
+        1,
+        "only the pre-existing cost-basis warning: {:?}",
+        cfg.warnings
+    );
+    assert!(
+        !cfg.warnings.iter().any(|x| x.contains("touch")),
+        "never warns about touch"
+    );
+
+    // --- Explicitly empty touch: identical.
+    let (t_empty, w2) = write_config(
+        &d.join("empty"),
+        r#"{ "tasks": [{"id":"T","title":"t","accept":"true","scope":["src/"],"touch":[]}] }"#,
+        ONE_WORKER,
+    );
+    let cfg = load(&t_empty, &w2).expect("empty touch is the normal case");
+    assert!(cfg.by_id["T"].touch.is_empty());
+    assert!(
+        !cfg.warnings.iter().any(|x| x.contains("touch")),
+        "never warns about touch"
+    );
+
+    // --- Empty scope = "any file": every touch entry is covered, even one
+    // that no literal string could prefix-match. Never rejected.
+    let (t_open, w3) = write_config(
+        &d.join("open-scope"),
+        r#"{ "tasks": [{"id":"T","title":"t","accept":"true","scope":[],"touch":["src/router.rs","anywhere/deep/file.rs"]}] }"#,
+        ONE_WORKER,
+    );
+    let cfg = load(&t_open, &w3).expect("empty scope covers every touch entry");
+    assert_eq!(cfg.by_id["T"].touch.len(), 2, "the entries still parse");
+    assert!(
+        !cfg.warnings.iter().any(|x| x.contains("touch")),
+        "never warns about touch"
+    );
+}
+
 /// `TaskState::is_terminal` is the completion predicate the run loop uses.
 #[test]
 fn task_state_terminality_contract() {

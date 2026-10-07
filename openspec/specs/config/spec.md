@@ -7,7 +7,7 @@ TBD - created by archiving change rust-orchestrator. Update Purpose after archiv
 
 ### Requirement: Task schema loading
 
-`af` SHALL load a `tasks.json` file of the form `{ "_meta": {...}, "tasks": [...] }` into typed `Task` records. Each task SHALL support the fields `id`, `title`, `deps`, `scope`, `accept`, `acceptance_prose`, `manual`, `repo`, `priority` (a number, or the levels `LOW`/`MEDIUM`/`HIGH`/`CRITICAL`). Validation SHALL reject: duplicate task ids and dependency cycles. It SHALL warn (without failing) on: `deps` referencing ids not present in the file (taskfleet composes configs across files), and tasks that are neither `manual` nor have an `accept` gate (the corpus runs these gate-less).
+`af` SHALL load a `tasks.json` file of the form `{ "_meta": {...}, "tasks": [...] }` into typed `Task` records. Each task SHALL support the fields `id`, `title`, `deps`, `scope`, `touch`, `accept`, `acceptance_prose`, `manual`, `repo`, `priority` (a number, or the levels `LOW`/`MEDIUM`/`HIGH`/`CRITICAL`). `touch` is an optional array of file paths the operator believes the agent must edit; absent or empty SHALL be the normal case with no behaviour change. Validation SHALL reject a `touch` entry that is covered by no `scope` entry — a hard error naming the task, the entry, and the scope — because such a task is unpassable by construction: it must edit a file its own scope forbids. Coverage SHALL be decided by the same matcher enforcement uses (`scheduler::scope_overlap`), so validation can never accept a config that enforcement will later reject; an empty `scope` means "any file" and covers every `touch` entry; a `touch` entry naming a file that does not exist yet SHALL be accepted (the task may create it). Validation SHALL reject: duplicate task ids and dependency cycles. It SHALL warn (without failing) on: `deps` referencing ids not present in the file (taskfleet composes configs across files), and tasks that are neither `manual` nor have an `accept` gate (the corpus runs these gate-less).
 
 #### Scenario: valid config loads
 
@@ -38,6 +38,12 @@ THEN loading succeeds, warns, and the gate is skipped at run time.
 
 WHEN a task declares `priority: "HIGH"` and another `priority: 3`
 THEN both parse and rank deterministically (CRITICAL > HIGH > number-ranked).
+
+#### Scenario: touch entry not covered by scope is rejected
+
+GIVEN a task declaring `touch: ["src/router.rs"]` whose `scope` omits any entry covering it
+WHEN `tasks.json` is loaded
+THEN loading fails with an error naming the task, the touch entry, and the scope entries (so the fix — widen `scope` or drop the entry — is obvious), while a fully covered `touch`, an empty `touch`, and an empty `scope` all load unchanged.
 
 ### Requirement: Worker schema loading
 
