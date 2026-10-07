@@ -25,13 +25,15 @@ providers directly.
 - **Measured routing** — every attempt leaves a receipt with its outcome; free workers are picked by UCB1 (track record + exploration), per-worker trust shown in `af cost`; ties among equally trusted workers go to the cheaper declared basis, then to the faster measured mean, and only then to config order
 - **Retry memory** — failed attempts record their error; retry prompts list the task's earlier failures so the agent doesn't repeat them
 - **Exact acceptance gates** — each task declares a shell command that must exit 0 before merge
+- **Honest success** — `Merged` means the base really contains the work, and it is never inferred from an exit code: if the agent exits 0 leaving a dirty worktree the harness commits that tree before judging it (so the scope check, the gate and the merge all see the same content), an attempt that ends with zero commits ahead of the base is a failure rather than a silent `Done`, and the merge is verified against the base before it is reported
+- **Work preserved on every failure path** — a stall, a timeout, a non-zero agent exit, a scope violation, a merge conflict or an interrupted campaign all archive the attempt's branch as `<branch>-rejected-<ts>`; `af recover`, or the next `af run`, can then land that work without paying an agent for it twice
 - **Dependency DAG** — `deps` ordering, critical-path priority, deadlock detection
 - **Contention avoidance** — tasks with overlapping `scope` globs are not dispatched concurrently
 - **Retry** — `max_attempts` per task, fresh branch + worktree on every attempt
 - **Self-healing** — atomic JSON state; crash-safe resume; orphan worktree cleanup at startup, plus `af clean [--dry-run]` to sweep leftovers from crashed runs — including the archived `<branch>-rejected-*` refs, whose branches are kept while their task is still running
 - **Validated config** — `af validate` pre-flights tasks/workers (dependency cycles, duplicate ids, no enabled workers) without dispatching anything
 - **Observable** — status board (`af status [--json]`), live `attach`, per-task logs, wall-clock cost receipts
-- **Sound by construction** — spec → contract → test pyramid (313 tests, incl. E2E against a stub agent + scratch git repos; no network in CI)
+- **Sound by construction** — spec → contract → test pyramid (327 tests, incl. E2E against a stub agent + scratch git repos; no network in CI)
 
 ## Quick start
 
@@ -158,16 +160,30 @@ receipts, so `--last` / `--since` narrow the waste alongside the rest of the
 report; a window whose receipts contain no failures reports `0.0s` and omits
 the reason breakdown.
 
-A failed attempt's committed work is never destroyed. A GATE failure keeps its
-branch and the retry re-runs only the gate; a SCOPE VIOLATION or a MERGE
-CONFLICT archives the branch as `<branch>-rejected-<unix-ts>` before cleanup
-and names it in the receipt's error, so work an agent was already paid for
-stays recoverable — while the original branch is still deleted, so the retry
-starts clean off the current base. An attempt lost to a killed orchestrator is
+A failed attempt's committed work is never destroyed — on ANY failure path. A
+GATE failure keeps its branch and the retry re-runs only the gate; a SCOPE
+VIOLATION, a MERGE CONFLICT, an agent that STALLED, TIMED OUT or exited
+non-zero, and an interrupted attempt swept away by the startup heal all archive
+the branch as `<branch>-rejected-<unix-ts>` before cleanup and name it in the
+receipt's error, so work an agent was already paid for stays recoverable —
+while the original branch is still deleted, so the retry starts clean off the
+current base. A worker that stalls after an hour of editing is the most
+expensive failure the harness has; that work used to be destroyed outright. An attempt lost to a killed orchestrator is
 recorded as `interrupted`, and because the worker and the start time are
 persisted at dispatch the receipt names that worker (and its model) and
 reports `wall_clock_s` as an upper bound — time since dispatch, since the exit
 time is unknown. `interrupted` is not a verdict, so it never lowers trust.
+
+`Merged` means the work is in the base, and it is not asserted from an exit
+code. If the agent exits 0 leaving a dirty worktree, the harness commits that
+tree on the attempt branch BEFORE the scope check runs — so the scope check,
+the gate and the merge all judge the same committed content, and an
+out-of-scope edit can no longer hide by staying uncommitted. An attempt whose
+branch ends up with zero commits ahead of the base is a FAILURE (`agent
+produced no change: 0 commits ahead of <base>`), never a silent `Done`; a task
+that genuinely needs no change is a `manual: true` task. After the merge the
+base is checked to really contain the branch tip before the attempt is reported
+merged.
 
 `af recover --task ID` puts that archived work back to use: it re-checks the
 archived branch against the task's CURRENT scope and re-runs its acceptance
@@ -178,6 +194,16 @@ by git's ordering), exits 2 when there is nothing to recover (or no such task),
 and exits 1 when the work still fails its re-check, keeping the branch. The
 failed attempt's receipt is left untouched: recovery does not rewrite history,
 it reuses it. `--dry-run` reports what it would do and changes nothing.
+
+`af run` now makes that recovery decision by itself: before dispatching an
+agent for a task it looks for an archived branch of that task whose changed
+paths already satisfy the task's CURRENT `scope`, and when one qualifies it
+re-runs the gate on that branch and merges it — printing `↺ <id> reused
+archived branch <name>` — without invoking an agent at all (a reuse is not an
+attempt and leaves no receipt). A candidate that is out of scope or fails its
+gate is left in place and the campaign dispatches an agent as usual, so this
+can only ever save money: the gate stays the sole arbiter of what merges.
+`TF_NO_REUSE=1` turns it off for an operator who wants a clean re-run.
 
 A receipt file that cannot be parsed (a torn write from an interrupted
 campaign) is reported by name with one `warning:` line — `af cost` and
@@ -386,7 +412,7 @@ so you can watch routing adapt between campaigns.
 ## Testing
 
 ```sh
-cargo test        # 313 tests: unit (scheduler DAG, contention, deadlock, state,
+cargo test        # 327 tests: unit (scheduler DAG, contention, deadlock, state,
                   # receipts, config validation, sandbox policy, multi-repo,
                   # UCB1 router, retry context, subprocess contracts) + E2E
                   # (fake agent + scratch git repos — no network)
