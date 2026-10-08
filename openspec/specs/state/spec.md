@@ -35,7 +35,7 @@ THEN startup removes it.
 
 ### Requirement: Cost receipts
 
-Each attempt SHALL append a receipt (task id, attempt number, worker, model, wall-clock elapsed, agent-reported tokens if available) to `state/receipts/` — every attempt end, including failed attempts (wall-clock truth, ADR-9). Receipts carry `outcome` (`"merged"` | `"failed"` | `"interrupted"`) and `error: Option<String>` — the first line of the attempt's failure reason, capped at 200 characters, `None` for merged attempts. Receipts written before this change SHALL deserialize with outcome `"merged"` and `error = None`. Receipts also carry `cost_micros` — the provider's OWN reported cost for the attempt, as integer MICRO-USD (so the ledger carries no float drift), recorded ONLY when the transcript's `usage.cost.total` is finite and STRICTLY POSITIVE: a reported `0` means "not tracked" (every provider tested here reports exactly 0, indistinguishable from a genuinely free run) and is recorded as `None`, never as a measured free run; a missing `cost`, a `cost` that is not an object, or a `total` that is a string, negative, or NaN is `None` as well. Receipts written before this change SHALL deserialize with `cost_micros = None`. `af cost` SHALL aggregate receipts (last run, since date, or per task).
+Each attempt SHALL append a receipt (task id, attempt number, worker, model, wall-clock elapsed, agent-reported tokens if available) to `state/receipts/` — every attempt end, including failed attempts (wall-clock truth, ADR-9). Receipts carry `outcome` (`"merged"` | `"failed"` | `"interrupted"` | `"recovered"`) and `error: Option<String>` — the first line of the attempt's failure reason, capped at 200 characters, `None` for merged attempts. Receipts written before this change SHALL deserialize with outcome `"merged"` and `error = None`. Receipts also carry `cost_micros` — the provider's OWN reported cost for the attempt, as integer MICRO-USD (so the ledger carries no float drift), recorded ONLY when the transcript's `usage.cost.total` is finite and STRICTLY POSITIVE: a reported `0` means "not tracked" (every provider tested here reports exactly 0, indistinguishable from a genuinely free run) and is recorded as `None`, never as a measured free run; a missing `cost`, a `cost` that is not an object, or a `total` that is a string, negative, or NaN is `None` as well. Receipts written before this change SHALL deserialize with `cost_micros = None`. `af cost` SHALL aggregate receipts (last run, since date, or per task).
 
 When startup heal finds a stale `running` attempt whose durable agent
 outcome cannot be resumed (it must re-run the agent — phase `Spawned`, a
@@ -122,6 +122,25 @@ THEN the `interrupted` receipt names that worker and its configured model, carri
 GIVEN a task left `running` by a killed orchestrator whose persisted state carries neither `attempt_worker` nor `attempt_started_ts`
 WHEN the next `af run` heals the stale attempt by re-running the agent
 THEN the `interrupted` receipt records worker `unknown` and `wall_clock_s` 0.0 with an `error` explaining the duration is unknown.
+
+### Requirement: Recovered receipts
+
+When `af recover` or `af run`'s pre-dispatch reuse merges an archived rejected
+branch, `af` SHALL append a `recovered` receipt — a NEW record; the failed
+receipt whose work was recovered SHALL never be rewritten or deleted (history
+is append-only). The marker SHALL carry the task id and the ARCHIVED ATTEMPT's
+number parsed from the branch name (`<prefix>/<id>-rejected-<attempt>-<ts>`;
+`0` for a legacy branch name that carries no attempt), `wall_clock_s` 0.0
+(no agent ran), and the worker and model of the failed receipt it pairs with
+(same task and attempt) when that receipt is still on disk, `unknown`
+otherwise. `Receipt::counts_as_verdict` SHALL be false for a `recovered`
+receipt, so it never enters `WINS/TOTAL` and never contributes to `MEAN_S`.
+
+#### Scenario: a recovered receipt pairs with the failed attempt
+
+GIVEN an archived rejected branch named for attempt `N` of a task and the failed receipt of attempt `N` on disk
+WHEN `af recover` merges it
+THEN a `recovered` receipt for attempt `N` exists with `wall_clock_s` 0.0 and the failed receipt's worker and model, the failed receipt is unchanged, and `Receipt::counts_as_verdict` is false for the marker.
 
 ### Requirement: Single-writer state lock
 

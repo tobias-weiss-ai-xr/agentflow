@@ -253,3 +253,98 @@ fn cost_report_shows_tokens_when_present() {
         "B shows the placeholder when no tokens are recorded: {out}"
     );
 }
+
+/// The cost report gives recovered attempts their own `RECOVERED` outcome
+/// line: a failed attempt whose archived work was merged by `af recover`/
+/// reuse is not wasted, so it leaves `WASTED` (and its reason breakdown)
+/// and its seconds are reported as reclaimed instead. The `recovered` marker
+/// itself is a 0.0s non-attempt, so it does not inflate the wasted
+/// denominator — the real failed attempt it pairs with stays one attempt.
+// spec: cli/recovered-spend-in-the-cost-report
+// spec: cli/recovered-spend-in-the-cost-report#recovered-failures-leave-the-wasted-total
+#[test]
+fn cost_report_shows_recovered_line() {
+    let f = Fixture::new(TASKS_A);
+    let store = f.store();
+    store
+        .append_receipt(&receipt(
+            "A",
+            1,
+            1,
+            100.0,
+            "failed",
+            Some("acceptance gate failed (exit 1): boom"),
+        ))
+        .unwrap();
+    // The recovered marker names the same task + attempt and measures 0.0s.
+    store
+        .append_receipt(&receipt("A", 1, 2, 0.0, "recovered", None))
+        .unwrap();
+
+    let out = run::cost(&f.cfg, &f.st, &CostFilter::default());
+    assert!(
+        out.contains("RECOVERED: 1 attempt(s) — 100.0s of failed work reclaimed (not wasted)"),
+        "recovered line names the reclaimed seconds: {out}"
+    );
+    assert!(
+        out.contains("WASTED: 0.0s on 0 of 1 attempt(s) (0.0%)"),
+        "the reclaimed failure leaves WASTED while its attempt stays counted: {out}"
+    );
+    assert!(
+        !out.contains("WASTED BY REASON"),
+        "a reclaimed failure has no wasted reason: {out}"
+    );
+}
+
+/// Only the failed receipt PAIRED with a recovered marker (same task AND
+/// attempt) leaves `WASTED`; an unpaired failure of a different attempt is
+/// still waste and still appears in the by-reason breakdown.
+// spec: cli/recovered-spend-in-the-cost-report#only-the-paired-failure-is-reclaimed
+#[test]
+fn recovered_failed_receipts_excluded_from_wasted() {
+    let f = Fixture::new(TASKS_A);
+    let store = f.store();
+    // Attempt 1 failed and was later recovered …
+    store
+        .append_receipt(&receipt(
+            "A",
+            1,
+            1,
+            100.0,
+            "failed",
+            Some("acceptance gate failed (exit 1): boom"),
+        ))
+        .unwrap();
+    store
+        .append_receipt(&receipt("A", 1, 2, 0.0, "recovered", None))
+        .unwrap();
+    // … attempt 2 failed and was NOT.
+    store
+        .append_receipt(&receipt(
+            "A",
+            2,
+            3,
+            20.0,
+            "failed",
+            Some("agent exited NonZero (code 7)"),
+        ))
+        .unwrap();
+
+    let out = run::cost(&f.cfg, &f.st, &CostFilter::default());
+    assert!(
+        out.contains("WASTED: 20.0s on 1 of 2 attempt(s) (50.0%)"),
+        "only the unpaired failure is wasted; the marker is not an attempt: {out}"
+    );
+    assert!(
+        out.contains("RECOVERED: 1 attempt(s) — 100.0s of failed work reclaimed (not wasted)"),
+        "the paired failure's seconds are reclaimed: {out}"
+    );
+    assert!(
+        out.contains("agent exited NonZero (code 7)"),
+        "the true failure's reason stays in the breakdown: {out}"
+    );
+    assert!(
+        !out.contains("acceptance gate failed"),
+        "the reclaimed failure leaves the breakdown: {out}"
+    );
+}

@@ -28,6 +28,9 @@ on every exit path. On success `af recover` SHALL merge the archived branch
 into the base with the message `af: <id> — <title>`, set the task's state to
 `Done` with phase `GatePassed`, persist it, remove the recovered worktree and
 the archived branch, and print `✓ <id> recovered to done (agent not re-run)`.
+It SHALL additionally append a NON-VERDICT `recovered` receipt naming the
+archived attempt (see the `state` spec's Recovered receipts requirement),
+while leaving the failed attempt's own receipt exactly as it was.
 
 Exit codes: `0` merged (or `--dry-run` reported); `1` re-validation failed
 (scope violation or gate failure — the archived branch stays in place); `2`
@@ -81,7 +84,7 @@ THEN it exits 2 naming the `<prefix>/<id>-rejected-<ts>` pattern searched
 
 ### Requirement: Run commands
 
-`af run` SHALL run the dispatch loop until all tasks are done or deadlock, honoring `--once` (one dispatch round), `--dry-run` (show plan, change nothing), `--worker <name>`, `--task <id>`, and `--poll <secs>`. Before dispatching a worker for a ready task, `af run` SHALL look for an archived rejected branch for that task and, when the branch's change is covered by the task's CURRENT `scope` and the task's CURRENT acceptance gate passes on it, merge it and mark the task `Done` WITHOUT invoking the agent (the pre-dispatch reuse required by `lifecycle`), printing a line naming the reused branch. This reuse is ON by default; setting `TF_NO_REUSE=1` disables it for a clean re-run. Reuse never fires for a task with no archive, an out-of-scope archive, a gate-failing archive, or a task already `Done`; those cases fall through to the normal agent dispatch.
+`af run` SHALL run the dispatch loop until all tasks are done or deadlock, honoring `--once` (one dispatch round), `--dry-run` (show plan, change nothing), `--worker <name>`, `--task <id>`, and `--poll <secs>`. Before dispatching a worker for a ready task, `af run` SHALL look for an archived rejected branch for that task and, when the branch's change is covered by the task's CURRENT `scope` and the task's CURRENT acceptance gate passes on it, merge it and mark the task `Done` WITHOUT invoking the agent (the pre-dispatch reuse required by `lifecycle`), printing a line naming the reused branch. A successful reuse SHALL additionally append the same NON-VERDICT `recovered` receipt `af recover` writes, naming the archived attempt. This reuse is ON by default; setting `TF_NO_REUSE=1` disables it for a clean re-run. Reuse never fires for a task with no archive, an out-of-scope archive, a gate-failing archive, or a task already `Done`; those cases fall through to the normal agent dispatch.
 
 #### Scenario: dry run changes nothing
 
@@ -258,3 +261,28 @@ THEN each declaring worker's COST cell still shows its declared rate — `N.NNx`
 GIVEN an `interrupted` receipt whose `worker` is the placeholder `unknown` (the startup heal cannot know which worker a killed attempt was running)
 WHEN `af cost` runs
 THEN the report shows the `INTERRUPTED` line for that attempt but does NOT footnote `unknown` as a worker absent from the config, while a receipt naming a worker that genuinely is not in `cfg.workers` is still footnoted.
+
+### Requirement: Recovered spend in the cost report
+
+`af cost` SHALL report recovered attempts on their own `RECOVERED:` outcome
+line, distinct from `WASTED` and `INTERRUPTED` — recovery merged work that was
+already paid for, so it is neither a new attempt nor lost spend. A failed
+receipt paired by (task, attempt) with a `recovered` receipt in the SAME
+receipt selection SHALL leave the wasted total, the wasted attempt count and
+the `WASTED BY REASON` breakdown, and its wall-clock SHALL be reported as
+reclaimed on the `RECOVERED` line. The wasted percentage denominator SHALL
+count only real attempts: `recovered` markers (0.0s, no agent ran, not an
+attempt) SHALL be excluded from it, while the failed receipt they pair with
+stays counted as one attempt whether or not it was later recovered.
+
+#### Scenario: Recovered failures leave the wasted total
+
+GIVEN a failed receipt of 100.0s and a `recovered` receipt for the same task and attempt in the selection
+WHEN `af cost` runs
+THEN the `RECOVERED` line names 1 attempt and 100.0s reclaimed, and the `WASTED` line counts neither that failure nor its seconds.
+
+#### Scenario: Only the paired failure is reclaimed
+
+GIVEN two failed receipts for different attempts of a task, only one paired with a `recovered` receipt
+WHEN `af cost` runs
+THEN only the paired failure leaves `WASTED` and the `WASTED BY REASON` breakdown; the unpaired failure stays wasted.
