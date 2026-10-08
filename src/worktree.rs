@@ -112,19 +112,25 @@ pub fn remove_worktree_only(repo: &Path, wt: &Worktree) {
     );
 }
 
-/// Keep a COPY of `branch`'s tip under a fresh, discoverable name —
-/// `<branch>-rejected-<now>` — so the work an attempt paid for survives
-/// the cleanup that follows a failure, without disturbing the original
-/// branch (the retry MUST still start clean from the current base).
-/// Returns the new branch name. Never fails the caller: a git error or a
-/// name collision that cannot be resolved yields `None`, because the
-/// attempt's own failure is the story and archiving is a courtesy.
-pub fn archive_branch(repo: &Path, branch: &str, now: u64) -> Option<String> {
+/// Keep a COPY of `branch`'s tip under a fresh, discoverable name so the work
+/// an attempt paid for survives the cleanup that follows a failure, without
+/// disturbing the original branch (the retry MUST still start clean from the
+/// current base). With `Some(attempt)` the name is
+/// `<branch>-rejected-<attempt>-<now>`; with `None` it stays the legacy
+/// `<branch>-rejected-<now>` (startup heal has no attempt to name). A `-<n>`
+/// suffix is appended when the first choice is already taken. Returns the new
+/// branch name. Never fails the caller: a git error or a name collision that
+/// cannot be resolved yields `None`, because the attempt's own failure is the
+/// story and archiving is a courtesy.
+pub fn archive_branch(repo: &Path, branch: &str, attempt: Option<u32>, now: u64) -> Option<String> {
     // Nothing to preserve when the branch is already gone.
     if !branch_exists(repo, branch) {
         return None;
     }
-    let base = format!("{branch}-rejected-{now}");
+    let base = match attempt {
+        Some(a) => format!("{branch}-rejected-{a}-{now}"),
+        None => format!("{branch}-rejected-{now}"),
+    };
     let mut name = base.clone();
     let mut n: u64 = 1;
     loop {
@@ -141,33 +147,55 @@ pub fn archive_branch(repo: &Path, branch: &str, now: u64) -> Option<String> {
     }
 }
 
-/// Recover the task id from an archived rejected branch name built by
-/// [`archive_branch`]: `<prefix>/<id>-rejected-<unix-ts>`, with an optional
-/// `-<n>` suffix when the first choice of name was already taken (round 11
-/// appends one). Returns `None` for anything that is not an archived
-/// rejected branch of `prefix` — a plain branch (`tf/x`), a foreign prefix
-/// (`other/x-rejected-1`), or a malformed tail.
-///
-/// Task ids contain hyphens (`r11-measured-cost`), so the parser cannot count
-/// hyphens: it locates the LAST `-rejected-` marker (everything after it is a
-/// numeric tail the archiver generated) and validates that tail as `<ts>` or
-/// `<ts>-<n>`. This is why `tf/x-rejected-1-2` yields `x`, not `x-rejected-1`.
-pub fn archived_task_id(branch: &str, prefix: &str) -> Option<String> {
-    parse_archived_branch(branch, prefix).map(|(id, _, _)| id)
+/// The parsed fields of an archived rejected branch name built by
+/// [`archive_branch`]: `<prefix>/<id>-rejected-<attempt>-<unix-ts>` (plus an
+/// optional `-<n>` collision suffix), or the legacy
+/// `<prefix>/<id>-rejected-<unix-ts>` where `attempt` is `0`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchivedBranch {
+    pub task_id: String,
+    /// 1-based attempt number the archive was named for; `0` for a legacy
+    /// archive whose name carries no attempt.
+    pub attempt: u32,
+    /// Unix seconds the archiver wrote.
+    pub ts: u64,
+    /// The `-<n>` collision suffix (0 when the first choice of name was free).
+    pub collision: u64,
 }
 
-/// Parse an archived rejected branch name built by [`archive_branch`]:
-/// `<prefix>/<id>-rejected-<unix-ts>`, with an optional `-<n>` collision
-/// suffix (round 11 appends one). Returns `(task_id, ts, n)` where `n` is
-/// the collision suffix (0 when absent). `None` for anything that is not an
-/// archived rejected branch of `prefix` — a plain branch (`tf/x`), a foreign
-/// prefix (`other/x-rejected-1`), or a malformed tail.
+/// [`archive_branch`] writes real wall-clock seconds (well past 2001), so a
+/// numeric tail field `>= 1_000_000_000` is the ts and the field just before
+/// it is the attempt. This is what lets the parser tell the current
+/// `<attempt>-<ts>` form apart from the legacy `<ts>` / `<ts>-<n>` forms
+/// without a format flag.
+const TS_FLOOR: u64 = 1_000_000_000;
+
+/// Recover the task id from an archived rejected branch name built by
+/// [`archive_branch`]. Returns `None` for anything that is not an archived
+/// rejected branch of `prefix` — a plain branch (`tf/x`), a foreign prefix
+/// (`other/x-rejected-1`), or a malformed tail. See
+/// [`parse_archived_branch`] for the accepted forms.
+pub fn archived_task_id(branch: &str, prefix: &str) -> Option<String> {
+    parse_archived_branch(branch, prefix).map(|a| a.task_id)
+}
+
+/// Parse an archived rejected branch name built by [`archive_branch`] into
+/// its fields. Accepts the current
+/// `<prefix>/<id>-rejected-<attempt>-<unix-ts>` form (plus a `-<n>` collision
+/// suffix) and the legacy `<prefix>/<id>-rejected-<unix-ts>` form (plus
+/// `-<n>`, where `attempt` is `0`). Returns `None` for anything that is not
+/// an archived rejected branch of `prefix` — a plain branch (`tf/x`), a
+/// foreign prefix (`other/x-rejected-1`), or a malformed tail.
 ///
 /// Task ids contain hyphens (`r11-measured-cost`), so the parser cannot count
 /// hyphens: it locates the LAST `-rejected-` marker (everything after it is a
-/// numeric tail the archiver generated) and validates that tail as `<ts>` or
-/// `<ts>-<n>`. This is why `tf/x-rejected-1-2` yields `x`, not `x-rejected-1`.
-pub fn parse_archived_branch(branch: &str, prefix: &str) -> Option<(String, u64, u64)> {
+/// numeric tail the archiver generated). A one-field tail is a legacy `<ts>`;
+/// a two-field tail is either the current `<attempt>-<ts>` (when the second
+/// field is a real ts `>= 1_000_000_000`) or a legacy `<ts>-<n>`; a
+/// three-field tail is the current `<attempt>-<ts>-<n>` and requires a real
+/// ts. This is why `tf/x-rejected-1-2` yields the legacy ts `1`, not the
+/// attempt `1`, and `tf/x-rejected-1-2-3` is rejected.
+pub fn parse_archived_branch(branch: &str, prefix: &str) -> Option<ArchivedBranch> {
     let rest = branch.strip_prefix(prefix)?.strip_prefix('/')?;
     const MARKER: &str = "-rejected-";
     let at = rest.rfind(MARKER)?;
@@ -176,22 +204,56 @@ pub fn parse_archived_branch(branch: &str, prefix: &str) -> Option<(String, u64,
         return None;
     }
     let tail = &rest[at + MARKER.len()..];
-    let mut parts = tail.split('-');
-    let ts = parts.next().unwrap_or("");
-    let suffix = parts.next();
-    if !is_digits(ts) || parts.next().is_some() {
+    let parts: Vec<&str> = tail.split('-').collect();
+    if !parts.iter().all(|p| is_digits(p)) {
         return None;
     }
-    let ts: u64 = ts.parse().ok()?;
-    let n = match suffix {
-        Some(s) if !is_digits(s) => return None,
-        Some(s) => s.parse().ok()?,
-        None => 0,
-    };
-    Some((id.to_string(), ts, n))
+    let num = |s: &str| s.parse::<u64>().ok();
+    match parts.as_slice() {
+        [ts] => Some(ArchivedBranch {
+            task_id: id.to_string(),
+            attempt: 0,
+            ts: num(ts)?,
+            collision: 0,
+        }),
+        [a, b] => {
+            let (a, b) = (num(a)?, num(b)?);
+            if b >= TS_FLOOR && a < TS_FLOOR {
+                // Current form: <attempt>-<ts>.
+                Some(ArchivedBranch {
+                    task_id: id.to_string(),
+                    attempt: u32::try_from(a).ok()?,
+                    ts: b,
+                    collision: 0,
+                })
+            } else {
+                // Legacy collision: <ts>-<n>.
+                Some(ArchivedBranch {
+                    task_id: id.to_string(),
+                    attempt: 0,
+                    ts: a,
+                    collision: b,
+                })
+            }
+        }
+        [attempt, ts, n] => {
+            let (attempt, ts, n) = (num(attempt)?, num(ts)?, num(n)?);
+            if ts < TS_FLOOR {
+                return None;
+            }
+            Some(ArchivedBranch {
+                task_id: id.to_string(),
+                attempt: u32::try_from(attempt).ok()?,
+                ts,
+                collision: n,
+            })
+        }
+        _ => None,
+    }
 }
 
-/// A non-empty run of ASCII digits (the unix ts the archiver writes).
+/// A non-empty run of ASCII digits (the numeric tail fields the archiver
+/// writes).
 fn is_digits(s: &str) -> bool {
     !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
 }
@@ -220,18 +282,41 @@ pub fn archived_branches(repo: &Path, prefix: &str) -> Vec<String> {
 }
 
 /// The NEWEST archived rejected branch for task `id` among `branches`,
-/// decided PURESTLY by parsing the numeric `<ts>` (then the `-<n>` collision
-/// suffix) — never by git's output order and never by committer dates, so
-/// the same branch set always selects the same branch. Returns the full
-/// branch name. Foreign prefixes and non-rejected names are ignored by
-/// [`parse_archived_branch`].
+/// decided PURESTLY by parsing the numeric `<ts>` (then the attempt number,
+/// then the `-<n>` collision suffix) — never by git's output order and never
+/// by committer dates, so the same branch set always selects the same branch.
+/// Returns the full branch name. Foreign prefixes and non-rejected names are
+/// ignored by [`parse_archived_branch`].
 pub fn newest_archived_branch(branches: &[String], prefix: &str, id: &str) -> Option<String> {
     branches
         .iter()
         .filter_map(|b| {
             parse_archived_branch(b, prefix)
-                .filter(|(bid, _, _)| bid == id)
-                .map(|(_, ts, n)| (ts, n, b.clone()))
+                .filter(|a| a.task_id == id)
+                .map(|a| (a.ts, a.attempt, a.collision, b.clone()))
+        })
+        .max_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)))
+        .map(|(_, _, _, b)| b)
+}
+
+/// The NEWEST archived rejected branch for task `id` whose parsed attempt is
+/// exactly `attempt`, decided PURELY by parsing the numeric `<ts>` (then the
+/// collision suffix) — never by git's output order and never by committer
+/// dates. `attempt` may be `0` to select a legacy archive with no attempt in
+/// its name. Foreign prefixes, other tasks and non-rejected names are ignored
+/// by [`parse_archived_branch`]. Returns the full branch name.
+pub fn archived_branch_for_attempt(
+    branches: &[String],
+    prefix: &str,
+    id: &str,
+    attempt: u32,
+) -> Option<String> {
+    branches
+        .iter()
+        .filter_map(|b| {
+            parse_archived_branch(b, prefix)
+                .filter(|a| a.task_id == id && a.attempt == attempt)
+                .map(|a| (a.ts, a.collision, b.clone()))
         })
         .max_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)))
         .map(|(_, _, b)| b)
@@ -420,7 +505,7 @@ fn archive_stale_branch(repo: &Path, branch: &str) {
     if !matches!(commits_ahead(repo, &base, branch), Ok(n) if n > 0) {
         return;
     }
-    let _ = archive_branch(repo, branch, crate::state::now_ts());
+    let _ = archive_branch(repo, branch, None, crate::state::now_ts());
 }
 
 /// Best-effort removal of every worktree dir under `wt_root` at startup.

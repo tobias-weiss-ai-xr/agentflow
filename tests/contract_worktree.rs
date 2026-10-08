@@ -26,9 +26,9 @@
 //! here is shared between tests. Uses only std + the crate; no new deps.
 
 use agentflow::worktree::{
-    archive_branch, archived_branches, archived_task_id, branch_exists, clean, clean_all,
-    clean_rejected, create, current_branch, heal, is_repo, merge, orphan_ids, remove, MergeLocks,
-    Worktree,
+    archive_branch, archived_branch_for_attempt, archived_branches, archived_task_id,
+    branch_exists, clean, clean_all, clean_rejected, create, current_branch, heal, is_repo, merge,
+    orphan_ids, parse_archived_branch, remove, MergeLocks, Worktree,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -558,7 +558,7 @@ fn archive_branch_copies_the_tip_without_touching_the_original() {
     let tip = git(&s.repo, &["rev-parse", "tf/R1"]);
 
     // A real branch archives to a copy pointing at the SAME tip.
-    let name = archive_branch(&s.repo, "tf/R1", 1234).expect("archives a real branch");
+    let name = archive_branch(&s.repo, "tf/R1", None, 1234).expect("archives a real branch");
     assert_eq!(name, "tf/R1-rejected-1234");
     assert_eq!(
         git(&s.repo, &["rev-parse", name.as_str()]).trim(),
@@ -574,7 +574,7 @@ fn archive_branch_copies_the_tip_without_touching_the_original() {
     assert!(wt.path.exists(), "worktree untouched by archiving");
 
     // A name collision resolves via a growing `-<n>` suffix.
-    let name2 = archive_branch(&s.repo, "tf/R1", 1234).expect("resolves a name collision");
+    let name2 = archive_branch(&s.repo, "tf/R1", None, 1234).expect("resolves a name collision");
     assert_eq!(name2, "tf/R1-rejected-1234-1");
     assert_eq!(
         git(&s.repo, &["rev-parse", name2.as_str()]).trim(),
@@ -583,9 +583,172 @@ fn archive_branch_copies_the_tip_without_touching_the_original() {
     );
 
     // A missing branch is `None` — archiving can never fail the caller.
-    assert!(archive_branch(&s.repo, "tf/does-not-exist", 999).is_none());
+    assert!(archive_branch(&s.repo, "tf/does-not-exist", None, 999).is_none());
 
     remove(&s.repo, &wt);
+}
+
+/// The current archive name carries the ATTEMPT number —
+/// `<branch>-rejected-<attempt>-<now>` — so a later `af recover --attempt N`
+/// can pick the exact paid-for attempt, while a name collision still grows a
+/// `-<n>` suffix after the ts.
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch
+#[test]
+fn archive_branch_includes_attempt_in_name() {
+    let s = Scratch::new("archive-attempt");
+    let wt = create_ok(&s.repo, &s.wt_root, "R1", "tf");
+    std::fs::write(wt.path.join("f.txt"), "agent worked\n").unwrap();
+    git(&wt.path, &["commit", "-am", "agent work"]);
+    let tip = git(&s.repo, &["rev-parse", "tf/R1"]).trim().to_string();
+
+    let name =
+        archive_branch(&s.repo, "tf/R1", Some(2), 1791259017).expect("archives a real branch");
+    assert_eq!(
+        name, "tf/R1-rejected-2-1791259017",
+        "attempt is in the name"
+    );
+    assert_eq!(
+        git(&s.repo, &["rev-parse", name.as_str()]).trim(),
+        tip,
+        "the attempt-named copy points at the original's tip"
+    );
+
+    // The collision suffix still applies after the ts.
+    let name2 = archive_branch(&s.repo, "tf/R1", Some(2), 1791259017).expect("collision");
+    assert_eq!(name2, "tf/R1-rejected-2-1791259017-1");
+    assert_eq!(
+        git(&s.repo, &["rev-parse", name2.as_str()]).trim(),
+        tip,
+        "the collided copy points at the same tip"
+    );
+
+    // The parser recovers the attempt the name advertises.
+    let parsed = parse_archived_branch(&name, "tf").expect("parses its own name");
+    assert_eq!(
+        (
+            parsed.task_id.as_str(),
+            parsed.attempt,
+            parsed.ts,
+            parsed.collision
+        ),
+        ("R1", 2, 1791259017, 0)
+    );
+    remove(&s.repo, &wt);
+}
+
+/// Without an attempt (the startup-heal path has no attempt to name), the
+/// archiver keeps the legacy `<branch>-rejected-<now>` name, with the same
+/// `-<n>` collision behaviour.
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch
+#[test]
+fn archive_branch_without_attempt_is_legacy() {
+    let s = Scratch::new("archive-legacy");
+    let wt = create_ok(&s.repo, &s.wt_root, "R1", "tf");
+    std::fs::write(wt.path.join("f.txt"), "agent worked\n").unwrap();
+    git(&wt.path, &["commit", "-am", "agent work"]);
+
+    let name = archive_branch(&s.repo, "tf/R1", None, 1234).expect("archives a real branch");
+    assert_eq!(
+        name, "tf/R1-rejected-1234",
+        "no attempt keeps the legacy name"
+    );
+    let name2 = archive_branch(&s.repo, "tf/R1", None, 1234).expect("collision");
+    assert_eq!(name2, "tf/R1-rejected-1234-1");
+
+    // The legacy name parses with attempt 0 (no attempt advertised).
+    let parsed = parse_archived_branch(&name, "tf").expect("parses the legacy name");
+    assert_eq!(
+        (
+            parsed.task_id.as_str(),
+            parsed.attempt,
+            parsed.ts,
+            parsed.collision
+        ),
+        ("R1", 0, 1234, 0)
+    );
+    remove(&s.repo, &wt);
+}
+
+/// The current `<attempt>-<ts>` tail is parsed as an attempt (disambiguated
+/// from a legacy `<ts>-<n>` by the ts field `>= 1_000_000_000`), even when
+/// the task id itself contains hyphens.
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch
+#[test]
+fn parse_archived_branch_reads_attempt() {
+    let a = parse_archived_branch("tf/x-rejected-3-1791259017", "tf").expect("current format");
+    assert_eq!(
+        (a.task_id.as_str(), a.attempt, a.ts, a.collision),
+        ("x", 3, 1791259017, 0)
+    );
+
+    // Hyphens in the id are not counted: the LAST `-rejected-` marker wins.
+    let a = parse_archived_branch("tf/r11-measured-cost-rejected-2-1791259017", "tf")
+        .expect("hyphenated id + attempt");
+    assert_eq!(
+        (a.task_id.as_str(), a.attempt, a.ts, a.collision),
+        ("r11-measured-cost", 2, 1791259017, 0)
+    );
+
+    // A current name is selectable BY attempt, purely from the parsed name.
+    let branches = vec![
+        "tf/x-rejected-1-1791259017".to_string(),
+        "tf/x-rejected-2-1791259018".to_string(),
+        "tf/x-rejected-2-1791259019-1".to_string(),
+    ];
+    assert_eq!(
+        archived_branch_for_attempt(&branches, "tf", "x", 2).as_deref(),
+        Some("tf/x-rejected-2-1791259019-1"),
+        "newest archive of attempt 2"
+    );
+    assert_eq!(archived_branch_for_attempt(&branches, "tf", "x", 9), None);
+}
+
+/// The pre-round-14 names — bare `<ts>` and collision `<ts>-<n>` — still
+/// parse, reporting no attempt (0) so old archives stay recoverable and
+/// sweepable.
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch
+#[test]
+fn parse_archived_branch_legacy_no_attempt() {
+    let a = parse_archived_branch("tf/x-rejected-1791259017", "tf").unwrap();
+    assert_eq!(
+        (a.task_id.as_str(), a.attempt, a.ts, a.collision),
+        ("x", 0, 1791259017, 0),
+        "legacy bare ts has no attempt"
+    );
+
+    // A legacy collision keeps its ts+n reading even though the ts is real.
+    let a = parse_archived_branch("tf/x-rejected-1791259017-1", "tf").unwrap();
+    assert_eq!(
+        (a.task_id.as_str(), a.attempt, a.ts, a.collision),
+        ("x", 0, 1791259017, 1),
+        "legacy collision is not an attempt name"
+    );
+
+    // The small-ts shapes the earlier rounds test still parse as legacy.
+    let a = parse_archived_branch("tf/x-rejected-1-2", "tf").unwrap();
+    assert_eq!(
+        (a.task_id.as_str(), a.attempt, a.ts, a.collision),
+        ("x", 0, 1, 2)
+    );
+}
+
+/// A current name with a collision suffix is `<attempt>-<ts>-<n>`; a
+/// three-field tail whose middle field is not a real ts is rejected rather
+/// than guessed.
+// spec: worktree/rejected-work-is-preserved-on-an-archived-branch
+#[test]
+fn parse_archived_branch_new_format_with_collision() {
+    let a = parse_archived_branch("tf/x-rejected-2-1791259017-1", "tf").unwrap();
+    assert_eq!(
+        (a.task_id.as_str(), a.attempt, a.ts, a.collision),
+        ("x", 2, 1791259017, 1)
+    );
+
+    // A non-ts middle field is not the current format, and is not legacy
+    // either (legacy has at most two fields): rejected.
+    assert_eq!(parse_archived_branch("tf/x-rejected-1-2-3", "tf"), None);
+    assert_eq!(parse_archived_branch("tf/x-rejected-1-2-3-4", "tf"), None);
+    assert_eq!(parse_archived_branch("tf/x-rejected-2-abc-1", "tf"), None);
 }
 
 /// `af clean` also sweeps the archived rejected refs round 11 leaves behind:
@@ -623,8 +786,8 @@ fn clean_removes_archived_rejected_branches() {
     let live = create_ok(&s.repo, &s.wt_root, "live", "tf");
     git(&dead.path, &["commit", "--allow-empty", "-m", "dead work"]);
     git(&live.path, &["commit", "--allow-empty", "-m", "live work"]);
-    let dead_archived = archive_branch(&s.repo, "tf/dead", 111).expect("archive dead");
-    let live_archived = archive_branch(&s.repo, "tf/live", 222).expect("archive live");
+    let dead_archived = archive_branch(&s.repo, "tf/dead", None, 111).expect("archive dead");
+    let live_archived = archive_branch(&s.repo, "tf/live", None, 222).expect("archive live");
     git(&s.repo, &["branch", "other/x-rejected-1"]);
 
     // Dry run lists exactly the two archived refs (sorted) and removes none.
