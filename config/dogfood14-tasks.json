@@ -1,0 +1,66 @@
+{
+  "_meta": {
+    "round": 14,
+    "theme": "recovery ledger — af cost must not count recovered work as WASTED",
+    "design": "T1 puts the attempt number in the archive name (parser disambiguates by ts >= 1_000_000_000). T2 writes a 'recovered' receipt (non-verdict, wall_clock_s 0) when af recover or auto-reuse merges an archived branch, and af cost shows a RECOVERED: line that pairs the recovered failed receipt out of WASTED. T3 adds --attempt N to af recover to select a specific archive."
+  },
+  "tasks": [
+    {
+      "id": "r14-rejected-attempt-name",
+      "title": "r14-rejected-attempt-name: archive names carry the attempt number",
+      "deps": [],
+      "manual": false,
+      "priority": 1,
+      "scope": [
+        "src/worktree.rs",
+        "src/execute.rs",
+        "tests/contract_worktree.rs",
+        "openspec/specs/worktree/spec.md"
+      ],
+      "touch": [
+        "src/worktree.rs"
+      ],
+      "accept": "grep -q 'fn archive_branch_includes_attempt_in_name' tests/contract_worktree.rs && grep -q 'fn archive_branch_without_attempt_is_legacy' tests/contract_worktree.rs && grep -q 'fn parse_archived_branch_reads_attempt' tests/contract_worktree.rs && grep -q 'fn parse_archived_branch_legacy_no_attempt' tests/contract_worktree.rs && grep -q 'fn parse_archived_branch_new_format_with_collision' tests/contract_worktree.rs && openspec validate --specs && ./scripts/coverage-gate.sh && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings"
+    },
+    {
+      "id": "r14-recovery-ledger",
+      "title": "r14-recovery-ledger: af recover and auto-reuse write a recovered receipt; af cost shows RECOVERED not WASTED",
+      "deps": ["r14-rejected-attempt-name"],
+      "manual": false,
+      "priority": 1,
+      "scope": [
+        "src/state.rs",
+        "src/run.rs",
+        "tests/cli.rs",
+        "tests/e2e.rs",
+        "tests/interrupted.rs",
+        "tests/ledger_truth.rs",
+        "openspec/specs/state/spec.md",
+        "openspec/specs/cli/spec.md"
+      ],
+      "touch": [
+        "src/state.rs",
+        "src/run.rs"
+      ],
+      "accept": "grep -q 'fn recover_writes_a_recovered_receipt' tests/cli.rs && grep -q 'fn cost_report_shows_recovered_line' tests/ledger_truth.rs && grep -q 'fn recovered_failed_receipts_excluded_from_wasted' tests/ledger_truth.rs && grep -q 'fn reuse_writes_a_recovered_receipt' tests/e2e.rs && openspec validate --specs && ./scripts/coverage-gate.sh && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings"
+    },
+    {
+      "id": "r14-recover-attempt-flag",
+      "title": "r14-recover-attempt-flag: af recover --task ID [--attempt N] selects a specific archived attempt",
+      "deps": ["r14-recovery-ledger"],
+      "manual": false,
+      "priority": 1,
+      "scope": [
+        "src/run.rs",
+        "src/main.rs",
+        "tests/cli.rs",
+        "openspec/specs/cli/spec.md"
+      ],
+      "touch": [
+        "src/run.rs",
+        "src/main.rs"
+      ],
+      "accept": "grep -q 'fn recover_with_attempt_flag_selects_the_right_archive' tests/cli.rs && grep -q 'fn recover_attempt_flag_picks_newest_without_flag' tests/cli.rs && grep -q 'fn recover_attempt_flag_rejects_unknown_attempt' tests/cli.rs && openspec validate --specs && ./scripts/coverage-gate.sh && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings"
+    }
+  ]
+}
