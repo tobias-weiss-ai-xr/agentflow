@@ -26,14 +26,14 @@ providers directly.
 - **Retry memory** — failed attempts record their error; retry prompts list the task's earlier failures so the agent doesn't repeat them
 - **Exact acceptance gates** — each task declares a shell command that must exit 0 before merge
 - **Honest success** — `Merged` means the base really contains the work, and it is never inferred from an exit code: if the agent exits 0 leaving a dirty worktree the harness commits that tree before judging it (so the scope check, the gate and the merge all see the same content), an attempt that ends with zero commits ahead of the base is a failure rather than a silent `Done`, and the merge is verified against the base before it is reported
-- **Work preserved on every failure path** — a stall, a timeout, a non-zero agent exit, a scope violation, a merge conflict or an interrupted campaign all archive the attempt's branch as `<branch>-rejected-<ts>`; `af recover`, or the next `af run`, can then land that work without paying an agent for it twice
+- **Work preserved on every failure path** — a stall, a timeout, a non-zero agent exit, a scope violation, a merge conflict or an interrupted campaign all archive the attempt's branch as `<branch>-rejected-[<attempt>-]<ts>`; `af recover`, or the next `af run`, can then land that work without paying an agent for it twice
 - **Dependency DAG** — `deps` ordering, critical-path priority, deadlock detection
 - **Contention avoidance** — tasks with overlapping `scope` globs are not dispatched concurrently
 - **Retry** — `max_attempts` per task, fresh branch + worktree on every attempt
 - **Self-healing** — atomic JSON state; crash-safe resume; orphan worktree cleanup at startup, plus `af clean [--dry-run]` to sweep leftovers from crashed runs — including the archived `<branch>-rejected-*` refs, whose branches are kept while their task is still running
 - **Validated config** — `af validate` pre-flights tasks/workers (dependency cycles, duplicate ids, no enabled workers) without dispatching anything
 - **Observable** — status board (`af status [--json]`), live `attach`, per-task logs, wall-clock cost receipts
-- **Sound by construction** — spec → contract → test pyramid (327 tests, incl. E2E against a stub agent + scratch git repos; no network in CI)
+- **Sound by construction** — spec → contract → test pyramid (340 tests, incl. E2E against a stub agent + scratch git repos; no network in CI)
 
 ## Quick start
 
@@ -61,7 +61,7 @@ af api status [--json] | results --task ID
 af attach ID
 af cost [--task ID] [--last] [--since DATE|UNIX_TS]
 af clean [--dry-run]
-af recover --task ID [--dry-run]
+af recover --task ID [--attempt N] [--dry-run]
 af validate [--worker NAME]
 ```
 
@@ -149,7 +149,9 @@ measurement keeps the declared-basis output byte-for-byte, so nothing about a
 no-telemetry provider changes.
 
 The report also ends with a waste section: `WASTED: <seconds>s on <failed>
-of <total> attempt(s) (<pct>%)`, followed by a `WASTED BY REASON` breakdown
+of <total> attempt(s) (<pct>%)`, followed by a `RECOVERED:` line that pairs
+salvaged failed attempts with their recovery receipt and excludes them from
+`WASTED`, then a `WASTED BY REASON` breakdown
 that groups failed attempts by the CAUSE — the text before the first `:` in
 the `error` field, trimmed (and `unknown` when the receipt has no error).
 Grouping by cause keeps two failures with the same cause but different file
@@ -190,10 +192,16 @@ archived branch against the task's CURRENT scope and re-runs its acceptance
 gate, then merges it on success — without re-invoking the agent. This is what
 makes an operator's over-narrow scope cost one re-validation instead of a
 re-run. It selects the newest archived branch by parsing the timestamp (never
-by git's ordering), exits 2 when there is nothing to recover (or no such task),
-and exits 1 when the work still fails its re-check, keeping the branch. The
-failed attempt's receipt is left untouched: recovery does not rewrite history,
-it reuses it. `--dry-run` reports what it would do and changes nothing.
+by git's ordering), exits 2 when there is nothing to recover (or no such task,
+or no archived branch for the requested `--attempt`), and exits 1 when the
+work still fails its re-check, keeping the branch. The failed attempt's receipt
+is left untouched: recovery does not rewrite history, it reuses it. `--dry-run`
+reports what it would do and changes nothing. `--attempt N` restricts the
+selection to archives whose name encodes that attempt number (legacy
+attempt-less archives parse as attempt 0). Recovery appends a non-verdict
+`recovered` receipt (wall-clock 0) so `af cost` can distinguish salvaged work
+from wasted: a `RECOVERED:` line shows the reclaimed seconds and the failed
+receipt is excluded from `WASTED`.
 
 `af run` now makes that recovery decision by itself: before dispatching an
 agent for a task it looks for an archived branch of that task whose changed
@@ -412,7 +420,7 @@ so you can watch routing adapt between campaigns.
 ## Testing
 
 ```sh
-cargo test        # 327 tests: unit (scheduler DAG, contention, deadlock, state,
+cargo test        # 340 tests: unit (scheduler DAG, contention, deadlock, state,
                   # receipts, config validation, sandbox policy, multi-repo,
                   # UCB1 router, retry context, subprocess contracts) + E2E
                   # (fake agent + scratch git repos — no network)
