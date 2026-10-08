@@ -88,6 +88,42 @@ track the Go features (`attach`, `TF_MAX_PARALLEL`, `TF_POLL`) so they are not
 re-implemented? If Go is canonical, move these items into the Go issue
 tracker and keep the Rust repo's docs honest about being a parallel port.
 
+---
+
+## Rust-port campaign learnings (first real run, 2026-10-08)
+
+A 2-task campaign on the Rust `af` (build from this repo) against the
+World-Office honing slices shipped 1 merged + 1 recovered. Grounded findings:
+
+1. **The Rust port silently ignores a legacy worker `command`.** A
+   `workers.json` written for the old convention
+   (`command:"opencode run -m …"$(cat {prompt})""`) makes the agent exit 1 in
+   ~4s because `spawn_argv` builds `cli --provider P --model M -p @prompt`
+   and never touches `command`. `af validate` said *config OK* with no hint.
+   **Improvement:** `af validate` should warn when a worker carries a stale
+   `command` / an unknown key and print the current CLI arg contract
+   (`--provider/--model/-p @file`), and `README`+`docs` should document the
+   adapter requirement for CLIs that don't accept that shape.
+2. **Non-opencode CLIs need an adapter.** opencode's real shape is
+   `opencode run -m M "<prompt>"` — incompatible. A 30-line shell adapter
+   (`scripts/af-opencode.sh`) that swallows `--provider/--model/-p` and execs
+   opencode unblocked the campaign. Worth a `docs/worker-cli-contract.md`.
+3. **`af recover` recovered a task whose only failure was a bad acceptance
+   gate — without re-running the agent.** First attempt of the gate was a
+   shell bug (`[: : integer expected`, exit 2); fixing the gate in
+   `tasks.json` and calling `af recover --task ID` re-validated it against
+   the kept work and marked it done instantly. Excellent behavior.
+4. **Gate failure detail is lost in status.** `af status` showed only
+   `acceptance gate failed (exit 2)`; the gate's `stderr` (`[: : integer
+   expected`) required reading the run log. **Improvement:** carry the gate's
+   first error line into the receipt `error` / `status --json`.
+5. **`af status` unexpectedly needs a tasks file.** Running `af status` from
+   a CWD where `config/tasks.json` defaulted elsewhere reported an unrelated
+   stale campaign (`WO-APPLYOP-SMOKE`) until `TF_TASKS_JSON`+`TF_STATE_DIR`
+   were supplied. **Improvement:** `status` should render from the state dir
+   and default to it without requiring `--tasks` (a registry of the active
+   run, cf. §1 `af wait`).
+
 **Note on process:** agentflow is openspec-driven (`openspec/`), so the natural
 next step is to fold the accepted items here into OpenSpec change proposals
 (esp. §2, §3, §5) before implementation.
