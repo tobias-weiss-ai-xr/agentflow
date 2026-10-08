@@ -166,8 +166,9 @@ fn retry_delay_paces_attempts_without_delaying_the_happy_path() {
     // 3s pace: coarse and loud. The assertions below only ever compare
     // deltas between campaigns doing identical work, so absolute
     // per-machine overhead (0.2s..4.5s per attempt, measured) cannot
-    // flake them; 1s of slack sits on every bound — 2x the worst
-    // identical-campaign variance observed (~0.5s).
+    // flake them; 2s of slack sits on the upper-bound assertions — the
+    // worst identical-campaign variance observed under 8 CPU hogs is
+    // ~1.5s, so 2s tolerates it while still distinguishing 0s from 3s.
     const PACE_SECS: u64 = 3;
     let pace = format!(r#", "retry_delay_s": {PACE_SECS}"#);
 
@@ -202,21 +203,21 @@ fn retry_delay_paces_attempts_without_delaying_the_happy_path() {
 
     // --- (3) HAPPY PATH: retry_delay_s = 3, gate passes first try -------
     // Pacing is configured but the task merges on attempt 1: never
-    // delayed — within 1s of its zero-delay twin (a paced first attempt
+    // delayed — within 2s of its zero-delay twin (a paced first attempt
     // would add the full 3s).
     let happy_paced = fixture(&pace, false);
     let (_code, happy_paced_elapsed) = run_campaign(&happy_paced, 1);
     let happy_zero = fixture(r#", "retry_delay_s": 0"#, false);
     let (_code, happy_zero_elapsed) = run_campaign(&happy_zero, 1);
     assert!(
-        happy_paced_elapsed < happy_zero_elapsed + Duration::from_secs(1),
+        happy_paced_elapsed < happy_zero_elapsed + Duration::from_secs(2),
         "a first-try merge is never delayed, even with retry_delay_s set \
          (paced {happy_paced_elapsed:?} vs zero {happy_zero_elapsed:?})"
     );
 
     // --- (4) DEFAULT: the field is omitted entirely ---------------------
     // The shipped default is 0, so an existing workers.json that never
-    // mentioned the field keeps the legacy no-delay behaviour — within 1s
+    // mentioned the field keeps the legacy no-delay behaviour — within 2s
     // of the explicit zero-delay campaign (a default pace would add 3s).
     let defaulted = fixture("", true);
     assert_eq!(
@@ -225,7 +226,7 @@ fn retry_delay_paces_attempts_without_delaying_the_happy_path() {
     );
     let (_code, default_elapsed) = run_campaign(&defaulted, 2);
     assert!(
-        default_elapsed < fast_elapsed + Duration::from_secs(1),
+        default_elapsed < fast_elapsed + Duration::from_secs(2),
         "an omitted retry_delay_s behaves like the zero-delay run \
          (default {default_elapsed:?} vs fast {fast_elapsed:?})"
     );
