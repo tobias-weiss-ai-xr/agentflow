@@ -15,7 +15,7 @@ USAGE:
   af attach    ID
   af cost      [--task ID] [--last] [--since DATE|UNIX_TS]
   af clean     [--dry-run]
-  af recover   --task ID [--dry-run]
+  af recover   --task ID [--attempt N] [--dry-run]
   af validate  [--worker NAME] [--tasks FILE] [--workers FILE]
   af --help | --version
 
@@ -51,6 +51,7 @@ struct Args {
     repos_file: Option<PathBuf>,
     last: bool,
     since: Option<u64>,
+    attempt: Option<u32>,
 }
 
 fn parse(argv: &[String]) -> Result<Args, String> {
@@ -67,6 +68,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
         repos_file: None,
         last: false,
         since: None,
+        attempt: None,
     };
     let mut it = argv.iter();
     a.cmd = it.next().cloned().unwrap_or_default();
@@ -102,6 +104,14 @@ fn parse(argv: &[String]) -> Result<Args, String> {
                 a.repos_file = Some(PathBuf::from(it.next().ok_or("--repos needs a value")?))
             }
             "--last" => a.last = true,
+            "--attempt" => {
+                a.attempt = Some(
+                    it.next()
+                        .ok_or("--attempt needs a value")?
+                        .parse()
+                        .map_err(|_| "--attempt must be an integer")?,
+                )
+            }
             "--since" => {
                 let v = it.next().ok_or("--since needs a value")?;
                 a.since = Some(run::parse_since(v).map_err(|e| format!("--since: {e}"))?);
@@ -238,7 +248,7 @@ fn main() -> ExitCode {
         }
         "clean" => run::clean(&cfg, &st, args.dry_run),
         "recover" => match &args.task {
-            Some(id) => run::recover(&cfg, &st, id, args.dry_run),
+            Some(id) => run::recover(&cfg, &st, id, args.attempt, args.dry_run),
             None => {
                 eprintln!("error: af recover requires --task ID");
                 2
@@ -324,6 +334,34 @@ mod tests {
     #[test]
     fn parse_rejects_unknown_flag() {
         assert!(parse(&["run".to_string(), "--nope".to_string()]).is_err());
+    }
+
+    #[test]
+    fn parse_attempt_flag() {
+        // `--attempt N` is an optional u32 for `af recover`.
+        let a = parse(&[
+            "recover".to_string(),
+            "--task".to_string(),
+            "C".to_string(),
+            "--attempt".to_string(),
+            "3".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(a.cmd, "recover");
+        assert_eq!(a.task.as_deref(), Some("C"));
+        assert_eq!(a.attempt, Some(3));
+        assert_eq!(parse(&["recover".to_string()]).unwrap().attempt, None);
+
+        // A missing or unparseable value is an error naming the flag.
+        let err = parse(&["recover".to_string(), "--attempt".to_string()]).unwrap_err();
+        assert_eq!(err, "--attempt needs a value");
+        let err = parse(&[
+            "recover".to_string(),
+            "--attempt".to_string(),
+            "nope".to_string(),
+        ])
+        .unwrap_err();
+        assert!(err.starts_with("--attempt"), "{err}");
     }
 
     #[test]

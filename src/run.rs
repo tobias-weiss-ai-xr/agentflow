@@ -1148,15 +1148,20 @@ pub fn clean(cfg: &Config, st: &Settings, dry_run: bool) -> i32 {
     0
 }
 
-/// `af recover --task ID [--dry-run]`: re-validate an archived rejected
-/// branch — the copy round 11's failure paths keep under
-/// `<prefix>/<id>-rejected-<ts>[-<n>]` — against the task's CURRENT scope
+/// `af recover --task ID [--attempt N] [--dry-run]`: re-validate an archived
+/// rejected branch — the copy round 11's failure paths keep under
+/// `<prefix>/<id>-rejected-<attempt>-<ts>[-<n>]` (or the legacy
+/// `<prefix>/<id>-rejected-<ts>[-<n>]`) — against the task's CURRENT scope
 /// and gate, and merge it into the base when it passes. The agent is never
 /// re-invoked: the operator already paid for this work once; recovery just
 /// un-blocks it when the reason it was rejected is gone.
 ///
 /// Selection picks the NEWEST archived branch for `id` by parsing the
 /// numeric `<ts>` (then the `-<n>` suffix), never by git order or dates.
+/// With `--attempt N` it instead restricts selection to archives whose name
+/// parses to exactly attempt `N` (legacy attempt-less archives parse as `0`),
+/// so the operator can recover a specific paid-for attempt rather than the
+/// latest one.
 ///
 /// On success the failed attempt's receipt is left untouched (history is
 /// append-only) and a NON-VERDICT `recovered` receipt is appended, naming the
@@ -1166,17 +1171,31 @@ pub fn clean(cfg: &Config, st: &Settings, dry_run: bool) -> i32 {
 /// Exit codes: 0 merged / dry-run reported; 1 re-validation failed (scope
 /// violation or gate failure), with the archived branch AND its worktree
 /// handled so no failure leaves a worktree behind (the archived branch itself
-/// survives a rejection); 2 unknown task or no archived branch to recover
-/// (nothing to recover is not a failure).
-pub fn recover(cfg: &Config, st: &Settings, id: &str, dry_run: bool) -> i32 {
+/// survives a rejection); 2 unknown task, a requested attempt with no archive,
+/// or no archived branch to recover (nothing to recover is not a failure).
+pub fn recover(cfg: &Config, st: &Settings, id: &str, attempt: Option<u32>, dry_run: bool) -> i32 {
     let Some(task) = cfg.by_id.get(id).cloned() else {
         eprintln!("config error: unknown task '{id}'");
         return 2;
     };
     let repo = cfg.repo_dir_for(&task, &st.repo_dir);
     let branches = worktree::archived_branches(&repo, &st.branch_prefix);
-    let Some(branch) = worktree::newest_archived_branch(&branches, &st.branch_prefix, id) else {
-        eprintln!("no archived branch for task '{id}' (searched <prefix>/<id>-rejected-<ts>)");
+    let selected = match attempt {
+        // `--attempt N`: only archives that parse to exactly attempt N. A
+        // legacy attempt-less archive parses as 0, so it needs `--attempt 0`.
+        Some(n) => worktree::archived_branch_for_attempt(&branches, &st.branch_prefix, id, n),
+        // No flag: the newest archive for the task, whatever attempt it names.
+        None => worktree::newest_archived_branch(&branches, &st.branch_prefix, id),
+    };
+    let Some(branch) = selected else {
+        match attempt {
+            Some(n) => eprintln!(
+                "no archived branch for task '{id}' at attempt {n} (searched <prefix>/<id>-rejected-{n}-<ts>)"
+            ),
+            None => eprintln!(
+                "no archived branch for task '{id}' (searched <prefix>/<id>-rejected-<ts>)"
+            ),
+        }
         return 2;
     };
 
