@@ -6,7 +6,7 @@
 
 use agentflow::config::{self, Settings, TaskState};
 use agentflow::run::{self, RunOptions};
-use agentflow::state::Store;
+use agentflow::state::{Receipt, Store};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -1950,6 +1950,30 @@ fn seed_archived_branch(repo: &Path, id: &str, ts: u64, file: &str, content: &st
     git(repo, &["branch", "-D", &branch]);
 }
 
+/// The r14 archive form `<prefix>/<id>-rejected-<attempt>-<ts>`, which is
+/// what `af` writes now. Recovery parses the attempt back out to pair the
+/// marker with the failed receipt.
+fn seed_archived_branch_at_attempt(
+    repo: &Path,
+    id: &str,
+    attempt: u32,
+    ts: u64,
+    file: &str,
+    content: &str,
+) {
+    let branch = format!("tf/{id}");
+    git(repo, &["checkout", "-b", &branch]);
+    std::fs::write(repo.join(file), content).unwrap();
+    git(repo, &["add", file]);
+    git(repo, &["commit", "-m", "agent work"]);
+    git(
+        repo,
+        &["branch", &format!("tf/{id}-rejected-{attempt}-{ts}")],
+    );
+    git(repo, &["checkout", "main"]);
+    git(repo, &["branch", "-D", &branch]);
+}
+
 /// THE core cost test for r13-auto-recover: `af run` must find an archived
 /// rejected branch that satisfies the task's CURRENT scope and gate, re-run
 /// the gate on it, merge it, and NEVER invoke the agent — the money for that
@@ -2013,12 +2037,83 @@ fn a_run_reuses_a_scope_compatible_archived_branch_without_paying_an_agent() {
         0,
         "reuse must not pay an agent again:\n{log}"
     );
-    // Reuse is not a new attempt and must not double-count a receipt: the
-    // archived work's own receipt already exists, and reuse writes none.
-    assert!(
-        Store::new(f.st.state_dir.clone())
-            .load_receipts()
-            .is_empty(),
-        "reuse must not append a receipt"
+    // Reuse is not a NEW agent attempt: the archived work's failed receipt
+    // already exists and reuse adds no second failed/merged receipt — it adds
+    // exactly one NON-VERDICT `recovered` marker (r14-recovery-ledger),
+    // measured 0.0s because no agent ran.
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    assert_eq!(
+        receipts.len(),
+        1,
+        "reuse writes exactly one recovered receipt: {receipts:?}"
     );
+    assert_eq!(receipts[0].outcome, "recovered");
+    assert_eq!(receipts[0].wall_clock_s, 0.0, "no agent ran");
+    assert!(
+        !receipts[0].counts_as_verdict(),
+        "recovery is not a verdict"
+    );
+}
+
+/// Pre-dispatch reuse is a recovery too: it writes the same non-verdict
+/// `recovered` receipt `af recover` writes, naming the ATTEMPT parsed from
+/// the archived branch and the failed receipt's worker/model, with
+/// wall-clock 0.0 and no agent spawn.
+// spec: state/recovered-receipts
+// spec: state/recovered-receipts#a-recovered-receipt-pairs-with-the-failed-attempt
+#[test]
+fn reuse_writes_a_recovered_receipt() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    std::env::remove_var("FAKE_AGENT_OUT");
+    std::env::remove_var("TF_NO_REUSE");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"reuse me","scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+    seed_archived_branch_at_attempt(
+        &f.repo,
+        "A",
+        2,
+        1791259017,
+        "DONE.txt",
+        "example-agent: task complete\n",
+    );
+    // The failed attempt that produced the archive, on disk before the run.
+    Store::new(f.st.state_dir.clone())
+        .append_receipt(&Receipt {
+            task: "A".into(),
+            attempt: 2,
+            worker: "w1".into(),
+            model: "gpt-4o".into(),
+            wall_clock_s: 100.0,
+            tokens: None,
+            ts: 1,
+            outcome: "failed".into(),
+            error: Some("acceptance gate failed (exit 1): boom".into()),
+            cost_micros: None,
+        })
+        .unwrap();
+
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
+
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    let recovered = receipts
+        .iter()
+        .find(|r| r.outcome == "recovered")
+        .unwrap_or_else(|| panic!("reuse writes a recovered receipt: {receipts:?}"));
+    assert_eq!(recovered.task, "A");
+    assert_eq!(recovered.attempt, 2, "paired to the archived attempt");
+    assert_eq!(recovered.worker, "w1", "names the failed attempt's worker");
+    assert_eq!(recovered.model, "gpt-4o");
+    assert_eq!(recovered.wall_clock_s, 0.0, "no agent ran");
+    assert!(!recovered.counts_as_verdict());
+    // The agent was NEVER invoked (reuse reached no spawn marker).
+    let log =
+        std::fs::read_to_string(f.st.state_dir.join("logs").join("A.log")).unwrap_or_default();
+    assert_eq!(log.matches("-- agent --").count(), 0, "no agent: {log}");
 }

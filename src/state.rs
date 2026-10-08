@@ -126,16 +126,24 @@ pub struct Receipt {
 /// mid-attempt: no agent result, no gate result, and an unknown duration.
 pub const OUTCOME_INTERRUPTED: &str = "interrupted";
 
+/// Outcome recorded when `af recover` or `af run`'s pre-dispatch reuse merges
+/// an archived rejected branch. This is a BOOKKEEPING marker, not a new
+/// attempt: no agent ran (the marker's `wall_clock_s` is 0.0) and it names the
+/// archived attempt it reclaims so `af cost` can pair it with the failed
+/// receipt whose work was merged.
+pub const OUTCOME_RECOVERED: &str = "recovered";
+
 impl Receipt {
     /// Does this outcome count as a verdict on the WORKER's reliability?
     ///
-    /// [`OUTCOME_INTERRUPTED`] is NOT a verdict: the attempt was lost when
-    /// the orchestrator itself died (no agent result, no gate result), so it
-    /// says nothing about the worker. Every trust statistic must exclude it
-    /// from the numerator AND the denominator — only `merged` and `failed`
-    /// are worker verdicts.
+    /// Only `merged` and `failed` are verdicts. [`OUTCOME_INTERRUPTED`] is
+    /// excluded because the attempt was lost when the orchestrator itself
+    /// died (no agent result, no gate result); [`OUTCOME_RECOVERED`] is
+    /// excluded because no agent ran at all — recovery re-validates and
+    /// merges work that was already paid for. Every trust statistic must
+    /// exclude both from the numerator AND the denominator.
     pub fn counts_as_verdict(&self) -> bool {
-        self.outcome != OUTCOME_INTERRUPTED
+        self.outcome == "merged" || self.outcome == "failed"
     }
 }
 

@@ -1594,6 +1594,83 @@ fn recover_with_no_archived_branch_exits_two() {
     );
 }
 
+/// An archived rejected branch in the CURRENT (r14) name format
+/// `<prefix>/<id>-rejected-<attempt>-<ts>`, so recovery can pair the marker
+/// with the failed attempt. `fixture_recover_task` covers the legacy,
+/// attempt-less form.
+fn fixture_recover_task_at_attempt(cli: &Cli, id: &str, attempt: u32, ts: u64) {
+    let repo = cli.dir.join("repo");
+    let git = scratch_repo(&repo);
+    git(&["checkout", "-b", &format!("tf/{id}")]);
+    std::fs::write(repo.join("WORK.txt"), "done\n").unwrap();
+    git(&["add", "WORK.txt"]);
+    git(&["commit", "-m", "agent work"]);
+    git(&["branch", &format!("tf/{id}-rejected-{attempt}-{ts}")]);
+    git(&["checkout", "main"]);
+}
+
+/// A successful `af recover` is a recovery, not a re-run: it appends a
+/// NON-VERDICT `recovered` receipt naming the archived attempt and the failed
+/// attempt's worker/model, measures 0.0s (no agent ran), and leaves the
+/// failed receipt untouched — history stays append-only, and `af cost` can
+/// pair the two.
+// spec: state/recovered-receipts
+// spec: state/recovered-receipts#a-recovered-receipt-pairs-with-the-failed-attempt
+#[test]
+fn recover_writes_a_recovered_receipt() {
+    let tasks = r#"{ "tasks": [
+        { "id": "C", "title": "recover me", "scope": ["WORK.txt"], "accept": "test -f WORK.txt" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    fixture_recover_task_at_attempt(&cli, "C", 2, 1791259017);
+    let (_, st) = cli.settings();
+    let store = Store::new(st.state_dir.clone());
+    // The failed attempt that produced the archive, on disk before recovery.
+    store
+        .append_receipt(&Receipt {
+            task: "C".into(),
+            attempt: 2,
+            worker: "w1".into(),
+            model: "gpt-4o".into(),
+            wall_clock_s: 100.0,
+            tokens: None,
+            ts: 1,
+            outcome: "failed".into(),
+            error: Some("acceptance gate failed (exit 1): boom".into()),
+            cost_micros: None,
+        })
+        .unwrap();
+
+    let (code, out) = cli.af(&["recover", "--task", "C"]);
+    assert_eq!(code, 0, "recover exits 0: {out}");
+
+    let receipts = store.load_receipts();
+    assert_eq!(
+        receipts.len(),
+        2,
+        "the failed receipt is kept and one recovered marker added: {receipts:?}"
+    );
+    assert!(
+        receipts
+            .iter()
+            .any(|r| r.outcome == "failed" && r.attempt == 2 && r.wall_clock_s == 100.0),
+        "history is append-only — the failed receipt is untouched: {receipts:?}"
+    );
+    let recovered = receipts
+        .iter()
+        .find(|r| r.outcome == "recovered")
+        .unwrap_or_else(|| panic!("a recovered receipt exists: {receipts:?}"));
+    assert_eq!(recovered.task, "C");
+    assert_eq!(recovered.attempt, 2, "paired to the archived attempt");
+    assert_eq!(recovered.worker, "w1", "names the failed attempt's worker");
+    assert_eq!(recovered.model, "gpt-4o");
+    assert_eq!(recovered.wall_clock_s, 0.0, "no agent ran");
+    assert!(
+        !recovered.counts_as_verdict(),
+        "recovery is not a verdict on the worker"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Pre-dispatch archived-branch reuse — `af run` re-validates an archive
 // instead of paying an agent again (r13-auto-recover).

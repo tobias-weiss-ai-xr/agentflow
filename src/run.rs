@@ -19,6 +19,7 @@ use crate::router::Router;
 use crate::scheduler;
 use crate::state::{
     resume_action, AttemptPhase, Receipt, ResumeAction, Store, TaskStatus, OUTCOME_INTERRUPTED,
+    OUTCOME_RECOVERED,
 };
 use crate::subprocess::{self, EnvMode};
 use crate::worktree;
@@ -169,6 +170,45 @@ enum ReuseOutcome {
     Error(String),
 }
 
+/// Record the `recovered` receipt for an archived rejected branch that
+/// `af recover` or pre-dispatch reuse just merged (`r14-recovery-ledger`).
+///
+/// The marker carries the ARCHIVED ATTEMPT's number parsed from the branch
+/// name so `af cost` can pair it with the failed receipt it reclaims, names
+/// the failed receipt's worker and model when that receipt is still on disk
+/// (`unknown` otherwise, never inventing history), and measures 0.0s — no
+/// agent ran, so recovery spends no new time. The outcome is a NON-VERDICT:
+/// `counts_as_verdict` is false for it, so it never enters `WINS/TOTAL` or
+/// `MEAN_S`. Nothing here rewrites or deletes the failed receipt; the marker
+/// is a new, separate record and history stays append-only.
+fn append_recovered_receipt(store: &Store, st: &Settings, task_id: &str, branch: &str) {
+    // `attempt == 0` for a legacy archive whose name carries no attempt; such
+    // a marker can pair with nothing, but it is still honest about the merge.
+    let attempt = worktree::parse_archived_branch(branch, &st.branch_prefix)
+        .map(|a| a.attempt)
+        .unwrap_or(0);
+    let failed = store
+        .load_receipts()
+        .into_iter()
+        .find(|r| r.task == task_id && r.attempt == attempt && r.outcome == "failed");
+    let (worker, model) = match failed {
+        Some(r) => (r.worker, r.model),
+        None => (UNKNOWN_WORKER.to_string(), UNKNOWN_WORKER.to_string()),
+    };
+    let _ = store.append_receipt(&Receipt {
+        task: task_id.to_string(),
+        attempt,
+        worker,
+        model,
+        wall_clock_s: 0.0,
+        tokens: None,
+        ts: crate::state::now_ts(),
+        outcome: OUTCOME_RECOVERED.to_string(),
+        error: None,
+        cost_micros: None,
+    });
+}
+
 /// Re-validate ONE archived rejected branch against the task's CURRENT scope
 /// and gate and merge it when it passes — the pre-dispatch twin of
 /// [`recover`]. The gate remains the SOLE arbiter, so this can only ever save
@@ -176,11 +216,11 @@ enum ReuseOutcome {
 ///
 /// On success the task is marked `Done`/`GatePassed` in `status` (the run
 /// loop's in-memory map is the source of truth, so the caller's later saves
-/// cannot clobber it) and the archived branch is consumed. On every failure
-/// the temporary worktree is removed but the archived branch is LEFT ALONE
-/// for `af clean` or a later `af recover`. No receipt is written: the
-/// attempt that produced the archive already has one, and reuse is not a new
-/// attempt (round 12's precedent).
+/// cannot clobber it), the archived branch is consumed, and a non-verdict
+/// `recovered` receipt is appended so `af cost` can pair it with the failed
+/// attempt it reclaims. On every failure the temporary worktree is removed
+/// but the archived branch is LEFT ALONE for `af clean` or a later
+/// `af recover`, and no receipt is written (nothing was merged).
 fn reuse_archived_branch(
     cfg: &Config,
     st: &Settings,
@@ -243,6 +283,7 @@ fn reuse_archived_branch(
     s.last_error = None;
     s.phase = Some(AttemptPhase::GatePassed);
     let _ = store.save(status);
+    append_recovered_receipt(&store, st, &task.id, branch);
     worktree::remove(&repo, &wt);
     ReuseOutcome::Reused
 }
@@ -1117,6 +1158,11 @@ pub fn clean(cfg: &Config, st: &Settings, dry_run: bool) -> i32 {
 /// Selection picks the NEWEST archived branch for `id` by parsing the
 /// numeric `<ts>` (then the `-<n>` suffix), never by git order or dates.
 ///
+/// On success the failed attempt's receipt is left untouched (history is
+/// append-only) and a NON-VERDICT `recovered` receipt is appended, naming the
+/// archived attempt and its failed receipt's worker/model so `af cost` can
+/// pair the reclaim out of WASTED.
+///
 /// Exit codes: 0 merged / dry-run reported; 1 re-validation failed (scope
 /// violation or gate failure), with the archived branch AND its worktree
 /// handled so no failure leaves a worktree behind (the archived branch itself
@@ -1223,6 +1269,7 @@ pub fn recover(cfg: &Config, st: &Settings, id: &str, dry_run: bool) -> i32 {
     s.last_error = None;
     s.phase = Some(AttemptPhase::GatePassed);
     let _ = store.save(&status);
+    append_recovered_receipt(&store, st, id, &branch);
     worktree::remove(&repo, &wt);
     println!("✓ {id} recovered to done (agent not re-run)");
     0
@@ -1973,27 +2020,69 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
     // narrow it too. A failed attempt's wall-clock is otherwise
     // indistinguishable from productive spend — this is the only place it is
     // reported.
+    //
+    // Recovered attempts (r14-recovery-ledger) leave WASTED. A non-verdict
+    // `recovered` marker names the archived attempt that `af recover`/reuse
+    // merged; the failed receipt it pairs with (same task AND attempt) is NOT
+    // wasted — its work landed — so it is removed from the failed set and
+    // reported on the RECOVERED line below. Pairing is window-scoped exactly
+    // like every other waste figure, so `--last` / `--since` / `--task`
+    // narrow it too.
+    let recovered: Vec<&Receipt> = selected
+        .iter()
+        .copied()
+        .filter(|r| r.outcome == OUTCOME_RECOVERED)
+        .collect();
+    let recovered_keys: HashSet<(&str, u32)> = recovered
+        .iter()
+        .map(|r| (r.task.as_str(), r.attempt))
+        .collect();
     let failed: Vec<&Receipt> = selected
         .iter()
         .copied()
-        .filter(|r| r.outcome == "failed")
+        .filter(|r| {
+            r.outcome == "failed" && !recovered_keys.contains(&(r.task.as_str(), r.attempt))
+        })
         .collect();
     let mut wasted: f64 = 0.0;
     for r in &failed {
         wasted += r.wall_clock_s;
     }
-    let pct = if selected.is_empty() {
+    // The denominator counts real attempts. A `recovered` marker is not a new
+    // attempt (no agent ran, 0.0s), so it is excluded; the failed receipt it
+    // pairs with stays one attempt whether or not it was later recovered.
+    let attempts = selected.len().saturating_sub(recovered.len());
+    let pct = if attempts == 0 {
         0.0
     } else {
-        failed.len() as f64 / selected.len() as f64 * 100.0
+        failed.len() as f64 / attempts as f64 * 100.0
     };
     lines.push_str(&format!(
         "\nWASTED: {:.1}s on {} of {} attempt(s) ({:.1}%)",
         wasted,
         failed.len(),
-        selected.len(),
+        attempts,
         pct
     ));
+    // Recovered attempts get their own outcome line, beside WASTED and
+    // INTERRUPTED. The reclaimed seconds are the paired failed receipts'
+    // wall-clock: work that was paid for once and then merged, so it is not
+    // wasted (and, on this report, no longer is).
+    if !recovered.is_empty() {
+        let reclaimed: f64 = selected
+            .iter()
+            .copied()
+            .filter(|r| {
+                r.outcome == "failed" && recovered_keys.contains(&(r.task.as_str(), r.attempt))
+            })
+            .map(|r| r.wall_clock_s)
+            .sum();
+        lines.push_str(&format!(
+            "\nRECOVERED: {} attempt(s) — {:.1}s of failed work reclaimed (not wasted)",
+            recovered.len(),
+            reclaimed
+        ));
+    }
     // Interrupted attempts (r9-interrupted): real spend with an UNKNOWN
     // duration (recorded as 0.0s), so they get their own outcome line
     // instead of being buried in the failed subtotal or silently dropped.

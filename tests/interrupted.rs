@@ -289,6 +289,8 @@ fn interrupted_outcome_is_not_a_worker_verdict() {
     assert!(receipt("A", 1, "w1", "merged", 1).counts_as_verdict());
     assert!(receipt("A", 1, "w1", "failed", 1).counts_as_verdict());
     assert!(!receipt("A", 1, "w1", "interrupted", 1).counts_as_verdict());
+    // A recovery is bookkeeping, not a fresh agent run: no verdict either.
+    assert!(!receipt("A", 1, "w1", "recovered", 1).counts_as_verdict());
 }
 
 /// Dispatch persists the attempt's identity (`attempt_worker`,
