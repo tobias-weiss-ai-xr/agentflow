@@ -57,10 +57,15 @@ THEN `aux` reports the worktree removed and `aux`'s stale branch is deleted.
 ### Requirement: Rejected work is preserved on an archived branch
 
 An attempt's committed work SHALL survive the cleanup that follows EVERY
-failure path, preserved as a COPY under `<branch>-rejected-<now>` (never a
-rename — the original branch, the cleanup, and the retry are unaffected),
-so the retry still starts clean from the current base while the paid-for
-work stays recoverable and the receipt names the archived branch. The
+failure path, preserved as a COPY under `<branch>-rejected-<attempt>-<now>`
+(the attempt number in the name keeps each paid-for attempt individually
+selectable — `af recover --attempt N`); the older, attempt-less
+`<branch>-rejected-<now>` SHALL remain valid for archives that predate the
+attempt-in-name form and for startup heal, which has no attempt to name.
+Archiving is never a rename — the original branch, the cleanup, and the retry
+are unaffected — so the retry still starts clean from the current base while
+the paid-for work stays recoverable and the receipt names the archived
+branch. The
 failure paths are: a scope violation, a merge conflict, an agent that exits
 non-zero, the stall-watchdog kill, the total agent timeout, a second gate
 failure of a reused (gate-only retry) attempt, and startup self-heal sweeping
@@ -73,7 +78,7 @@ beyond the base SHALL NOT be archived.
 
 WHEN an attempt fails because the agent edited a file outside the task's scope
 AND archiving the attempt branch succeeds
-THEN the work is kept on `<branch>-rejected-<now>`, the failure message names
+THEN the work is kept on `<branch>-rejected-<attempt>-<now>`, the failure message names
 that branch, the archived branch contains the agent's commit, and the original
 branch is removed so a retry starts clean.
 
@@ -81,7 +86,7 @@ branch is removed so a retry starts clean.
 
 WHEN an attempt's committed branch conflicts with the base branch at merge
 time AND archiving the attempt branch succeeds
-THEN the work is kept on `<branch>-rejected-<now>`, the failure message names
+THEN the work is kept on `<branch>-rejected-<attempt>-<now>`, the failure message names
 that branch, and the original branch is removed so a retry starts clean.
 
 #### Scenario: archiving never fails the attempt
@@ -95,7 +100,7 @@ suffix, exactly as if archiving had not been attempted.
 
 WHEN the agent commits work and then stops producing output until the stall
 watchdog kills the attempt
-THEN the committed branch is archived as `<branch>-rejected-<now>` before
+THEN the committed branch is archived as `<branch>-rejected-<attempt>-<now>` before
 cleanup, the receipt names that branch, the archived tip contains the agent's
 work, the task does NOT reach `done`, and the original branch is removed.
 
@@ -103,7 +108,7 @@ work, the task does NOT reach `done`, and the original branch is removed.
 
 WHEN the agent commits work and then runs past the total agent timeout with
 the stall watchdog disabled
-THEN the committed branch is archived as `<branch>-rejected-<now>` before
+THEN the committed branch is archived as `<branch>-rejected-<attempt>-<now>` before
 cleanup, the receipt names that branch, the archived tip contains the agent's
 work, and the task does NOT reach `done`.
 
@@ -111,7 +116,7 @@ work, and the task does NOT reach `done`.
 
 WHEN a gate-only retry re-runs the gate on a kept attempt branch and the gate
 fails a second time
-THEN the reused branch is archived as `<branch>-rejected-<now>` before it is
+THEN the reused branch is archived as `<branch>-rejected-<attempt>-<now>` before it is
 dropped, the failure message names that branch, and the work remains
 recoverable even though the next attempt starts fresh.
 
@@ -128,14 +133,16 @@ and never archived.
 WHEN an attempt fails after the agent has committed work (scope violation,
 merge conflict, non-zero exit, stall, timeout, a second gate failure, or
 startup heal of an interrupted attempt)
-THEN the work is preserved under `<branch>-rejected-<now>` rather than being
+THEN the work is preserved under `<branch>-rejected-<attempt>-<now>` (or the
+legacy `<branch>-rejected-<now>` when no attempt is named) rather than being
 destroyed by cleanup.
 
 ### Requirement: af clean sweeps archived rejected branches
 
 `af clean [--dry-run]` SHALL also remove the archived rejected branches that
 rejected-work preservation leaves behind — local branches named
-`<prefix>/<id>-rejected-<unix-ts>` (with an optional `-<n>` collision
+`<prefix>/<id>-rejected-<attempt>-<unix-ts>` or the legacy
+`<prefix>/<id>-rejected-<unix-ts>` (each with an optional `-<n>` collision
 suffix). A branch whose recovered task id is still marked `running` in the
 state file SHALL be kept, exactly like a running worktree. With `--dry-run`
 af SHALL report each branch it would remove as `would remove branch <name>`

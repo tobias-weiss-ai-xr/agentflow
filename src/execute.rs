@@ -565,7 +565,7 @@ fn preserve_work(repo: &Path, wt: &worktree::Worktree, id: &str, attempt: u32) -
     if !matches!(worktree::commits_ahead(repo, &base, &wt.branch), Ok(n) if n > 0) {
         return None;
     }
-    worktree::archive_branch(repo, &wt.branch, now_ts())
+    worktree::archive_branch(repo, &wt.branch, Some(attempt), now_ts())
 }
 
 /// Preserve an attempt's work and name it in the log, returning the failure
