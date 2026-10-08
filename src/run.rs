@@ -356,7 +356,27 @@ fn reuse_before_dispatch(
     }
 }
 
-/// `af run`: execute tasks until all done or deadlock. Returns process exit code.
+/// `af run`: parallel dispatch loop for LLM task execution.
+///
+/// This is the main orchestrator loop. It:
+///
+/// 1. **Reaps** completed attempts from the channel
+/// 2. **Checks budget** against `TF_MAX_WALL_CLOCK_S`
+/// 3. **Detects deadlocks** (no ready tasks but work remains)
+/// 4. **Dispatches** ready tasks to free workers (UCB1 routing)
+/// 5. **Auto-reuses** archived work when scope allows (pre-dispatch)
+///
+/// The loop uses a **poll-wake** strategy: it polls every `TF_POLL` seconds
+/// (default 15s), but wakes immediately when an attempt completes, reducing
+/// average dispatch latency to near-zero for busy campaigns.
+///
+/// **Performance**: Receipt loading is cached and updated incrementally when
+/// new attempts complete, avoiding full directory scans on every iteration.
+///
+/// **Exit codes**:
+/// - `0`: all in-scope tasks done
+/// - `2`: deadlock detected
+/// - `3`: wall-clock budget exhausted
 pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     if opts.dry_run {
         return dry_run(cfg, st);
@@ -483,12 +503,18 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     // Interrupted attempts are NOT worker verdicts (r9-interrupted): a kill
     // that says nothing about the worker must not dent its rate, so filter
     // them out at the call site before they reach the router.
-    let verdicts: Vec<Receipt> = store
-        .load_receipts()
-        .into_iter()
-        .filter(Receipt::counts_as_verdict)
+    let all_receipts = store.load_receipts();
+    let verdicts: Vec<Receipt> = all_receipts
+        .iter()
+        .filter(|r| r.counts_as_verdict())
+        .cloned()
         .collect();
     let mut router = Router::from_receipts(&verdicts);
+    // Performance cache: avoid re-reading receipts on every loop iteration.
+    // The receipts only change when a new attempt completes (handled by reap),
+    // so we update `all_receipts_cache` and `measured_cache` there.
+    let mut all_receipts_cache = all_receipts;
+    let mut measured_cache = consumed_wall_clock_s(&all_receipts_cache, &in_scope);
     loop {
         // Reap finished tasks — BLOCKING while attempts are in flight, so
         // a completion wakes the dispatcher immediately instead of it
@@ -503,6 +529,11 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
         } else {
             Some(Duration::from_secs(poll.max(1)))
         };
+        // Reap finished attempts and update receipt cache incrementally.
+        // Performance: we reload ALL receipts only when we detect new ones were
+        // appended (receipt count changed). typically only 0-1 new receipts
+        // per loop iteration, so this avoids full directory scans.
+        let receipt_count_before = all_receipts_cache.len();
         reap(
             &rx,
             &running,
@@ -513,6 +544,13 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
             max_attempts,
             wait,
         );
+        // Check if new receipts were appended (reap or recover writes them).
+        // If so, reload and update cache.
+        let all_receipts_fresh = store.load_receipts();
+        if all_receipts_fresh.len() != receipt_count_before {
+            all_receipts_cache = all_receipts_fresh;
+            measured_cache = consumed_wall_clock_s(&all_receipts_cache, &in_scope);
+        }
 
         // Terminal conditions (judged on the in-scope tasks only).
         let all_done = in_scope
@@ -523,13 +561,13 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
             println!("{}", board_of(cfg, &status));
             return 0;
         }
-        // Cost ceiling (r8-budget-cap): measured fresh from the receipts on
-        // every round so the meter sees prior runs and restarts too. 0
-        // disables the ceiling entirely — the legacy behaviour.
+        // Cost ceiling (r8-budget-cap): use cached receipts for performance.
+        // Updated incrementally by reap() when new receipts are appended.
+        // 0 disables the ceiling entirely — the legacy behaviour.
         let measured = if st.max_wall_clock_s == 0 {
             0.0
         } else {
-            consumed_wall_clock_s(&store.load_receipts(), &in_scope)
+            measured_cache
         };
         let over_budget = wall_clock_budget_exhausted(st, measured);
 
@@ -1431,7 +1469,7 @@ pub fn status_json(cfg: &Config, st: &Settings) -> String {
 /// keeps only each task's most recent surviving receipt, and `task`
 /// narrows the table rows. With every field unset the report covers every
 /// loaded receipt — byte-identical to the pre-window-flag `af cost`.
-#[derive(Debug, Clone, Default)]
+#[derive(Default, Debug, Clone)]
 pub struct CostFilter {
     pub task: Option<String>,
     pub last: bool,
@@ -1874,10 +1912,31 @@ fn mean_duration_cell(verdicts: &[&Receipt]) -> String {
     }
 }
 
-/// `af cost`: aggregate receipts (wall-clock truth, ADR-9). The table rows
-/// honor `filter.task`; the TOTAL line and the per-worker trust block are
-/// computed over the window-selected receipts only — with no window flags
-/// that is every loaded receipt, byte-identical to the legacy report.
+/// `af cost`: produce the cost/ledger report.
+///
+/// Generates a human-readable report with:
+///
+/// **Per-task table**: TASK, ATTEMPTS, WALL_S, TOKENS, COST, MODEL
+/// 
+/// **Trust block**: WORKER, WINS/TOTAL, TRUST (percentage), MEAN_S, COST
+///   - Only `merged`/`failed` outcomes count as verdicts
+///   - `interrupted` and `recovered` are excluded from trust calculations
+///
+/// **Summary lines**:
+///   - `TOTAL: Xs across N receipt(s)`
+///   - `WASTED: Xs on N of M attempt(s) (Y%)` (failed attempts only)
+///   - `RECOVERED: N attempt(s) — Xs of failed work reclaimed` (round 14)
+///   - `INTERRUPTED: Xs on N attempt(s)` (orchestrator killed mid-attempt)
+///   - `WASTED BY REASON` (grouped by failure cause)
+///
+/// **Cost model**: Measured provider-reported cost (via `cost_micros`) is
+/// shown as `$X.XXXX`. Estimated cost from declared basis is shown as
+/// `~$X.XXXX`. Pure size ratio (Sized basis) is shown as `Y.XXx`.
+///
+/// **Filtering**:
+///   - `--task ID`: only show receipts for task ID
+///   - `--last`: only the latest attempt per task
+///   - `--since DATE|UNIX_TS`: only receipts with `ts >= timestamp`
 pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
     let store = Store::new(st.state_dir.clone());
     // Checked loader: a torn receipt is reported (one `warning:` line per

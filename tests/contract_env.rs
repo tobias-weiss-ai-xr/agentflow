@@ -175,10 +175,15 @@ fn subprocess_env_is_allowlisted() {
     // Passthrough lookup pinned "unset" so the BASE contract is asserted
     // regardless of the host's TF_AGENT_ENV_PASSTHROUGH (that escape hatch
     // is covered by the e2e suite).
-    let (pairs, allow) = agent_env(
+    let (pairs_static, allow) = agent_env(
         &worker_with_key_env(Some("AF_CONTRACT_WORKER_API_KEY")),
         &|_| None,
     );
+    // Convert to owned for subprocess compatibility
+    let pairs: Vec<(String, String)> = pairs_static
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
 
     let dir = temp_dir("allowlisted");
 
@@ -314,7 +319,12 @@ fn subprocess_env_without_worker_key_smuggles_nothing() {
     // And a plain non-key secret, as a second canary.
     let _canary = EnvRestore::set("AF_CONTRACT_CANARY", "leak");
 
-    let (pairs, allow) = agent_env(&worker_with_key_env(None), &|_| None);
+    let (pairs_static, allow) = agent_env(&worker_with_key_env(None), &|_| None);
+    // Convert to owned for subprocess compatibility
+    let pairs: Vec<(String, String)> = pairs_static
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
 
     // The policy itself has no key slot when the worker declares none.
     assert!(

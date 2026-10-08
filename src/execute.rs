@@ -61,8 +61,8 @@ const AGENT_ENV_BASE: &[&str] = &[
 pub fn agent_env(
     worker: &Worker,
     lookup: &dyn Fn(&str) -> Option<String>,
-) -> (Vec<(String, String)>, Vec<String>) {
-    let mut allow: Vec<String> = AGENT_ENV_BASE.iter().map(|s| s.to_string()).collect();
+) -> (Vec<(&'static str, &'static str)>, Vec<String>) {
+    let mut allow: Vec<String> = AGENT_ENV_BASE.iter().map(|&s| s.to_string()).collect();
     if let Some(k) = &worker.api_key_env {
         allow.push(k.clone());
     }
@@ -71,18 +71,31 @@ pub fn agent_env(
             allow.push(k.to_string());
         }
     }
+    // Performance: use &'static str to avoid String allocations for git hygiene pairs
     let pairs = vec![
-        ("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()),
-        ("GIT_CONFIG_COUNT".to_string(), "1".to_string()),
-        (
-            "GIT_CONFIG_KEY_0".to_string(),
-            "credential.helper".to_string(),
-        ),
-        ("GIT_CONFIG_VALUE_0".to_string(), String::new()),
+        ("GIT_TERMINAL_PROMPT", "0"),
+        ("GIT_CONFIG_COUNT", "1"),
+        ("GIT_CONFIG_KEY_0", "credential.helper"),
+        ("GIT_CONFIG_VALUE_0", ""),
     ];
     (pairs, allow)
 }
 
+/// Execute a single task attempt: create worktree, spawn agent, run gate, merge or archive.
+///
+/// This is the top-level entry point for task execution. It implements the full
+/// effect sandwich (pi-durable) with durable checkpoints at each boundary:
+///
+/// 1. **Spawned**: worktree created, agent about to spawn
+/// 2. **AgentDone**: agent exited 0, changes committed to attempt branch  
+/// 3. **GatePassed**: acceptance gate passed
+///
+/// On success: work is merged to base branch.
+/// On failure: work is archived (never destroyed) and can be recovered.
+///
+/// The function returns:
+/// - `Outcome::Merged` on gate pass + successful merge
+/// - `Outcome::Failed(reason)` on any failure (scope, gate, merge, timeout, etc.)
 pub fn execute_task(
     ctx: &ExecCtx,
     worker: &Worker,
@@ -259,7 +272,12 @@ fn execute_attempt(
         // 2) Agent CLI (external, OpenAI-compatible): --provider P --model M -p @file
         let argv = spawn_argv(&ctx.st, worker, &prompt_path);
         let (agent_cmd, agent_args) = argv.split_first().unwrap();
-        let (env_pairs, env_allow) = agent_env(worker, &|k| std::env::var(k).ok());
+        let (env_pairs_static, env_allow) = agent_env(worker, &|k| std::env::var(k).ok());
+        // Convert static pairs to owned for subprocess compatibility
+        let env_pairs: Vec<(String, String)> = env_pairs_static
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
         append("-- agent --");
         // Stall watchdog (agent CLI ONLY — git and gate calls stay on plain
         // `run`: a silent gate is not necessarily a stalled one, and their
@@ -874,12 +892,10 @@ mod tests {
             _ => None,
         };
         let (pairs, allow) = agent_env(&w, &lookup);
-        assert!(pairs.contains(&("GIT_TERMINAL_PROMPT".to_string(), "0".to_string())));
-        assert!(pairs.contains(&(
-            "GIT_CONFIG_KEY_0".to_string(),
-            "credential.helper".to_string()
-        )));
-        assert!(pairs.contains(&("GIT_CONFIG_VALUE_0".to_string(), String::new())));
+        // pairs is now Vec<(&'static str, &'static str)>
+        assert!(pairs.iter().any(|(k, v)| *k == "GIT_TERMINAL_PROMPT" && *v == "0"));
+        assert!(pairs.iter().any(|(k, v)| *k == "GIT_CONFIG_KEY_0" && *v == "credential.helper"));
+        assert!(pairs.iter().any(|(k, v)| *k == "GIT_CONFIG_VALUE_0" && v.is_empty()));
         assert!(
             allow.contains(&"AF_TEST_KEY".to_string()),
             "worker api key allowlisted"
