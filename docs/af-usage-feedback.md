@@ -76,6 +76,18 @@ the retry prompt so the next attempt is seeded with the exact failing contract.
 
 ---
 
+**Implementation reality discovered while writing this (important — ask).**
+The binary installed on the host (`/usr/local/bin/af`) is **a Go port** whose CLI
+is `af run --once | status | attach ID` and whose env already includes
+`TF_MAX_PARALLEL` and `TF_POLL`. The repo this file lives in describes a
+**Rust** orchestrator. My day-to-day campaigns run the Go binary, so the gaps
+above were observed against Go; two are already partly answered there:
+`attach` (re: §1 detached-join) and `TF_MAX_PARALLEL` (re: §2 concurrency).
+**Ask upstream:** which implementation is canonical, and should the Rust repo
+track the Go features (`attach`, `TF_MAX_PARALLEL`, `TF_POLL`) so they are not
+re-implemented? If Go is canonical, move these items into the Go issue
+tracker and keep the Rust repo's docs honest about being a parallel port.
+
 **Note on process:** agentflow is openspec-driven (`openspec/`), so the natural
 next step is to fold the accepted items here into OpenSpec change proposals
 (esp. §2, §3, §5) before implementation.
