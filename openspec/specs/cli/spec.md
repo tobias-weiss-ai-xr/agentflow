@@ -7,15 +7,20 @@ TBD - created by archiving change rust-orchestrator. Update Purpose after archiv
 
 ### Requirement: recover command
 
-`af recover --task <id> [--dry-run]` SHALL re-validate an archived rejected
-branch — the copy a rejected attempt leaves under `<prefix>/<id>-rejected-<ts>`
-(with an optional `-<n>` collision suffix) — and merge it into the base
-branch when it passes, WITHOUT ever re-invoking the agent. Selection SHALL
-pick the NEWEST archived branch for the task by PARSING the numeric `<ts>`
-(then the `<n>` collision suffix) and never by git output order or committer
-dates, so the same branch set always selects the same branch. `af recover`
-SHALL never push and SHALL leave the failed attempt's receipt untouched
-(history is append-only).
+`af recover --task <id> [--attempt <n>] [--dry-run]` SHALL re-validate an
+archived rejected branch — the copy a rejected attempt leaves under
+`<prefix>/<id>-rejected-<attempt>-<ts>` (or the legacy attempt-less
+`<prefix>/<id>-rejected-<ts>`, each with an optional `-<n>` collision suffix)
+— and merge it into the base branch when it passes, WITHOUT ever re-invoking
+the agent. Selection SHALL pick the NEWEST archived branch by PARSING the
+numeric `<ts>` (then the `<n>` collision suffix) and never by git output
+order or committer dates, so the same branch set always selects the same
+branch. When `--attempt <n>` is given, selection SHALL additionally restrict
+the candidates to archives whose parsed attempt is exactly `<n>` (a legacy
+attempt-less archive parses as attempt `0`, so only `--attempt 0` selects
+it); without the flag it SHALL consider every attempt and pick the newest.
+`af recover` SHALL never push and SHALL leave the failed attempt's receipt
+untouched (history is append-only).
 
 Before any merge, `af recover` SHALL re-validate in this order: (a) SCOPE —
 every path the archived branch changes relative to the merge base with the
@@ -34,10 +39,11 @@ while leaving the failed attempt's own receipt exactly as it was.
 
 Exit codes: `0` merged (or `--dry-run` reported); `1` re-validation failed
 (scope violation or gate failure — the archived branch stays in place); `2`
-unknown task, missing `--task ID`, or no archived branch to recover (nothing
-to recover is not a failure). With `--dry-run`, `af recover` SHALL perform
-the selection, report exactly what it would do, and exit `0` without touching
-anything — no worktree, no gate run, no merge.
+unknown task, missing `--task ID`, no archived branch to recover, or no
+archived branch for the requested `--attempt` (nothing to recover is not a
+failure). With `--dry-run`, `af recover` SHALL perform the selection, report
+exactly what it would do, and exit `0` without touching anything — no
+worktree, no gate run, no merge.
 
 #### Scenario: recover merges an archived branch after revalidating scope and gate
 
@@ -69,6 +75,26 @@ WHEN `af recover --task <id> --dry-run` runs
 THEN it exits 0, names the branch it would recover, and changes nothing
 (no worktree, no gate run, no merge; the archived branch survives and the
 task state is untouched).
+
+#### Scenario: attempt flag selects the archived attempt
+
+GIVEN a task with archived branches for several attempts
+WHEN `af recover --task <id> --attempt <n>` runs
+THEN it recovers the newest archive whose name parses to attempt `<n>` (not
+the newest archive overall), merging that attempt's work.
+
+#### Scenario: attempt flag rejects an unknown attempt
+
+GIVEN a task with no archived branch for attempt `<n>`
+WHEN `af recover --task <id> --attempt <n>` runs
+THEN it exits 2 naming the attempt searched and changes nothing.
+
+#### Scenario: no attempt flag picks the newest archive
+
+GIVEN a task with archived branches for several attempts, all recoverable
+WHEN `af recover --task <id>` runs without `--attempt`
+THEN it recovers the archive with the greatest parsed `<ts>` regardless of
+which attempt it names.
 
 #### Scenario: unknown task exits two
 

@@ -1609,6 +1609,118 @@ fn fixture_recover_task_at_attempt(cli: &Cli, id: &str, attempt: u32, ts: u64) {
     git(&["checkout", "main"]);
 }
 
+/// Several archived rejected branches for one task, one per
+/// `(attempt, ts, content)` triple. Each archive carries distinct `WORK.txt`
+/// content so a recovery names the winning attempt, letting `--attempt N`
+/// selection be told apart from the default newest-archive pick.
+fn fixture_recover_task_attempts(cli: &Cli, id: &str, archives: &[(u32, u64, &str)]) {
+    let repo = cli.dir.join("repo");
+    let git = scratch_repo(&repo);
+    for (attempt, ts, content) in archives {
+        git(&["checkout", "-B", &format!("tf/{id}"), "main"]);
+        std::fs::write(repo.join("WORK.txt"), content).unwrap();
+        git(&["add", "WORK.txt"]);
+        git(&["commit", "-m", "agent work"]);
+        git(&["branch", &format!("tf/{id}-rejected-{attempt}-{ts}")]);
+        git(&["checkout", "main"]);
+    }
+    // Round 11's cleanup deletes the original attempt branch after archiving.
+    git(&["branch", "-D", &format!("tf/{id}")]);
+}
+
+// spec: cli/recover-command#attempt-flag-selects-the-archived-attempt
+#[test]
+fn recover_with_attempt_flag_selects_the_right_archive() {
+    let tasks = r#"{ "tasks": [
+        { "id": "C", "title": "recover me", "scope": ["WORK.txt"], "accept": "test -f WORK.txt" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    fixture_recover_task_attempts(
+        &cli,
+        "C",
+        &[
+            (1, 1791259001, "attempt-one\n"),
+            (2, 1791259002, "attempt-two\n"),
+        ],
+    );
+    let repo = cli.dir.join("repo");
+
+    let (code, out) = cli.af(&["recover", "--task", "C", "--attempt", "1"]);
+    assert_eq!(code, 0, "recover --attempt 1 exits 0: {out}");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("WORK.txt")).unwrap(),
+        "attempt-one\n",
+        "the requested attempt's work is merged, not the newest: {out}"
+    );
+    assert!(
+        !branch_exists(&repo, "tf/C-rejected-1-1791259001"),
+        "the recovered attempt's archive is consumed"
+    );
+    assert!(
+        branch_exists(&repo, "tf/C-rejected-2-1791259002"),
+        "the other attempt's archive survives"
+    );
+}
+
+// spec: cli/recover-command#no-attempt-flag-picks-the-newest-archive
+#[test]
+fn recover_attempt_flag_picks_newest_without_flag() {
+    let tasks = r#"{ "tasks": [
+        { "id": "C", "title": "recover me", "scope": ["WORK.txt"], "accept": "test -f WORK.txt" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    fixture_recover_task_attempts(
+        &cli,
+        "C",
+        &[
+            (1, 1791259001, "attempt-one\n"),
+            (2, 1791259002, "attempt-two\n"),
+        ],
+    );
+    let repo = cli.dir.join("repo");
+
+    // No --attempt: the newest archive by parsed <ts> wins, whatever attempt
+    // it names.
+    let (code, out) = cli.af(&["recover", "--task", "C"]);
+    assert_eq!(code, 0, "recover without --attempt exits 0: {out}");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("WORK.txt")).unwrap(),
+        "attempt-two\n",
+        "the newest archive wins without --attempt: {out}"
+    );
+    assert!(
+        !branch_exists(&repo, "tf/C-rejected-2-1791259002"),
+        "the newest archive is consumed"
+    );
+    assert!(
+        branch_exists(&repo, "tf/C-rejected-1-1791259001"),
+        "the older attempt's archive survives"
+    );
+}
+
+// spec: cli/recover-command#attempt-flag-rejects-an-unknown-attempt
+#[test]
+fn recover_attempt_flag_rejects_unknown_attempt() {
+    let tasks = r#"{ "tasks": [
+        { "id": "C", "title": "recover me", "scope": ["WORK.txt"], "accept": "test -f WORK.txt" }
+    ] }"#;
+    let cli = Cli::new_with_tasks(tasks);
+    fixture_recover_task_attempts(&cli, "C", &[(1, 1791259001, "attempt-one\n")]);
+    let repo = cli.dir.join("repo");
+
+    let (code, out) = cli.af(&["recover", "--task", "C", "--attempt", "9"]);
+    assert_eq!(code, 2, "an unknown attempt exits 2: {out}");
+    assert!(
+        out.contains("attempt 9"),
+        "names the attempt searched: {out}"
+    );
+    assert!(
+        branch_exists(&repo, "tf/C-rejected-1-1791259001"),
+        "the existing archive survives"
+    );
+    assert!(!repo.join("WORK.txt").exists(), "nothing merged");
+}
+
 /// A successful `af recover` is a recovery, not a re-run: it appends a
 /// NON-VERDICT `recovered` receipt naming the archived attempt and the failed
 /// attempt's worker/model, measures 0.0s (no agent ran), and leaves the
