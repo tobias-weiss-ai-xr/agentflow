@@ -14,7 +14,7 @@ use crate::config::{Settings, Worker};
 use crate::subprocess::{self, CmdKind, EnvMode};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Worker `cli` value that selects this harness.
 pub const BUILTIN: &str = "builtin";
@@ -98,8 +98,17 @@ fn resolve_inside(wt: &Path, p: &str) -> Result<PathBuf, String> {
                 }
             }
             std::path::Component::CurDir => {}
+            // Drive-relative paths like `C:foo` are neither absolute nor
+            // RootDir, yet pushing a Prefix component replaces the base and
+            // escapes the worktree.
+            std::path::Component::Prefix(_) => return Err(format!("path escapes worktree: {p}")),
             other => norm.push(other.as_os_str()),
         }
+    }
+    // Cheap invariant: containment must still hold after the loop (catches
+    // any future component type that escapes).
+    if !norm.starts_with(wt) {
+        return Err(format!("path escapes worktree: {p}"));
     }
     Ok(norm)
 }
@@ -165,20 +174,27 @@ fn run_tool(
     log: &dyn Fn(&str),
 ) -> String {
     let parsed: Value = serde_json::from_str(args).unwrap_or_else(|_| json!({}));
-    let field = |k: &str| {
-        parsed
-            .get(k)
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .unwrap_or_default()
+    let field = |k: &str| parsed.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    let req_field = |k: &str, tool: &str| {
+        field(k).ok_or_else(|| format!("{tool}: missing or non-string '{k}'"))
     };
     let result = match name {
-        "bash" => match field("command") {
-            c if c.is_empty() => Err("bash: missing command".into()),
-            c => tool_bash(wt, &c, env, env_allow),
+        "bash" => field("command")
+            .filter(|c| !c.is_empty())
+            .map(|c| tool_bash(wt, &c, env, env_allow))
+            .unwrap_or_else(|| Err("bash: missing command".into())),
+        "write" => match (req_field("path", "write"), req_field("content", "write")) {
+            (Ok(path), Ok(content)) => tool_write(wt, &path, &content),
+            (Err(e), _) | (_, Err(e)) => Err(e),
         },
-        "write" => tool_write(wt, &field("path"), &field("content")),
-        "edit" => tool_edit(wt, &field("path"), &field("old"), &field("new")),
+        "edit" => match (
+            req_field("path", "edit"),
+            req_field("old", "edit"),
+            req_field("new", "edit"),
+        ) {
+            (Ok(path), Ok(old), Ok(new)) => tool_edit(wt, &path, &old, &new),
+            (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Err(e),
+        },
         other => Err(format!("unknown tool: {other}")),
     };
     match result {
@@ -229,6 +245,19 @@ mod tests {
         assert!(resolve_inside(&d, "../outside.txt").is_err());
         assert!(resolve_inside(&d, "a/../../outside.txt").is_err());
         assert!(resolve_inside(&d, "").is_err());
+        // Windows drive-relative path: neither absolute nor RootDir, but a
+        // Prefix push replaces the base — must be rejected.
+        #[cfg(windows)]
+        {
+            assert!(resolve_inside(&d, "C:foo").is_err());
+            assert!(resolve_inside(&d, r"C:\temp\x").is_err());
+        }
+        // On non-Windows these are ordinary relative names and stay contained.
+        #[cfg(not(windows))]
+        {
+            assert!(resolve_inside(&d, "C:foo").is_ok());
+            assert!(resolve_inside(&d, r"C:\temp\x").is_ok());
+        }
         assert_eq!(
             resolve_inside(&d, "src/a.txt").unwrap(),
             d.join("src").join("a.txt")
@@ -266,7 +295,19 @@ mod tests {
         assert!(out.starts_with("ERROR: unknown tool"), "{out}");
         let out = run_tool("edit", "not json", &d, &[], &[], &log);
         assert!(out.contains("ERROR"), "{out}");
+        let out = run_tool("write", r#"{"path":"x.txt","content":123}"#, &d, &[], &[], &log);
+        assert!(out.starts_with("ERROR:"), "{out}");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn truncate_chars_counts_chars_not_bytes() {
+        let mut s = String::new();
+        // 'é' is 2 bytes in UTF-8; exceed the char budget with multibyte chars.
+        while s.chars().count() <= TOOL_OUTPUT_MAX {
+            s.push('é');
+        }
+        assert_eq!(truncate_chars(&s, TOOL_OUTPUT_MAX).chars().count(), TOOL_OUTPUT_MAX);
     }
 
     #[test]
