@@ -224,6 +224,13 @@ fn tool_schemas() -> Value {
 // speaks OpenAI chat/completions, so a framework would only add tokio.
 // ---------------------------------------------------------------------------
 
+/// Role instructions for the builtin loop. Kept minimal on purpose: it is
+/// re-sent on every turn and every turn is billed.
+const SYSTEM_PROMPT: &str = "You are a coding agent working inside a git worktree. \
+Complete the user's task using the bash, write, and edit tools. \
+Run the task's acceptance command with bash before you finish; the result is \
+merged only if the acceptance command passes. Finish with a short summary.";
+
 fn chat_once(
     agent: &ureq::Agent,
     url: &str,
@@ -333,7 +340,14 @@ pub fn run(
         .and_then(|k| std::env::var(k).ok())
         .filter(|v| !v.is_empty());
 
-    let mut messages = vec![json!({"role": "system", "content": prompt})];
+    // Turn 1 MUST be [system, user]: strict gateways (z.ai error 1214,
+    // academiccloud "No user query found in messages") reject a system-only
+    // messages array. Role instructions live in system; the task itself is
+    // the user query.
+    let mut messages = vec![
+        json!({"role": "system", "content": SYSTEM_PROMPT}),
+        json!({"role": "user", "content": prompt}),
+    ];
     let (mut total_tokens, mut turns) = (0u64, 0u32);
     let mut final_text = String::new();
 

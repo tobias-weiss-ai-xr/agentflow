@@ -28,6 +28,10 @@ fn git(repo: &std::path::Path, args: &[&str]) {
 /// malformed, which keeps a buggy test loud instead of hung).
 struct StubLlm {
     url: String,
+    /// Bodies of every request served, in order — lets tests assert what the
+    /// harness actually SENT. The turn-1 shape bug (system-only messages, 400
+    /// on strict gateways) passed the old body-blind stub unnoticed.
+    bodies: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 /// Drain ONE full request (headers + Content-Length body) so the socket has
@@ -35,12 +39,12 @@ struct StubLlm {
 /// makes Windows RST the connection; the client then sees a transport error
 /// (10054) instead of the queued response and the E2E flakes. Harness
 /// request bodies are a few KiB (system prompt + envelope), so this is cheap.
-fn drain_request(s: &mut std::net::TcpStream) {
+fn drain_request(s: &mut std::net::TcpStream) -> String {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
         match s.read(&mut chunk) {
-            Ok(0) | Err(_) => return, // client gone; best-effort drain
+            Ok(0) | Err(_) => return String::new(), // client gone; best-effort drain
             Ok(n) => buf.extend_from_slice(&chunk[..n]),
         }
         if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
@@ -55,11 +59,15 @@ fn drain_request(s: &mut std::net::TcpStream) {
             let mut left = len.saturating_sub(buf.len() - (end + 4));
             while left > 0 {
                 match s.read(&mut chunk) {
-                    Ok(0) | Err(_) => return,
-                    Ok(n) => left = left.saturating_sub(n),
+                    Ok(0) | Err(_) => return String::new(),
+                    Ok(n) => {
+                        buf.extend_from_slice(&chunk[..n]);
+                        left = left.saturating_sub(n);
+                    }
                 }
             }
-            return;
+            let start = end + 4;
+            return String::from_utf8_lossy(&buf[start..start + len]).into_owned();
         }
     }
 }
@@ -70,12 +78,15 @@ impl StubLlm {
         let addr = listener.local_addr().unwrap();
         let queue: Arc<Mutex<VecDeque<(u16, String)>>> =
             Arc::new(Mutex::new(responses.into()));
+        let bodies: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = bodies.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut s) = stream else { break };
                 let next = queue.lock().unwrap().pop_front();
                 let (code, body) = next.unwrap_or((200, "{}".to_string()));
-                drain_request(&mut s);
+                let req_body = drain_request(&mut s);
+                sink.lock().unwrap().push(req_body);
                 let reason = if code == 200 { "OK" } else { "Internal Server Error" };
                 let resp = format!(
                     "HTTP/1.1 {code} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -85,7 +96,7 @@ impl StubLlm {
                 let _ = s.flush();
             }
         });
-        StubLlm { url: format!("http://{addr}/v1") }
+        StubLlm { url: format!("http://{addr}/v1"), bodies }
     }
 }
 
@@ -215,6 +226,17 @@ fn native_harness_happy_path_merges() {
     let f = fixture(&task_json(&gate_cmd("A.txt")), &native_worker_json(&stub.url, 1, 8));
     let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
     assert_eq!(code, 0, "run should exit 0 (all done)");
+    // Regression net (found in production): turn 1's request MUST be
+    // [system, user] — strict gateways (z.ai 1214, academiccloud "No user
+    // query found") 400 a system-only messages array.
+    let first = stub.bodies.lock().unwrap()[0].clone();
+    let req: serde_json::Value = serde_json::from_str(&first).expect("stub saw a JSON body");
+    let msgs = req["messages"].as_array().expect("messages array");
+    assert_eq!(msgs.len(), 2, "turn 1 = system + user");
+    assert_eq!(msgs[0]["role"], "system");
+    assert!(!msgs[0]["content"].as_str().unwrap_or("").is_empty(), "system prompt non-empty");
+    assert_eq!(msgs[1]["role"], "user");
+    assert!(msgs[1]["content"].as_str().unwrap_or("").contains("touch a file"), "task prompt is the user message");
     let st = Store::new(f.st.state_dir.clone()).load();
     assert_eq!(st["A"].state, TaskState::Done);
     assert!(f.repo.join("A.txt").exists(), "merged to main");
