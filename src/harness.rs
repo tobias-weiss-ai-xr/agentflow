@@ -235,6 +235,10 @@ fn tool_schemas() -> Value {
 // speaks OpenAI chat/completions, so a framework would only add tokio.
 // ---------------------------------------------------------------------------
 
+/// Per-turn output cap sent as max_tokens. Comfortably below every fleet
+/// provider's limit; bounds a model that would otherwise ramble.
+const MAX_OUTPUT_TOKENS: u32 = 32_768;
+
 /// Role instructions for the builtin loop. Kept minimal on purpose: it is
 /// re-sent on every turn and every turn is billed.
 const SYSTEM_PROMPT: &str = "You are a coding agent working inside a git worktree. \
@@ -392,6 +396,10 @@ pub fn run(
             "messages": messages,
             "tools": tool_schemas(),
             "tool_choice": "auto",
+            // Strict gateways reject a request without max_tokens (litellm
+            // assumes the full context window as output and errors with
+            // ContextWindowExceededError). 32k bounds runaway outputs, too.
+            "max_tokens": MAX_OUTPUT_TOKENS,
         });
         let resp = match chat_once(&agent, &url, key.as_deref(), &body) {
             Ok(r) => r,

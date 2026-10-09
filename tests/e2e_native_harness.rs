@@ -237,6 +237,7 @@ fn native_harness_happy_path_merges() {
     assert!(!msgs[0]["content"].as_str().unwrap_or("").is_empty(), "system prompt non-empty");
     assert_eq!(msgs[1]["role"], "user");
     assert!(msgs[1]["content"].as_str().unwrap_or("").contains("touch a file"), "task prompt is the user message");
+    assert_eq!(req["max_tokens"].as_u64(), Some(32768), "max_tokens must be sent — strict gateways reject requests without it");
     let st = Store::new(f.st.state_dir.clone()).load();
     assert_eq!(st["A"].state, TaskState::Done);
     assert!(f.repo.join("A.txt").exists(), "merged to main");
