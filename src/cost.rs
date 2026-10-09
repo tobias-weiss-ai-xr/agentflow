@@ -74,7 +74,11 @@ pub fn compare(a: Option<Basis>, b: Option<Basis>) -> Option<Ordering> {
 }
 
 /// Dollars for `tokens` at a price in USD per million tokens.
+/// Returns NaN if the price is not usable (NaN, infinite, or non-positive).
 pub fn estimate_usd(tokens: u64, price_per_mtok_usd: f64) -> f64 {
+    if !is_usable(price_per_mtok_usd) {
+        return f64::NAN;
+    }
     tokens as f64 / 1_000_000.0 * price_per_mtok_usd
 }
 
@@ -94,7 +98,13 @@ pub fn size_ratio(params_b: f64, all_declared: &[Basis]) -> Option<f64> {
             });
         }
     }
-    Some(params_b / cheapest?)
+    let cheapest = cheapest?;
+    // Avoid divide-by-zero: if cheapest is not usable (zero, NaN, or infinite),
+    // we cannot compute a meaningful ratio.
+    if !is_usable(cheapest) {
+        return None;
+    }
+    Some(params_b / cheapest)
 }
 
 /// True when a declared number is usable: finite and strictly positive.
@@ -158,7 +168,11 @@ pub fn attempt_expense(
 /// Estimated dollars for `tokens` at a price in USD per million tokens,
 /// as integer micro-USD: `tokens × price` (the per-million division and
 /// the micro multiplication cancel). Saturating, like every cast here.
+/// Returns 0 if the price is not usable (NaN, infinite, or non-positive).
 fn estimate_usd_micros(tokens: u64, price_per_mtok_usd: f64) -> u64 {
+    if !is_usable(price_per_mtok_usd) {
+        return 0;
+    }
     (tokens as f64 * price_per_mtok_usd).round().max(0.0) as u64
 }
 
@@ -233,5 +247,85 @@ mod tests {
         );
         // Nothing declared, nothing measured: nothing.
         assert_eq!(attempt_expense(None, None, Some(1), &all), None);
+    }
+
+    /// Pinning test: size_ratio must not divide by zero.
+    #[test]
+    fn size_ratio_returns_none_when_cheapest_is_zero() {
+        // Zero cheapest value would cause divide-by-zero.
+        let all = [Basis::Sized(0.0), Basis::Sized(8.0)];
+        assert_eq!(size_ratio(400.0, &all), None);
+        // All zero values.
+        let all_zero = [Basis::Sized(0.0), Basis::Sized(0.0)];
+        assert_eq!(size_ratio(400.0, &all_zero), None);
+    }
+
+    /// Pinning test: estimate_usd_micros must handle NaN and infinity.
+    #[test]
+    fn estimate_usd_micros_handles_nan_and_infinity() {
+        // NaN price returns 0.
+        assert_eq!(estimate_usd_micros(1_000_000, f64::NAN), 0);
+        // Infinity price returns 0.
+        assert_eq!(estimate_usd_micros(1_000_000, f64::INFINITY), 0);
+        assert_eq!(estimate_usd_micros(1_000_000, f64::NEG_INFINITY), 0);
+        // Negative price returns 0.
+        assert_eq!(estimate_usd_micros(1_000_000, -1.0), 0);
+        // Zero price returns 0.
+        assert_eq!(estimate_usd_micros(1_000_000, 0.0), 0);
+        // Valid price works normally.
+        assert_eq!(estimate_usd_micros(1_000_000, 2.0), 2_000_000);
+    }
+
+    /// Pinning test: estimate_usd must handle NaN and infinity.
+    #[test]
+    fn estimate_usd_handles_nan_and_infinity() {
+        // NaN price returns NaN.
+        assert!(estimate_usd(1_000_000, f64::NAN).is_nan());
+        // Infinity price returns NaN (not a valid usable price).
+        assert!(estimate_usd(1_000_000, f64::INFINITY).is_nan());
+        assert!(estimate_usd(1_000_000, f64::NEG_INFINITY).is_nan());
+        // Negative price returns NaN.
+        assert!(estimate_usd(1_000_000, -1.0).is_nan());
+        // Zero price returns NaN.
+        assert!(estimate_usd(1_000_000, 0.0).is_nan());
+        // Valid price works normally.
+        assert_eq!(estimate_usd(1_000_000, 2.0), 2.0);
+    }
+
+    /// Pinning test: attempt_expense handles torn/unparseable receipts.
+    #[test]
+    fn attempt_expense_handles_torn_receipts() {
+        let all = [Basis::Sized(4.0)];
+        // Torn receipt: has basis but no tokens → unknown, not zero.
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Priced(2.0)), None, &all),
+            None
+        );
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Sized(8.0)), None, &all),
+            None
+        );
+        // Valid receipt with tokens works.
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Priced(2.0)), Some(500_000), &all),
+            Some(Expense::Usd { micros: 1_000_000, estimated: true })
+        );
+    }
+
+    /// Pinning test: size_ratio handles all unusable values.
+    #[test]
+    fn size_ratio_handles_all_unusable_values() {
+        // All NaN values.
+        let all_nan = [Basis::Sized(f64::NAN), Basis::Sized(f64::NAN)];
+        assert_eq!(size_ratio(400.0, &all_nan), None);
+        // All infinite values.
+        let all_inf = [Basis::Sized(f64::INFINITY), Basis::Sized(f64::INFINITY)];
+        assert_eq!(size_ratio(400.0, &all_inf), None);
+        // All negative values.
+        let all_neg = [Basis::Sized(-1.0), Basis::Sized(-8.0)];
+        assert_eq!(size_ratio(400.0, &all_neg), None);
+        // Mix of unusable values.
+        let all_mixed = [Basis::Sized(0.0), Basis::Sized(f64::NAN), Basis::Sized(-1.0)];
+        assert_eq!(size_ratio(400.0, &all_mixed), None);
     }
 }
