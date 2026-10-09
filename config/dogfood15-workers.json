@@ -1,0 +1,50 @@
+{
+  "_meta": {
+    "round": 15,
+    "note": "First round on the native harness (ADR-14). Free pools point DIRECTLY at their upstreams (bypasses litellm + its regen drift). Tool support per endpoint verified 2026-10-09 by probe (saia-qwen397b OK, tud-glm52 OK). All price_per_mtok_usd are OpenRouter market prices (scripts/fill-prices.py, 3:1 input:output blend) — including zai, so the two glm-5.2 workers share one comparable basis; actual SAIA/TUD marginal cost is 0 (academic quota). max_turns raised 24/32 -> 48/40 after round-15 turn-cap evidence."
+  },
+  "defaults": {
+    "accept_timeout_s": 3000,
+    "max_attempts": 6,
+    "retry_delay_s": 15,
+    "agent_timeout_s": 4200
+  },
+  "workers": [
+    {
+      "name": "saia-qwen397b",
+      "provider": "saia",
+      "model": "qwen3.5-397b-a17b",
+      "api_base": "https://chat-ai.academiccloud.de/v1",
+      "api_key_env": "SAIA_API_KEY",
+      "enabled": true,
+      "cli": "builtin",
+      "params_b": 397,
+      "max_turns": 48,
+      "price_per_mtok_usd": 1.287
+    },
+    {
+      "name": "tud-glm52",
+      "provider": "tud",
+      "model": "GLM-5.2-AWQ-INT4",
+      "api_base": "https://llm-service.ai.tu-darmstadt.de/v1",
+      "api_key_env": "TUD_API_KEY",
+      "enabled": true,
+      "cli": "builtin",
+      "params_b": 355,
+      "max_turns": 48,
+      "price_per_mtok_usd": 1.095
+    },
+    {
+      "name": "zai-glm52",
+      "provider": "zai",
+      "model": "glm-5.2",
+      "api_base": "https://api.z.ai/api/coding/paas/v4",
+      "api_key_env": "ZAI_API_KEY",
+      "enabled": true,
+      "cli": "builtin",
+      "params_b": 400,
+      "price_per_mtok_usd": 1.095,
+      "max_turns": 40
+    }
+  ]
+}

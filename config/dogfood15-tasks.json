@@ -1,0 +1,39 @@
+{
+  "_meta": {
+    "round": 15,
+    "theme": "harness shakedown — probe round: small real tasks exercise the builtin loop (bash+write+edit) on each new free-pool worker; zai baseline included so UCB1 has a reference win-rate",
+    "design": "T1 is the smallest real change (one function + one test) so a worker that survives it demonstrably completed a full write->build->test cycle through the native harness. T2 needs an edit to existing code (second tool path) plus a doc touch. Gates are the standard cargo gate; deliberately no openspec/coverage gate so failures point at the harness, not gate plumbing."
+  },
+  "tasks": [
+    {
+      "id": "r15c-probe-small",
+      "title": "r15c-probe-small: add fn env_lookup_pairs returning (String,String) pairs and pin it with one test",
+      "deps": [],
+      "manual": false,
+      "priority": 1,
+      "scope": [
+        "src/config.rs",
+        "tests/contract_config.rs"
+      ],
+      "touch": [
+        "src/config.rs"
+      ],
+      "accept": "grep -q 'fn env_lookup_pairs' src/config.rs && cargo test --lib && cargo test --test contract_config"
+    },
+    {
+      "id": "r15b-probe-edit",
+      "title": "r15b-probe-edit: extend the DEFAULT_PROMPT doc comment to name the three builtin tools and bump the harness module doc example",
+      "deps": [],
+      "manual": false,
+      "priority": 2,
+      "scope": [
+        "src/harness.rs",
+        "src/execute.rs"
+      ],
+      "touch": [
+        "src/harness.rs"
+      ],
+      "accept": "grep -q 'builtin' src/harness.rs && cargo build && cargo test --lib"
+    }
+  ]
+}
