@@ -681,6 +681,31 @@ pub fn parse_gate_env(s: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Resolve environment variable NAMES to `(name, value)` pairs.
+///
+/// The "which of these optional overrides did the operator actually set?"
+/// primitive: `env_or`/`env_or_int` answer ONE name with a default baked in,
+/// while this answers MANY names at once and reports only the ones that are
+/// present, in the order they were asked for — absence is information for
+/// the caller, not an error and not a silently injected default. The
+/// returned shape is the `(String, String)` pair vec the rest of the module
+/// already speaks (`Settings::gate_env`), so a resolved set can be handed to
+/// any consumer of that type unchanged.
+///
+/// Names that are unset (or hold non-UTF-8 bytes, which `std::env::var`
+/// reports as an error) are skipped silently; duplicates in `names` yield
+/// duplicate pairs, because the caller's order is the contract.
+pub fn env_lookup_pairs(names: &[&str]) -> Vec<(String, String)> {
+    names
+        .iter()
+        .filter_map(|name| {
+            std::env::var(name)
+                .ok()
+                .map(|value| ((*name).to_string(), value))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

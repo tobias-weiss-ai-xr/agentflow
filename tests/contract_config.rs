@@ -27,8 +27,8 @@
 //!
 //! Uses only std + the crate. Every test gets its own uniquely-named temp
 //! directory so the file stays independent under cargo's parallel runner.
-//! The one env-reading test (`Settings::from_env`) documents its own race
-//! avoidance in place.
+//! The env-reading tests (`Settings::from_env`, `env_lookup_pairs`)
+//! document their own race avoidance in place.
 
 use agentflow::config as config;
 use agentflow::config::{detect_cycle, load, load_repos, parse_gate_env, Priority};
@@ -633,6 +633,54 @@ fn parse_gate_env_contract() {
             ("C".to_string(), "3".to_string()),
         ]
     );
+}
+
+/// `env_lookup_pairs` turns a list of env NAMES into the `(String, String)`
+/// pair vec the config module already speaks (`Settings::gate_env`): names
+/// that are set come back in the order they were asked for, names that are
+/// unset are simply ABSENT — absence is information for the caller, not an
+/// error and not a silently injected default (contrast `env_or`, which can
+/// only answer one name and always answers it).
+///
+/// Race avoidance: every mutated name is unique to this test
+/// (`AF_CONTRACT_LOOKUP_*`, saved/restored by `EnvVar` so the ambient
+/// environment survives byte-identical), cargo runs each integration-test
+/// FILE as its own process, and the sibling `Settings::from_env` test below
+/// touches only `TF_*` names — so the two can never overlap on a key.
+#[test]
+fn env_lookup_pairs_contract() {
+    let _restore = [
+        EnvVar::set("AF_CONTRACT_LOOKUP_A", "1"),
+        EnvVar::set("AF_CONTRACT_LOOKUP_B", "hello world"),
+        // Belt-and-braces: a name the host may have exported anyway.
+        EnvVar::remove("AF_CONTRACT_LOOKUP_ABSENT"),
+    ];
+
+    // Present names come back in INPUT order; the unset one is skipped
+    // (not defaulted, not an error). Values pass through verbatim, spaces
+    // and all — no parsing happens here.
+    let pairs = config::env_lookup_pairs(&[
+        "AF_CONTRACT_LOOKUP_A",
+        "AF_CONTRACT_LOOKUP_ABSENT",
+        "AF_CONTRACT_LOOKUP_B",
+    ]);
+    assert_eq!(
+        pairs,
+        vec![
+            ("AF_CONTRACT_LOOKUP_A".to_string(), "1".to_string()),
+            (
+                "AF_CONTRACT_LOOKUP_B".to_string(),
+                "hello world".to_string()
+            ),
+        ],
+        "present names in input order; the unset one is skipped, not defaulted"
+    );
+
+    // Nothing asked, nothing answered — the fn reads only what it is given.
+    assert!(config::env_lookup_pairs(&[]).is_empty());
+
+    // All-unset is fine too: the vec is empty, NOT a vec of defaults.
+    assert!(config::env_lookup_pairs(&["AF_CONTRACT_LOOKUP_ABSENT"]).is_empty());
 }
 
 /// `load_repos` maps names to paths (relative paths resolve against the
