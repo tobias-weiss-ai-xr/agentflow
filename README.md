@@ -1,5 +1,10 @@
 # agentflow
 
+> **⚠️ DEPRECATED (2026-10-09):** this branch is the retired **Go port**.
+> The Rust af on \`main\` is feature-complete (including the \`command\`
+> worker template) and ships fleet-wide. See DEPRECATED.md.
+
+
 **Parallel LLM task execution on isolated git worktrees.**
 
 agentflow is a small Rust orchestrator that dispatches declarative tasks to
