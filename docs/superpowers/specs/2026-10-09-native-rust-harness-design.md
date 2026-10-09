@@ -42,9 +42,12 @@ execute_task (unchanged)
 ```
 
 - `HarnessOutput { final_text, total_tokens, turns_used, stop: Normal|TurnCap|Timeout|ProviderError }`
-- `execute_task` maps `stop` onto the EXISTING failure paths: `TurnCap` →
-  stall-class, `Timeout` → timeout, `ProviderError` → non-zero exit. Work is
-  preserved/archived by the unchanged preserve-and-note machinery.
+- `execute_task` routes native failures through an early-return branch that
+  calls the SAME preserve-and-note + cleanup machinery, with the receipt
+  `error` carrying the precise reason (`harness: turn cap N reached`,
+  `harness: exceeded agent_timeout_s`, `harness: provider …`). Work is
+  preserved/archived unchanged; the legacy `agent exited …` CLI message
+  texts stay byte-identical for CLI workers.
 - After the loop, af's existing dirty-worktree commit + zero-commit failure +
   scope check + gate run unchanged — the harness changes nothing downstream.
 
