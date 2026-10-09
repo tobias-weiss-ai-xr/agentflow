@@ -1,7 +1,7 @@
 {
   "_meta": {
     "round": 15,
-    "note": "First round on the native harness (ADR-14). POLICY: no direct upstream traffic — every worker goes through a LiteLLM proxy: 42.42 legion (primary, Redis cache TTL 6h) or 42.20 CI (fallback, same routes verified); ai1 vLLM ONLY behind a proxy route (local/qwen3.5-397b/ai1, added to config.yaml, live after litellm-proxy restart). api_key: LITELLM_MASTER_KEY from litellm-docker/.env. Cached identical turn-1 dispatches verified (0.1s vs 2.2s). Tool support per route probed 2026-10-09 (saia/qwen3.5-397b-a17b OK, tud/glm-5.2-awq OK, glm-5.2 OK). All price_per_mtok_usd are OpenRouter market prices (scripts/fill-prices.py, 3:1 input:output blend); SAIA/TUD actual marginal cost is 0 (academic quota). max_turns 48/40 after round-15 turn-cap evidence."
+    "note": "First round on the native harness (ADR-14). POLICY: no direct upstream traffic — every worker goes through a LiteLLM proxy: 42.42 legion (primary, Redis cache TTL 6h) or 42.20 CI (fallback, same routes verified); ai1 vLLM ONLY behind a proxy route (local/qwen3.5-397b/ai1, added to config.yaml, live after litellm-proxy restart). api_key: LITELLM_MASTER_KEY from litellm-docker/.env. Cached identical turn-1 dispatches verified (0.1s vs 2.2s). Tool support per route probed 2026-10-09 (saia/qwen3.5-397b-a17b OK, tud/glm-5.2-awq OK, glm-5.2 OK). The ONLY local model is deepseek-v4-flash (ai1:8888, litellm route local/deepseek-v4-flash/ai1) — no other local models exist. All price_per_mtok_usd are OpenRouter market prices (scripts/fill-prices.py, 3:1 input:output blend); SAIA/TUD actual marginal cost is 0 (academic quota). max_turns 48/40 after round-15 turn-cap evidence."
   },
   "defaults": {
     "accept_timeout_s": 3000,
