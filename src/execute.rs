@@ -269,15 +269,36 @@ fn execute_attempt(
             );
         }
 
-        // 2) Agent CLI (external, OpenAI-compatible): --provider P --model M -p @file
-        let argv = spawn_argv(&ctx.st, worker, &prompt_path);
-        let (agent_cmd, agent_args) = argv.split_first().unwrap();
+        // 2) Agent CLI dispatch — two shapes:
+        //    a) worker.command set (GOWORKER parity): `{prompt}` → absolute
+        //       prompt path, run via the platform shell inside the worktree
+        //       with the inherited environment (user-authored template,
+        //       same trust class as acceptance gates).
+        //    b) legacy argv: cli --provider P --model M [-m json] [args]
+        //       -p @file, allowlisted env (sandbox layer 1).
+        let using_command = worker.command.is_some();
+        let (agent_cmd, agent_args) = match &worker.command {
+            Some(tpl) => command_argv(tpl, &prompt_path),
+            None => {
+                let argv = spawn_argv(&ctx.st, worker, &prompt_path);
+                let (c, a) = argv.split_first().unwrap();
+                (c.clone(), a.to_vec())
+            }
+        };
         let (env_pairs_static, env_allow) = agent_env(worker, &|k| std::env::var(k).ok());
         // Convert static pairs to owned for subprocess compatibility
         let env_pairs: Vec<(String, String)> = env_pairs_static
             .into_iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
+        // The command template path runs a shell, which needs PATH (it
+        // resolves the configured binary by name) — and it is trusted
+        // user-authored config, so it rides the inherited environment.
+        let env_mode = if using_command {
+            crate::subprocess::EnvMode::Inherit
+        } else {
+            crate::subprocess::EnvMode::Allowlist(env_allow)
+        };
         append("-- agent --");
         // Stall watchdog (agent CLI ONLY — git and gate calls stay on plain
         // `run`: a silent gate is not necessarily a stalled one, and their
@@ -289,11 +310,11 @@ fn execute_attempt(
             Some(Duration::from_secs(ctx.st.agent_stall_s))
         };
         let agent_out = crate::subprocess::run_with_stall(
-            agent_cmd,
-            agent_args,
+            &agent_cmd,
+            &agent_args,
             Some(&wt_path),
             &env_pairs,
-            crate::subprocess::EnvMode::Allowlist(env_allow),
+            env_mode,
             Duration::from_secs(ctx.st.agent_timeout_s),
             stall,
         );
@@ -741,6 +762,15 @@ fn spawn_argv(st: &Settings, worker: &Worker, prompt_path: &Path) -> Vec<String>
     argv
 }
 
+/// Full agent argv for the `command` template path: `{prompt}` → absolute
+/// prompt-file path, then run via the platform shell (`sh -c` / `cmd /C`).
+/// Pure for testing.
+fn command_argv(tpl: &str, prompt_path: &Path) -> (String, Vec<String>) {
+    let rendered = tpl.replace("{prompt}", &prompt_path.display().to_string());
+    let (shell, flag) = crate::gate::shell();
+    (shell.to_string(), vec![flag, rendered])
+}
+
 const DEFAULT_PROMPT: &str = r#"You are an autonomous coding agent working in a git worktree.
 
 TASK ID: {{TASK_ID}}
@@ -893,9 +923,15 @@ mod tests {
         };
         let (pairs, allow) = agent_env(&w, &lookup);
         // pairs is now Vec<(&'static str, &'static str)>
-        assert!(pairs.iter().any(|(k, v)| *k == "GIT_TERMINAL_PROMPT" && *v == "0"));
-        assert!(pairs.iter().any(|(k, v)| *k == "GIT_CONFIG_KEY_0" && *v == "credential.helper"));
-        assert!(pairs.iter().any(|(k, v)| *k == "GIT_CONFIG_VALUE_0" && v.is_empty()));
+        assert!(pairs
+            .iter()
+            .any(|(k, v)| *k == "GIT_TERMINAL_PROMPT" && *v == "0"));
+        assert!(pairs
+            .iter()
+            .any(|(k, v)| *k == "GIT_CONFIG_KEY_0" && *v == "credential.helper"));
+        assert!(pairs
+            .iter()
+            .any(|(k, v)| *k == "GIT_CONFIG_VALUE_0" && v.is_empty()));
         assert!(
             allow.contains(&"AF_TEST_KEY".to_string()),
             "worker api key allowlisted"
@@ -910,6 +946,33 @@ mod tests {
         let (pairs, allow) = agent_env(&worker(None), &|_| None);
         assert!(!allow.iter().any(|k| k.starts_with("AF_")));
         assert_eq!(pairs.len(), 4);
+    }
+
+    #[test]
+    fn command_argv_substitutes_prompt_and_uses_platform_shell() {
+        let (cmd, args) = command_argv(
+            "opencode run -m m \"$(cat {prompt})\"",
+            &PathBuf::from("/abs/state/prompts/A.md"),
+        );
+        let joined = format!("{cmd} {}", args.join(" "));
+        assert!(joined.contains("/abs/state/prompts/A.md"), "{joined}");
+        assert!(
+            !joined.contains("{prompt}"),
+            "placeholder replaced: {joined}"
+        );
+    }
+
+    #[test]
+    fn worker_command_field_parses_from_json() {
+        let w: Worker = serde_json::from_str(
+            r#"{"name":"w","provider":"p","model":"m","cli":"pi","command":"x {prompt}"}"#,
+        )
+        .unwrap();
+        assert_eq!(w.command.as_deref(), Some("x {prompt}"));
+        // Absent → None (legacy argv dispatch stays the default).
+        let w2: Worker =
+            serde_json::from_str(r#"{"name":"w","provider":"p","model":"m","cli":"pi"}"#).unwrap();
+        assert!(w2.command.is_none());
     }
 
     #[test]

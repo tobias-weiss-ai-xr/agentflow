@@ -108,6 +108,18 @@ fn worker_json(max_attempts: u32) -> String {
     )
 }
 
+/// Same worker, dispatched through the `command` shell-template path
+/// (GOWORKER parity): `{prompt}` → absolute prompt path, run via the
+/// platform shell inside the worktree.
+fn worker_json_command(max_attempts: u32) -> String {
+    let agent_escaped = AGENT.replace('\\', "\\\\");
+    format!(
+        r#"{{ "defaults": {{ "max_attempts": {max_attempts}, "accept_timeout_s": 10 }},
+            "workers": [ {{ "name": "w1", "provider": "openai", "model": "gpt-4o",
+                            "enabled": true, "command": "\"{agent_escaped}\" {{prompt}}" }} ] }}"#
+    )
+}
+
 /// Write a shell "worker" that first runs the real stub to WRITE AND COMMIT
 /// its work, then re-execs the stub with `FAKE_AGENT_HANG_MS` armed so the
 /// attempt commits real work and THEN stalls silently. `exec` replaces the
@@ -229,6 +241,33 @@ fn happy_path_dependency_and_merge() {
     let prompt = std::fs::read_to_string(f.st.state_dir.join("prompts").join("B.md"))
         .expect("prompt file exists");
     assert!(!prompt.contains("Previous attempts"));
+}
+
+/// The `command` shell-template dispatch reaches Done: the agent child is
+/// spawned via the platform shell with `{prompt}` substituted, the work
+/// merges, the gate passes. (GOWORKER parity — legacy argv dispatch is
+/// covered by every other e2e.)
+// spec: config/worker-command-template
+#[test]
+fn happy_path_command_template_dispatch() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::set_var("FAKE_AGENT_TOUCH", "1");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [
+                {{"id":"A","title":"create a","scope":["A.txt"],"accept":"{ga}"}}
+            ] }}"#,
+            ga = gate_cmd("A.txt")
+        ),
+        &worker_json_command(1),
+    );
+    let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
+    assert_eq!(code, 0, "run should exit 0 (all done)");
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Done);
+    assert!(f.repo.join("A.txt").exists(), "A.txt merged to main");
+    assert!(!f.st.worktree_root.join("A").exists());
 }
 
 /// Failed attempts get receipts too — the routing substrate (ADR-12).
@@ -1751,16 +1790,22 @@ fn an_uncommittable_dirty_tree_fails_the_attempt_cleanly() {
     std::env::set_var("FAKE_AGENT_OUT", "can't land");
     std::env::set_var("FAKE_AGENT_NO_COMMIT", "1");
     // The operator's pre-commit hook rejects every commit in this repo.
-    let hooks = f.repo.join(".git").join("hooks");
-    std::fs::create_dir_all(&hooks).unwrap();
-    std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\nexit 1\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(
-        hooks.join("pre-commit"),
-        std::fs::Permissions::from_mode(0o777),
-    )
-    .unwrap();
-
+    // (Unix-only: POSIX exec bits; the same failure shape on Windows is
+    // covered by the dirty-tree path without a hook.)
+    #[cfg(unix)]
+    let code = {
+        use std::os::unix::fs::PermissionsExt;
+        let hooks = f.repo.join(".git").join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(
+            hooks.join("pre-commit"),
+            std::fs::Permissions::from_mode(0o777),
+        )
+        .unwrap();
+        run::run_loop(&f.cfg, &f.st, &RunOptions::default())
+    };
+    #[cfg(not(unix))]
     let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
     assert_eq!(code, 2, "an uncommittable dirty tree must fail the run");
 

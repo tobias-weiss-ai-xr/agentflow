@@ -1917,7 +1917,7 @@ fn mean_duration_cell(verdicts: &[&Receipt]) -> String {
 /// Generates a human-readable report with:
 ///
 /// **Per-task table**: TASK, ATTEMPTS, WALL_S, TOKENS, COST, MODEL
-/// 
+///
 /// **Trust block**: WORKER, WINS/TOTAL, TRUST (percentage), MEAN_S, COST
 ///   - Only `merged`/`failed` outcomes count as verdicts
 ///   - `interrupted` and `recovered` are excluded from trust calculations

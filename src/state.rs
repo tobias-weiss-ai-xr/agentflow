@@ -283,7 +283,7 @@ impl Store {
     /// history, not a fatal error — it is reported by name, never allowed to
     /// block a campaign.
     pub fn load_receipts_checked(&self) -> (Vec<Receipt>, Vec<String>) {
-        let mut out = Vec::new();
+        let mut out: Vec<(String, Receipt)> = Vec::new();
         let mut problems = Vec::new();
         if let Ok(rd) = std::fs::read_dir(self.receipt_dir()) {
             for e in rd.flatten() {
@@ -296,15 +296,19 @@ impl Store {
                 let name = e.file_name().to_string_lossy().into_owned();
                 match std::fs::read_to_string(&path) {
                     Ok(s) => match serde_json::from_str::<Receipt>(&s) {
-                        Ok(r) => out.push(r),
+                        Ok(r) => out.push((name.clone(), r)),
                         Err(err) => problems.push(format!("unreadable receipt {name}: {err}")),
                     },
                     Err(err) => problems.push(format!("unreadable receipt {name}: {err}")),
                 }
             }
         }
-        out.sort_by_key(|r| r.ts);
-        (out, problems)
+        // Deterministic order on every platform: ts first, then the file
+        // name (`read_dir` order is unspecified; equal-ts receipts from one
+        // campaign must not shuffle between OSes). `AF-1-0.json` before
+        // `AF-1-1.json` everywhere.
+        out.sort_by(|a, b| (a.1.ts, &a.0).cmp(&(b.1.ts, &b.0)));
+        (out.into_iter().map(|(_, r)| r).collect(), problems)
     }
 
     pub fn lock_file(&self) -> PathBuf {
@@ -557,7 +561,11 @@ mod tests {
         )
         .unwrap();
         let rs = Store::new(d).load_receipts();
-        assert_eq!(rs[0].cost_micros, Some(12_300));
+        // Deterministic order (ts, then file name): the legacy receipt
+        // (A-1-0) first, the costed one (A-1-1) second — on every OS.
+        assert_eq!(rs.len(), 2);
+        assert_eq!(rs[0].cost_micros, None);
+        assert_eq!(rs[1].cost_micros, Some(12_300));
     }
 
     #[test]

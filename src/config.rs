@@ -112,6 +112,16 @@ pub struct Worker {
     pub enabled: bool,
     /// Agent CLI binary name; default `pi`. Passed `--provider/--model/-p @file`.
     pub cli: String,
+    /// Optional full shell command template (`command`). `{prompt}` is
+    /// replaced by the absolute prompt-file path; the string runs via the
+    /// platform shell (`sh -c` / `cmd /C`) inside the worktree with the
+    /// inherited environment (user-authored, same trust class as gates).
+    /// Parity with the Go port's GOWORKER feature — this is how CLIs whose
+    /// argument shape differs from `cli --provider/--model/-p @file`
+    /// (e.g. `opencode run -m M "<prompt>"`) plug in. When absent, the
+    /// legacy argv dispatch is used.
+    #[serde(default)]
+    pub command: Option<String>,
     /// Agent CLI output mode (`output`): `"text"` (the default — the
     /// legacy behaviour: raw stdout/stderr in the task log, no token
     /// capture, receipt `tokens: None`) or `"json"` (the CLI is spawned
@@ -156,6 +166,7 @@ impl Default for Worker {
             api_key_env: None,
             enabled: true,
             cli: "pi".to_string(),
+            command: None,
             output: default_output(),
             args: Vec::new(),
             params_b: None,
