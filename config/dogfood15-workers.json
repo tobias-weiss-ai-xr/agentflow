@@ -1,7 +1,7 @@
 {
   "_meta": {
     "round": 15,
-    "note": "First round on the native harness (ADR-14). Free pools point DIRECTLY at their upstreams (bypasses litellm + its regen drift). Tool support per endpoint verified 2026-10-09 by probe (saia-qwen397b OK, tud-glm52 OK). All price_per_mtok_usd are OpenRouter market prices (scripts/fill-prices.py, 3:1 input:output blend) — including zai, so the two glm-5.2 workers share one comparable basis; actual SAIA/TUD marginal cost is 0 (academic quota). max_turns raised 24/32 -> 48/40 after round-15 turn-cap evidence."
+    "note": "First round on the native harness (ADR-14). All workers go through the LiteLLM proxy (legion, Redis cache TTL 6h, api_key LITELLM_MASTER_KEY from litellm-docker/.env) instead of direct upstreams: one endpoint+key, cached identical turn-1 dispatches (verified 0.1s cache hit vs 2.2s live), proxy-side retries. Tool support per route probed 2026-10-09 (saia/qwen3.5-397b-a17b OK, tud/glm-5.2-awq OK, glm-5.2 OK). All price_per_mtok_usd are OpenRouter market prices (scripts/fill-prices.py, 3:1 input:output blend); SAIA/TUD actual marginal cost is 0 (academic quota). max_turns 48/40 after round-15 turn-cap evidence (6/6 attempts died at 24/32 with zero gate failures). ai1 vLLM worker pending: cluster is up but under load; add after a load-window probe."
   },
   "defaults": {
     "accept_timeout_s": 3000,
@@ -13,33 +13,33 @@
     {
       "name": "saia-qwen397b",
       "provider": "saia",
-      "model": "qwen3.5-397b-a17b",
-      "api_base": "https://chat-ai.academiccloud.de/v1",
-      "api_key_env": "SAIA_API_KEY",
+      "model": "saia/qwen3.5-397b-a17b",
+      "api_base": "http://192.168.42.42:4000/v1",
+      "api_key_env": "LITELLM_MASTER_KEY",
       "enabled": true,
       "cli": "builtin",
       "params_b": 397,
-      "max_turns": 48,
-      "price_per_mtok_usd": 1.287
+      "price_per_mtok_usd": 1.287,
+      "max_turns": 48
     },
     {
       "name": "tud-glm52",
       "provider": "tud",
-      "model": "GLM-5.2-AWQ-INT4",
-      "api_base": "https://llm-service.ai.tu-darmstadt.de/v1",
-      "api_key_env": "TUD_API_KEY",
+      "model": "tud/glm-5.2-awq",
+      "api_base": "http://192.168.42.42:4000/v1",
+      "api_key_env": "LITELLM_MASTER_KEY",
       "enabled": true,
       "cli": "builtin",
       "params_b": 355,
-      "max_turns": 48,
-      "price_per_mtok_usd": 1.095
+      "price_per_mtok_usd": 1.095,
+      "max_turns": 48
     },
     {
       "name": "zai-glm52",
       "provider": "zai",
       "model": "glm-5.2",
-      "api_base": "https://api.z.ai/api/coding/paas/v4",
-      "api_key_env": "ZAI_API_KEY",
+      "api_base": "http://192.168.42.42:4000/v1",
+      "api_key_env": "LITELLM_MASTER_KEY",
       "enabled": true,
       "cli": "builtin",
       "params_b": 400,
