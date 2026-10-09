@@ -14,7 +14,7 @@ use crate::config::{Settings, Worker};
 use crate::subprocess::{self, CmdKind, EnvMode};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Worker `cli` value that selects this harness.
 pub const BUILTIN: &str = "builtin";
@@ -218,6 +218,179 @@ fn tool_schemas() -> Value {
     ])
 }
 
+// ---------------------------------------------------------------------------
+// Provider HTTP — one wire format, hand-rolled (ADR-11): every worker target
+// speaks OpenAI chat/completions, so a framework would only add tokio.
+// ---------------------------------------------------------------------------
+
+fn text_head(s: &str, max: usize) -> String {
+    truncate_chars(s, max)
+}
+
+fn chat_once(
+    agent: &ureq::Agent,
+    url: &str,
+    key: Option<&str>,
+    body: &Value,
+) -> Result<Value, String> {
+    let mut req = agent.post(url).header("Content-Type", "application/json");
+    if let Some(k) = key {
+        req = req.header("Authorization", &format!("Bearer {k}"));
+    }
+    match req.send_json(body) {
+        Ok(resp) => {
+            // ureq 3.4 `Error::StatusCode` carries no body, so the agent is
+            // built with http_status_as_error(false): non-2xx arrives as a
+            // response here and the body head is read ourselves (contract:
+            // non-2xx -> error carrying status + body head).
+            let code = resp.status().as_u16();
+            let text = resp
+                .into_body()
+                .read_to_string()
+                .map_err(|e| format!("provider read: {e}"))?;
+            if !(200..300).contains(&code) {
+                return Err(format!("provider http {code}: {}", text_head(&text, 512)));
+            }
+            serde_json::from_str(&text)
+                .map_err(|e| format!("provider json: {e} (head: {})", text_head(&text, 512)))
+        }
+        Err(ureq::Error::StatusCode(code)) => Err(format!("provider http {code}")),
+        Err(e) => Err(format!("provider transport: {e}")),
+    }
+}
+
+/// Extract (assistant-message, tool_calls) from a chat response.
+fn parse_message(resp: &Value) -> Result<(Value, Vec<Value>), String> {
+    let msg = resp
+        .pointer("/choices/0/message")
+        .cloned()
+        .ok_or_else(|| "provider response has no choices[0].message".to_string())?;
+    let calls = msg
+        .get("tool_calls")
+        .and_then(|t| t.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok((msg, calls))
+}
+
+fn tool_call_fields(call: &Value) -> (String, String, String) {
+    let id = call
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let name = call
+        .pointer("/function/name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    // `arguments` is a JSON-encoded STRING in the OpenAI format; tolerate
+    // providers that inline an object instead.
+    let args = match call.pointer("/function/arguments") {
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+        None => "{}".into(),
+    };
+    (id, name, args)
+}
+
+/// Run the full agent loop for one attempt. Logs every round-trip and tool
+/// call through `log` (the attempt log). Tool errors feed back to the model
+/// as content; only turn-cap / deadline / provider errors stop the loop.
+pub fn run(
+    worker: &Worker,
+    prompt: &str,
+    wt: &Path,
+    st: &Settings,
+    log: &dyn Fn(&str),
+) -> Output {
+    let max_turns = effective_max_turns(worker, st);
+    let deadline = Instant::now() + Duration::from_secs(st.agent_timeout_s);
+    let url = format!(
+        "{}/chat/completions",
+        worker.api_base.as_deref().unwrap_or("").trim_end_matches('/')
+    );
+    let key = worker
+        .api_key_env
+        .as_ref()
+        .and_then(|k| std::env::var(k).ok())
+        .filter(|v| !v.is_empty());
+
+    let mut messages = vec![json!({"role": "system", "content": prompt})];
+    let (mut total_tokens, mut turns) = (0u64, 0u32);
+    let mut final_text = String::new();
+
+    let (env_pairs, env_allow) = crate::execute::agent_env(worker, &|k| std::env::var(k).ok());
+    let env_pairs: Vec<(String, String)> =
+        env_pairs.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+
+    // Loop yields (stop, error) on every exit; no dead sentinel init needed.
+    let (stop, error) = loop {
+        if turns >= max_turns {
+            break (Stop::TurnCap, Some(format!("harness: turn cap {max_turns} reached")));
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break (
+                Stop::Timeout,
+                Some(format!("harness: exceeded agent_timeout_s ({}s)", st.agent_timeout_s)),
+            );
+        }
+        let agent = ureq::Agent::config_builder()
+            .timeout_global(Some(left))
+            .http_status_as_error(false)
+            .build()
+            .new_agent();
+        turns += 1;
+        log(&format!("harness: turn {turns}/{max_turns}"));
+        let body = json!({
+            "model": worker.model,
+            "messages": messages,
+            "tools": tool_schemas(),
+            "tool_choice": "auto",
+        });
+        let resp = match chat_once(&agent, &url, key.as_deref(), &body) {
+            Ok(r) => r,
+            Err(e) => {
+                log(&format!("harness: {e}"));
+                break (Stop::ProviderError, Some(format!("harness: {e}")));
+            }
+        };
+        if let Some(u) = resp
+            .pointer("/usage/total_tokens")
+            .and_then(|t| t.as_u64())
+        {
+            total_tokens += u;
+        }
+        let (msg, calls) = match parse_message(&resp) {
+            Ok(m) => m,
+            Err(e) => break (Stop::ProviderError, Some(format!("harness: {e}"))),
+        };
+        final_text = msg
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
+        if calls.is_empty() {
+            log(&format!("harness: done after {turns} turn(s), {total_tokens} tokens"));
+            break (Stop::Normal, None);
+        }
+        messages.push(msg);
+        for call in &calls {
+            let (id, name, args) = tool_call_fields(call);
+            log(&format!("tool {name} {args}"));
+            let result = run_tool(&name, &args, wt, &env_pairs, &env_allow, log);
+            messages.push(json!({
+                "role": "tool",
+                "tool_call_id": id,
+                "content": result,
+            }));
+        }
+    };
+
+    Output { final_text, total_tokens, turns, stop, error }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +502,30 @@ mod tests {
         assert_eq!(Stop::TurnCap.cmd_kind(), CmdKind::Stalled);
         assert_eq!(Stop::Timeout.cmd_kind(), CmdKind::Timeout);
         assert_eq!(Stop::ProviderError.cmd_kind(), CmdKind::NonZero);
+    }
+
+    #[test]
+    fn parse_message_extracts_calls_and_tool_args() {
+        let resp: Value = serde_json::from_str(
+            r#"{"choices":[{"message":{"role":"assistant","content":null,
+               "tool_calls":[{"id":"c1","type":"function",
+               "function":{"name":"bash","arguments":"{\"command\":\"ls\"}"}}]}}],
+               "usage":{"total_tokens":15}}"#,
+        )
+        .unwrap();
+        let (msg, calls) = parse_message(&resp).unwrap();
+        assert_eq!(calls.len(), 1);
+        let (id, name, args) = tool_call_fields(&calls[0]);
+        assert_eq!((id.as_str(), name.as_str()), ("c1", "bash"));
+        assert!(args.contains("ls"));
+        assert!(msg.get("tool_calls").is_some());
+
+        let empty = parse_message(&serde_json::json!({"choices":[{"message":{"content":"hi"}}]})).unwrap();
+        assert!(empty.1.is_empty());
+    }
+
+    #[test]
+    fn parse_message_rejects_malformed() {
+        assert!(parse_message(&serde_json::json!({})).is_err());
     }
 }
