@@ -229,13 +229,18 @@ fn execute_attempt(
     // here resumes as RerunAgent (the agent's outcome is not durable yet).
     record_phase(ctx, id, AttemptPhase::Spawned);
 
-    let mut log = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-        .map_err(|e| e.to_string());
+    let log = std::cell::RefCell::new(
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+            .map_err(|e| e.to_string()),
+    );
+    // RefCell keeps `append` a plain `Fn`, so the native harness can log
+    // through it (`harness::run` takes `&dyn Fn(&str)`). `Fn` ⇒ `FnMut`,
+    // so every existing `&mut append` call site below is unchanged.
     let mut append = |s: &str| {
-        if let Ok(ref mut f) = log {
+        if let Ok(f) = log.borrow_mut().as_mut() {
             let _ = writeln!(f, "{s}");
         }
     };
@@ -277,6 +282,7 @@ fn execute_attempt(
         //    b) legacy argv: cli --provider P --model M [-m json] [args]
         //       -p @file, allowlisted env (sandbox layer 1).
         let using_command = worker.command.is_some();
+        let native = worker.cli == crate::harness::BUILTIN;
         let (agent_cmd, agent_args) = match &worker.command {
             Some(tpl) => command_argv(tpl, &prompt_path),
             None => {
@@ -300,24 +306,62 @@ fn execute_attempt(
             crate::subprocess::EnvMode::Allowlist(env_allow)
         };
         append("-- agent --");
-        // Stall watchdog (agent CLI ONLY — git and gate calls stay on plain
-        // `run`: a silent gate is not necessarily a stalled one, and their
-        // timeout contracts are pinned by tests): 0 = disabled, exactly the
-        // legacy total-timeout-only behaviour.
-        let stall = if ctx.st.agent_stall_s == 0 {
-            None
+        // Native harness (ADR-11): the loop runs INSIDE af; every tool call
+        // is logged by the harness itself. Its outcome synthesizes the SAME
+        // CmdKind contract as a CLI child, so all downstream handling
+        // (work integrity, gate, merge, retry memory) is byte-identical.
+        let agent_out = if native {
+            let out = crate::harness::run(worker, &prompt, &wt_path, &ctx.st, &append);
+            append(&format!(
+                "harness: stop={:?} turns={} tokens={}",
+                out.stop, out.turns, out.total_tokens
+            ));
+            spend.tokens = Some(out.total_tokens);
+            crate::subprocess::CmdOut {
+                kind: out.stop.cmd_kind(),
+                code: if out.stop == crate::harness::Stop::Normal {
+                    Some(0)
+                } else {
+                    None
+                },
+                stdout: out.final_text,
+                stderr: out.error.unwrap_or_default(),
+            }
         } else {
-            Some(Duration::from_secs(ctx.st.agent_stall_s))
+            // Stall watchdog (agent CLI ONLY — git and gate calls stay on plain
+            // `run`: a silent gate is not necessarily a stalled one, and their
+            // timeout contracts are pinned by tests): 0 = disabled, exactly the
+            // legacy total-timeout-only behaviour.
+            let stall = if ctx.st.agent_stall_s == 0 {
+                None
+            } else {
+                Some(Duration::from_secs(ctx.st.agent_stall_s))
+            };
+            crate::subprocess::run_with_stall(
+                &agent_cmd,
+                &agent_args,
+                Some(&wt_path),
+                &env_pairs,
+                env_mode,
+                Duration::from_secs(ctx.st.agent_timeout_s),
+                stall,
+            )
         };
-        let agent_out = crate::subprocess::run_with_stall(
-            &agent_cmd,
-            &agent_args,
-            Some(&wt_path),
-            &env_pairs,
-            env_mode,
-            Duration::from_secs(ctx.st.agent_timeout_s),
-            stall,
-        );
+        // Native failures return early with the PRECISE reason (`harness: …`)
+        // on the receipt, reusing the same preserve-and-note machinery: the
+        // paid-for work lands on the archive branch exactly like a CLI
+        // failure. The legacy `agent exited …` message below stays
+        // byte-identical for CLI workers.
+        if native && !agent_out.passed() {
+            let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
+            cleanup(&repo, &wt);
+            let reason = if agent_out.stderr.is_empty() {
+                format!("harness failed ({:?})", agent_out.kind)
+            } else {
+                agent_out.stderr.clone()
+            };
+            return (Outcome::Failed(format!("{reason}{kept}")), spend);
+        }
         // JSON output mode (r9-token-capture): the stream is telemetry,
         // not the log — render it for the human and lift the token usage
         // out of it. Text mode keeps the raw combined stream, byte-identical
