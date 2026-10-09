@@ -3,7 +3,8 @@
 | Term | Definition / Notes |
 |------|-------------------|
 | **Agent** | External OpenAI-compatible CLI process that agentflow spawns to perform a task (e.g. `pi`, `opencode`). The agent is **untrusted** — it receives a scoped env, runs in an isolated worktree, and its subtask is sandboxes. |
-| **AgentDone** | `AttemptPhase::AgentDone` — the agent exited 0 and its changes have been committed to the attempt branch.久久 |
+| **Native harness** | In-process agent loop (`cli: "builtin"`, ADR-14): af calls the OpenAI-compatible chat endpoint directly and executes `bash`/`write`/`edit` tool calls in the worktree under the standard env allowlist. No external agent CLI needed. |
+| **AgentDone** | `AttemptPhase::AgentDone` — the agent exited 0 and its changes have been committed to the attempt branch.久久 | 
 | **Archive** | A git branch created by `archive_branch` to preserve an attempt's committed work when the attempt fails. Name format: `<branch>-rejected-[<attempt>-]<unix-ts>[-<n>]`. Legacy format: `<branch>-rejected-<unix-ts>[-<n>]`. |
 | **Attempt** | One invocation of an agent on a task. Incremented on every retry. An attempt is NOT the same as an archived branch; one attempt produces exactly one `Receipt`. |
 | **AttemptPhase** | Journal checkpoint in the effect sandwich: `Spawned` (worktree created, agent about to run), `AgentDone` (agent work committed), `GatePassed` (gate passed). Persisted in `TaskStatus.phase`. |

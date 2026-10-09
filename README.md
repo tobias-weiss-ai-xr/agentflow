@@ -246,6 +246,10 @@ plus a `workers` list: `name`, `provider`, `model`, `api_base`, `api_key_env`,
 cost-basis declarations `params_b` / `price_per_mtok_usd` (below). Each
 worker runs at most one task at a time.
 
+The special `cli` value `"builtin"` needs no external agent binary:
+
+- `cli`: agent CLI binary (default `pi`). **`"builtin"`** runs af's native in-process harness instead — no external agent CLI needed; the worker then requires `api_base` (OpenAI-compatible `/chat/completions`) and optional `api_key_env`, supports `max_turns` (default 32, `TF_AGENT_MAX_TURNS`), and reports measured token usage on every receipt. Tools: `bash`, `write`, `edit` in the worktree.
+
 `retry_delay_s` (default `0`, strictly opt-in) is the backoff between
 attempts of the SAME task: after a failed attempt that will be retried,
 the task waits this many seconds before its next attempt starts. The wait

@@ -1,0 +1,11 @@
+{
+  "task": "WS-3",
+  "attempt": 1,
+  "worker": "glm",
+  "model": "glm-4.6",
+  "wall_clock_s": 455.8406028,
+  "tokens": null,
+  "ts": 1791184846,
+  "outcome": "merged",
+  "error": null
+}

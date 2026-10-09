@@ -2,11 +2,11 @@
 
 For each ADR we list the index, status, decision, context, consequences, and
 references to where it is enforced. ADR-5 amended ADR-2 during implementation;
-ADR-12 amended ADR-9 during dogfooding. All others unchanged.
+ADR-12 amended ADR-9 during dogfooding; ADR-14 amended ADR-1 during implementation. All others unchanged.
 
 | ADR | Status | Decision & Rationale | Conseq. / Enforced | Ref |
 |-----|--------|----------------------|-------------------|-----|
-| **ADR-1** | accepted | **Agent via subprocess, not direct LLM API.** Orchestrator shells out to an OpenAI-compatible agent CLI (`pi --provider X --model Y -p @prompt`). Keeps crate small, vendor-neutral, no secrets; reuses agent prompt templates and tool loop. | `execute.rs`, `config.rs`. Features the agent CLI lacks are unavailable; we never reimplement an agent. | 02, 03, 04 |
+| **ADR-1** | accepted (amended by ADR-14) | **Agent via subprocess, not direct LLM API.** Orchestrator shells out to an OpenAI-compatible agent CLI (`pi --provider X --model Y -p @prompt`). Keeps crate small, vendor-neutral, no secrets; reuses agent prompt templates and tool loop. | `execute.rs`, `config.rs`. Features the agent CLI lacks are unavailable; we never reimplement an agent. | 02, 03, 04 |
 | **ADR-2** | accepted (amended) | **One process; std `thread::scope` concurrency.** Amended at implementation: subprocess orchestration needs no async runtime. Mutual exclusion via in-process per-repo merge mutex + per-worker busy map; no cross-process flock. | `run.rs`, `state.rs`. Simpler state, no cross-process races; a single long task blocks its worker only. | 02, 05, 06 |
 | **ADR-3** | accepted | **JSON state store, atomic writes, single writer.** Atomic temp+fsync+rename writes; greppable/diffable; lock file for single writer. | `state.rs`. Fine up to ~100s of tasks; revisit if we need queries/locking. | 02, 03, 07 |
 | **ADR-4** | accepted | **Config schema compatibility** with taskfleet's shipped `tasks.json`/`workers.json` examples. | `config.rs`. Real campaign configs act as integration corpus; drop-in migration. | 02, 04 |
@@ -19,3 +19,4 @@ ADR-12 amended ADR-9 during dogfooding. All others unchanged.
 | **ADR-11** | accepted | **Multi-repo via optional `repos.json` + per-task resolution.** Task `repo` field or fallback; global DAG across repos; worktree/branch/merge target the resolved repo; merges serialized globally. Unknown repo names warn and fall back (never hard error). | `config.rs`, `run.rs`, `worktree.rs`. | 07, 08 |
 | **ADR-12** | accepted | **UCB1 routing > first-free.** Every attempt leaves a receipt; free workers picked by UCB1 (mean reward + exploration); ties broken by declared cost, then mean duration, then config order. Measured trust outranks every assumed heuristic. History is cumulative. | `router.rs`, `run.rs`. | 08, 09 |
 | **ADR-13** | accepted | **Receipts are the episodic memory.** Failed attempts carry error's first line; retry prompts (attempt ≥ 2) render earlier failures so the agent avoids repeating them. Per-task failure context is the honest, useful subset; cross-task recall deferred. | `execute.rs`, `state.rs`. | 08 |
+| **ADR-14** | accepted | **Native harness as an opt-in worker mode.** ADR-1's "no agent loop" is amended narrowly: a worker with `cli: "builtin"` runs the OpenAI chat/completions loop inside af (`src/harness.rs`) with three tools (bash/write/edit) under the standard env allowlist. Motivation: single static binary for fleet hosts + first-class token/turn ownership. CLI workers remain the default contract; `pi`/`opencode` behavior is unchanged. | `src/harness.rs`, `execute_attempt` | 01, 02, 05 |

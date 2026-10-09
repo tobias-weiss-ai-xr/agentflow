@@ -1,0 +1,22 @@
+{
+  "WS-4": {
+    "state": "done",
+    "attempts": 1,
+    "last_error": null
+  },
+  "WS-1": {
+    "state": "done",
+    "attempts": 1,
+    "last_error": null
+  },
+  "WS-2": {
+    "state": "done",
+    "attempts": 1,
+    "last_error": null
+  },
+  "WS-3": {
+    "state": "done",
+    "attempts": 1,
+    "last_error": null
+  }
+}

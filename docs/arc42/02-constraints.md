@@ -7,7 +7,7 @@
 | Language / edition | Rust 2021+ (toolchain: cargo/rustc 1.99) |
 | Async runtime | **None** — std `thread::scope` per-attempt threads; no tokio (ADR-2, amended) |
 | Deliverable | Single static binary `af` (plus crate `agentflow`) |
-| LLM interaction | **Subprocess** to an OpenAI-compatible agent CLI (`pi --provider X --model Y -p @prompt`). No direct HTTP to LLM providers. *(ADR-1)* |
+| LLM interaction | **Subprocess** to an OpenAI-compatible agent CLI (`pi --provider X --model Y -p @prompt`). No direct HTTP to LLM providers. *(ADR-1; exception: `cli: "builtin"` workers, ADR-14)* |
 | Git interaction | `git` CLI as subprocess. No libgit2. |
 | Config | JSON via `serde`; `tasks.json` / `workers.json` / optional `repos.json` schema-compatible with taskfleet's shipped examples |
 | State | JSON files under `state/`, atomic writes (temp + fsync + rename), single writer process, lock file *(ADR-3)* |
@@ -46,7 +46,7 @@
 
 ## Non-negotiable Boundaries
 
-- `af` orchestrates; it does not originate: no agent loop, no tool calling, no embedded git server.
+- `af` orchestrates; it does not originate: no agent loop, no tool calling, no embedded git server. **Exception (ADR-14):** workers with `cli: "builtin"` run a minimal in-process loop; the subprocess contract is the default.
 - v1 does **not** include: Bayesian routing, episodic memory, trust/constitution, corrections, transparency, openspec bridge, vLLM worker. These are v2 candidates (referenced in 04).
 - The agent child is **untrusted**: it receives a scoped env (ADR-10), never the orchestrator's full environment.
 - A `Merged` result is never inferred from an exit code — the work must be in the base.
