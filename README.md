@@ -39,18 +39,70 @@ providers directly.
 
 ```sh
 cargo build --release            # produces target/release/af
+```
 
-cp config/tasks.json.example config/tasks.json
-cp config/workers.json.example config/workers.json
-# edit workers.json: provider/model/api_base + your agent CLI (default: pi)
+Point one worker at any OpenAI-compatible endpoint using af's **builtin**
+harness (no external agent CLI needed), with one small task:
 
+```json
+// config/tasks.json
+{ "tasks": [ {
+    "id": "hello",
+    "title": "Add a hello module",
+    "scope": ["src/**"],
+    "accept": "test -f src/hello.rs",
+    "acceptance_prose": "src/hello.rs exists and declares pub fn hello()."
+} ] }
+```
+
+```json
+// config/workers.json
+{ "defaults": { "accept_timeout_s": 600, "max_attempts": 2 },
+  "workers": [ {
+    "name": "glm",
+    "provider": "zai",
+    "model": "glm-5.2",
+    "api_base": "https://api.z.ai/api/paas/v4",
+    "api_key_env": "ZAI_API_KEY",
+    "enabled": true,
+    "cli": "builtin",
+    "max_turns": 48
+} ] }
+```
+
+`api_base` is any OpenAI-compatible `/chat/completions` URL (z.ai, OpenRouter,
+a litellm proxy, a local vLLM…); `api_key_env` names the env var af reads the
+key from.
+
+```sh
 export TF_REPO_DIR=/path/to/repo/being/modified
 export TF_STATE_DIR=state
+export ZAI_API_KEY=...            # whatever api_key_env names
 
-./target/release/af run --dry-run   # show the dispatch plan, change nothing
-./target/release/af run             # run until all tasks done or deadlock
-./target/release/af status          # task status board
+./target/release/af validate --tasks config/tasks.json --workers config/workers.json
+./target/release/af run --dry-run --tasks config/tasks.json --workers config/workers.json
+./target/release/af run           --tasks config/tasks.json --workers config/workers.json
+./target/release/af status && ./target/release/af cost
 ```
+
+### Docker / Nix
+
+`flake.nix` builds af and a campaign-runner image (af + git, cargo, rustc,
+gcc, bash, coreutils — enough for cargo-gated tasks end to end):
+
+```sh
+nix build .#default   # plain binary        → result-af/bin/af
+nix build .#static    # fully static musl    → result-af-static/bin/af (any Linux, no glibc requirement)
+nix build .#image     # docker image         → result-image
+
+docker load < result-image
+docker run --rm -v "$TF_REPO_DIR":/repo -v "$PWD/config":/config \
+    -e TF_REPO_DIR=/repo -e TF_STATE_DIR=/state \
+    agentflow:0.1.0 run --dry-run --tasks /config/tasks.json --workers /config/workers.json
+```
+
+With the entrypoint set, everything after the image name is af arguments
+(`docker run agentflow:0.1.0 --version`).
 
 ## CLI
 

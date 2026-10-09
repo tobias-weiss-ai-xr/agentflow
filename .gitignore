@@ -5,3 +5,4 @@
 /state
 /config/workers.json
 *.log
+result*
