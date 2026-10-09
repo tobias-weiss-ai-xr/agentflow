@@ -14,7 +14,7 @@ commit intent: AttemptPhase::Spawned        → resume = RerunAgent
 commit outcome: AttemptPhase::AgentDone     → resume = RerunGate
     ↓
    GATE (idempotent)
-    ↓  
+    ↓
 commit outcome: AttemptPhase::GatePassed    → resume = MergeOnly
     ↓
    MERGE (idempotent)
@@ -87,7 +87,7 @@ if any two patterns overlap:
 
 ### 8.3.2 Checkpoints
 
-At gate time, `changed_paths` = `git diff --name-only <base>...<branch>` 
+At gate time, `changed_paths` = `git diff --name-only <base>...<branch>`
 (committed changes only). `scope_violations` checks every changed path against
 the task's `scope` globs. Non-empty violations → `Failed` with the file list.
 
