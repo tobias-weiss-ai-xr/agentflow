@@ -6,7 +6,7 @@
 |------------|-------|
 | Language / edition | Rust 2021+ (toolchain: cargo/rustc 1.99) |
 | Async runtime | **None** — std `thread::scope` per-attempt threads; no tokio (ADR-2, amended) |
-| Deliverable | Single static binary `af` (plus crate `agentflow`) |
+| Deliverable | Single static binary `af` (plus crate `agentflow`); nix flake outputs package / static-pie binary / container image *(ADR-15)* |
 | LLM interaction | **Subprocess** to an OpenAI-compatible agent CLI (`pi --provider X --model Y -p @prompt`). No direct HTTP to LLM providers. *(ADR-1; exception: `cli: "builtin"` workers, ADR-14)* |
 | Git interaction | `git` CLI as subprocess. No libgit2. |
 | Config | JSON via `serde`; `tasks.json` / `workers.json` / optional `repos.json` schema-compatible with taskfleet's shipped examples |
@@ -42,7 +42,7 @@
   - `TF_SANDBOX_CMD` — wrapper command prepended to the agent argv
   - `TF_AGENT_ENV_PASSTHROUGH` — comma-separated extra env vars for the agent child
   - `TF_NO_REUSE` — disable auto-recovery of archived branches (default unset)
-- Runs on Linux, macOS, and Windows (WSL); CI uses GitHub Actions with Ubuntu.
+- Runs on Linux, macOS, and Windows (WSL); CI uses GitHub Actions with Ubuntu. Prebuilt glibc binaries need glibc ≥ 2.32; the `.#static` nix output and the container image run on any Linux.
 
 ## Non-negotiable Boundaries
 
