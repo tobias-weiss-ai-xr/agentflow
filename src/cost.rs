@@ -44,6 +44,20 @@ pub fn basis(params_b: Option<f64>, price_per_mtok_usd: Option<f64>) -> Option<B
     }
 }
 
+/// The KIND of measurement a basis is, as a stable lowercase identifier:
+/// `"priced"` for real USD per million tokens, `"sized"` for the `params_b`
+/// proxy. Machine-readable — a consumer (a probe, a report) can tell money
+/// from a ratio without re-deriving the variant match — and allocation-free
+/// (`&'static str`). The label names the VARIANT alone, never the magnitude
+/// (which is the value the basis carries), and is one of exactly two
+/// spellings so it can be compared across versions.
+pub fn basis_label(b: &Basis) -> &'static str {
+    match b {
+        Basis::Priced(_) => "priced",
+        Basis::Sized(_) => "sized",
+    }
+}
+
 /// Order two workers by expense: `Some(Less)` when `a` is the CHEAPER.
 ///
 /// `None` when they are NOT comparable, which happens when (i) either side

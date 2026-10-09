@@ -427,6 +427,43 @@ fn worker_cost_basis_is_declared_and_defaults_to_neutral() {
     assert_eq!(old.workers[0].price_per_mtok_usd, None);
 }
 
+/// `cost::basis_label` names the KIND of measurement a declared basis is —
+/// `"priced"` for real USD/Mtok, `"sized"` for the `params_b` proxy — as a
+/// stable, allocation-free (`&'static str`) identifier, so a machine
+/// consumer (a probe, a report) can tell money from a ratio without
+/// re-deriving the variant match. The label depends on the VARIANT alone,
+/// never the magnitude, and it inherits `basis`'s precedence: a worker
+/// declaring BOTH fields is `priced`, because a declared price beats the
+/// size proxy.
+// spec: config/worker-schema-loading#cost-basis-is-declared-and-optional
+#[test]
+fn basis_label_names_the_measurement_kind() {
+    use agentflow::cost::{self, Basis};
+
+    // The two spellings, pinned exactly — lowercase, no units, no prose.
+    assert_eq!(cost::basis_label(&Basis::Priced(2.5)), "priced");
+    assert_eq!(cost::basis_label(&Basis::Sized(235.0)), "sized");
+    // The label names the VARIANT alone: the magnitude never leaks in.
+    assert_eq!(cost::basis_label(&Basis::Priced(0.001)), "priced");
+    assert_eq!(cost::basis_label(&Basis::Sized(0.5)), "sized");
+
+    // It pairs with the declaration helper: whatever `basis` derives from a
+    // worker's two optional fields, the label is one of exactly two
+    // spellings — and a worker declaring BOTH is `priced` (a price beats
+    // the proxy), exactly the precedence `basis` applies.
+    for (params, price, label) in [
+        (Some(8.0), None, "sized"),
+        (None, Some(0.25), "priced"),
+        (Some(235.0), Some(1.25), "priced"),
+    ] {
+        let b = cost::basis(params, price).expect("a declared pair has a basis");
+        assert_eq!(cost::basis_label(&b), label);
+    }
+    // Nothing declared means no basis at all — there is no label to ask for,
+    // which is `basis`'s `None`, not a third spelling.
+    assert!(cost::basis(None, None).is_none());
+}
+
 /// A declared value that is not usable (not finite, or <= 0) is a CONFIG
 /// ERROR naming the worker and the field — a NaN or non-positive weight
 /// would silently defeat cost comparison. (JSON cannot spell NaN, so the
