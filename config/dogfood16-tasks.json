@@ -1,0 +1,38 @@
+{
+  "_meta": {
+    "round": 16,
+    "theme": "local-pool onboarding — probe round: same design as round 15 (small real tasks exercise the builtin loop), first worker in the array is the new local-deepseek so config-order tie-breaks give it the first attempt; zai/tud/saia baselines ride along for UCB1 win-rate data",
+    "design": "T1 is the smallest real change (one function + one test on src/cost.rs). T2 needs an edit to existing code (doc comment) — the second tool path. Gates stay deliberately light (grep + cargo) so failures point at the harness or the model, not gate plumbing."
+  },
+  "tasks": [
+    {
+      "id": "r16-probe-basis",
+      "title": "r16-probe-basis: add pub fn basis_label(b: &Basis) -> &'static str returning \"priced\" or \"sized\" in src/cost.rs, pinned by one test in tests/contract_config.rs",
+      "deps": [],
+      "manual": false,
+      "priority": 1,
+      "scope": [
+        "src/cost.rs",
+        "tests/contract_config.rs"
+      ],
+      "touch": [
+        "src/cost.rs"
+      ],
+      "accept": "grep -q 'fn basis_label' src/cost.rs && cargo test --lib && cargo test --test contract_config"
+    },
+    {
+      "id": "r16-probe-doc",
+      "title": "r16-probe-doc: extend the module doc of src/cost.rs to name the two Basis variants (Priced, Sized) and state that Priced wins the comparison",
+      "deps": [],
+      "manual": false,
+      "priority": 2,
+      "scope": [
+        "src/cost.rs"
+      ],
+      "touch": [
+        "src/cost.rs"
+      ],
+      "accept": "grep -q 'Priced' src/cost.rs && grep -q 'Sized' src/cost.rs && cargo build && cargo test --lib"
+    }
+  ]
+}

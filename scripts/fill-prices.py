@@ -23,6 +23,16 @@ def normalize(name: str) -> str:
     return "-".join(parts)
 
 
+def lookup(table: dict, model: str):
+    """Match an OpenRouter slug for `model`, litellm route names included:
+    'local/deepseek-v4-flash/ai1' falls back to its middle segment."""
+    candidates = [normalize(model)] + [normalize(s) for s in model.split("/")[:-1][::-1]]
+    for cand in candidates:
+        if cand in table:
+            return table[cand]
+    return None
+
+
 def fetch_openrouter() -> dict:
     req = urllib.request.Request("https://openrouter.ai/api/v1/models")
     data = json.load(urllib.request.urlopen(req, timeout=60))["data"]
@@ -53,6 +63,7 @@ def main() -> int:
         assert normalize("GLM-5.2-AWQ-INT4") == "glm-5.2"
         assert normalize("qwen3.5-397b-a17b") == "qwen3.5-397b-a17b"
         assert normalize("~/deepseek-v4-flash-latest") == "deepseek-v4-flash-latest"
+        assert "deepseek-v4-flash" in {normalize(s) for s in "local/deepseek-v4-flash/ai1".split("/")}
 
     table = fetch_openrouter()
     changed = False
@@ -61,7 +72,7 @@ def main() -> int:
         for w in cfg.get("workers", []):
             if w.get("price_per_mtok_usd") is not None and not args.force:
                 continue
-            hit = table.get(normalize(w.get("model", "")))
+            hit = lookup(table, w.get("model", ""))
             if not hit:
                 print(f"UNMATCHED  {w['name']:16s} {w.get('model')} — fill manually")
                 continue

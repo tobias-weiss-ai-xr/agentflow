@@ -1,0 +1,61 @@
+{
+  "_meta": {
+    "round": 16,
+    "note": "Adds the local pool: deepseek-v4-flash on ai1:8888 via litellm route local/deepseek-v4-flash/ai1 — the ONLY local model (no listener on ai1:8000). Tool support through the proxy probed 2026-10-09 (write tool_call parsed cleanly). Standing policy: no direct upstream traffic — 42.42 legion primary (Redis cache TTL 6h), 42.20 CI fallback (same routes). api_key: LITELLM_MASTER_KEY from litellm-docker/.env. Prices are OpenRouter market bases (scripts/fill-prices.py, 3:1 in:out blend); SAIA/TUD/local marginal cost is 0, so market basis is the comparability layer, not the bill. max_turns 48/40 per round-15 turn-cap evidence."
+  },
+  "defaults": {
+    "accept_timeout_s": 3000,
+    "max_attempts": 6,
+    "retry_delay_s": 15,
+    "agent_timeout_s": 4200
+  },
+  "workers": [
+    {
+      "name": "local-deepseek",
+      "provider": "local",
+      "model": "local/deepseek-v4-flash/ai1",
+      "api_base": "http://192.168.42.42:4000/v1",
+      "api_key_env": "LITELLM_MASTER_KEY",
+      "enabled": true,
+      "cli": "builtin",
+      "price_per_mtok_usd": 0.324,
+      "max_turns": 48
+    },
+    {
+      "name": "saia-qwen397b",
+      "provider": "saia",
+      "model": "saia/qwen3.5-397b-a17b",
+      "api_base": "http://192.168.42.42:4000/v1",
+      "api_key_env": "LITELLM_MASTER_KEY",
+      "enabled": true,
+      "cli": "builtin",
+      "params_b": 397,
+      "price_per_mtok_usd": 1.287,
+      "max_turns": 48
+    },
+    {
+      "name": "tud-glm52",
+      "provider": "tud",
+      "model": "tud/glm-5.2-awq",
+      "api_base": "http://192.168.42.42:4000/v1",
+      "api_key_env": "LITELLM_MASTER_KEY",
+      "enabled": true,
+      "cli": "builtin",
+      "params_b": 355,
+      "price_per_mtok_usd": 1.095,
+      "max_turns": 48
+    },
+    {
+      "name": "zai-glm52",
+      "provider": "zai",
+      "model": "glm-5.2",
+      "api_base": "http://192.168.42.42:4000/v1",
+      "api_key_env": "LITELLM_MASTER_KEY",
+      "enabled": true,
+      "cli": "builtin",
+      "params_b": 400,
+      "price_per_mtok_usd": 1.095,
+      "max_turns": 40
+    }
+  ]
+}
