@@ -30,6 +30,40 @@ struct StubLlm {
     url: String,
 }
 
+/// Drain ONE full request (headers + Content-Length body) so the socket has
+/// no unread receive data when the stub closes it. Closing with unread data
+/// makes Windows RST the connection; the client then sees a transport error
+/// (10054) instead of the queued response and the E2E flakes. Harness
+/// request bodies are a few KiB (system prompt + envelope), so this is cheap.
+fn drain_request(s: &mut std::net::TcpStream) {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match s.read(&mut chunk) {
+            Ok(0) | Err(_) => return, // client gone; best-effort drain
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+        if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            let len = String::from_utf8_lossy(&buf[..end])
+                .lines()
+                .find_map(|l| {
+                    let (k, v) = l.split_once(':')?;
+                    k.eq_ignore_ascii_case("content-length")
+                        .then(|| v.trim().parse::<usize>().ok())?
+                })
+                .unwrap_or(0);
+            let mut left = len.saturating_sub(buf.len() - (end + 4));
+            while left > 0 {
+                match s.read(&mut chunk) {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => left = left.saturating_sub(n),
+                }
+            }
+            return;
+        }
+    }
+}
+
 impl StubLlm {
     fn spawn(responses: Vec<(u16, String)>) -> StubLlm {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -41,8 +75,7 @@ impl StubLlm {
                 let Ok(mut s) = stream else { break };
                 let next = queue.lock().unwrap().pop_front();
                 let (code, body) = next.unwrap_or((200, "{}".to_string()));
-                let mut buf = [0u8; 4096];
-                let _ = s.read(&mut buf); // request head; not parsed
+                drain_request(&mut s);
                 let reason = if code == 200 { "OK" } else { "Internal Server Error" };
                 let resp = format!(
                     "HTTP/1.1 {code} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
