@@ -30,6 +30,7 @@
 //! The one env-reading test (`Settings::from_env`) documents its own race
 //! avoidance in place.
 
+use agentflow::config as config;
 use agentflow::config::{detect_cycle, load, load_repos, parse_gate_env, Priority};
 use agentflow::router::Router;
 use agentflow::run::pick_worker;
@@ -965,4 +966,59 @@ fn settings_env_defaults_and_overrides_contract() {
             ]
         );
     }
+}
+
+// spec: docs/superpowers/specs/2026-10-09-native-rust-harness-design.md
+// `cli: "builtin"` selects the native harness. Config-time validation must
+// catch unusable combos BEFORE any agent is paid.
+#[test]
+fn builtin_worker_requires_api_base() {
+    let err = config::load_workers_str(
+        r#"{ "workers": [ { "name": "nat", "provider": "p", "model": "m",
+             "cli": "builtin", "enabled": true } ] }"#,
+    )
+    .unwrap_err();
+    assert!(err.contains("api_base"), "err: {err}");
+}
+
+#[test]
+fn builtin_worker_rejects_command_template() {
+    let err = config::load_workers_str(
+        r#"{ "workers": [ { "name": "nat", "provider": "p", "model": "m",
+             "api_base": "http://x/v1", "cli": "builtin", "command": "x {prompt}",
+             "enabled": true } ] }"#,
+    )
+    .unwrap_err();
+    assert!(err.contains("command"), "err: {err}");
+}
+
+#[test]
+fn builtin_worker_rejects_zero_max_turns() {
+    let err = config::load_workers_str(
+        r#"{ "workers": [ { "name": "nat", "provider": "p", "model": "m",
+             "api_base": "http://x/v1", "cli": "builtin", "max_turns": 0,
+             "enabled": true } ] }"#,
+    )
+    .unwrap_err();
+    assert!(err.contains("max_turns"), "err: {err}");
+}
+
+#[test]
+fn builtin_worker_parses_with_defaults() {
+    let cfg = config::load_workers_str(
+        r#"{ "workers": [ { "name": "nat", "provider": "p", "model": "m",
+             "api_base": "http://x/v1", "cli": "builtin", "enabled": true } ] }"#,
+    )
+    .unwrap();
+    assert_eq!(cfg.workers[0].max_turns, None);
+}
+
+#[test]
+fn cli_worker_max_turns_is_optional_and_parsed() {
+    let cfg = config::load_workers_str(
+        r#"{ "workers": [ { "name": "w", "provider": "p", "model": "m",
+             "enabled": true, "cli": "pi", "max_turns": 7 } ] }"#,
+    )
+    .unwrap();
+    assert_eq!(cfg.workers[0].max_turns, Some(7));
 }

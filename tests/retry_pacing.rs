@@ -124,6 +124,7 @@ fn fixture(defaults_extra: &str, flaky: bool) -> Fixture {
         branch_prefix: "tf".into(),
         poll_secs: 1,
         gate_env: vec![],
+        agent_max_turns: 0,
         tasks_file: config_dir.join("tasks.json"),
         workers_file: config_dir.join("workers.json"),
         prompt_file: dir.join("no-template.md"),

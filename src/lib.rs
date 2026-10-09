@@ -10,6 +10,7 @@ pub mod config;
 pub mod cost;
 pub mod execute;
 pub mod gate;
+pub mod harness;
 pub mod router;
 pub mod run;
 pub mod scheduler;

@@ -2451,6 +2451,7 @@ mod tests {
             max_parallel: 1,
             branch_prefix: "tf".into(),
             poll_secs: 1,
+            agent_max_turns: 0,
             gate_env: vec![],
             tasks_file: PathBuf::new(),
             workers_file: PathBuf::new(),

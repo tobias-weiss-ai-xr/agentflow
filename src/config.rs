@@ -154,6 +154,12 @@ pub struct Worker {
     /// assumption, not vendor data; absent = neutral.
     #[serde(default)]
     pub price_per_mtok_usd: Option<f64>,
+    /// Turn cap for the native harness (`cli: "builtin"`): the loop stops
+    /// (and the attempt fails, archive-preserving) after this many LLM
+    /// round-trips. Absent = `TF_AGENT_MAX_TURNS` if set (>0), else 32.
+    /// Ignored for CLI workers (their flags live in `args`).
+    #[serde(default)]
+    pub max_turns: Option<u32>,
 }
 
 impl Default for Worker {
@@ -171,6 +177,7 @@ impl Default for Worker {
             args: Vec::new(),
             params_b: None,
             price_per_mtok_usd: None,
+            max_turns: None,
         }
     }
 }
@@ -300,6 +307,32 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
         }
         if !seen.insert(t.id.as_str()) {
             return Err(format!("duplicate task id: {}", t.id));
+        }
+    }
+
+    // Native harness (`cli: "builtin"`) config-time checks: unusable combos
+    // must fail here, before any agent is paid.
+    for w in workers {
+        if w.cli != "builtin" {
+            continue;
+        }
+        if w.command.is_some() {
+            return Err(format!(
+                "worker \"{}\": command is not supported with cli \"builtin\"",
+                w.name
+            ));
+        }
+        if w.api_base.as_deref().map_or(true, |b| b.trim().is_empty()) {
+            return Err(format!(
+                "worker \"{}\": cli \"builtin\" requires api_base",
+                w.name
+            ));
+        }
+        if w.max_turns == Some(0) {
+            return Err(format!(
+                "worker \"{}\": max_turns must be >= 1",
+                w.name
+            ));
         }
     }
 
@@ -485,6 +518,9 @@ pub struct Settings {
     /// so a hung agent stops burning the clock (and paid tokens) instead
     /// of sitting out the whole total timeout.
     pub agent_stall_s: u64,
+    /// Global native-harness turn cap (`TF_AGENT_MAX_TURNS`). 0 = no global
+    /// opinion; the worker's `max_turns` wins, else 32.
+    pub agent_max_turns: u32,
     /// Campaign wall-clock spend ceiling (`TF_MAX_WALL_CLOCK_S`), in
     /// seconds. **0 = unlimited** (the default): exactly the legacy
     /// behaviour. Any non-zero value stops NEW dispatches once the receipts
@@ -528,6 +564,7 @@ impl Settings {
             prompt_file: PathBuf::from("prompts/worker.md"),
             agent_timeout_s: env_or_int("TF_AGENT_TIMEOUT_S", 3600),
             agent_stall_s: env_or_int("TF_AGENT_STALL_S", 0),
+            agent_max_turns: env_or_int("TF_AGENT_MAX_TURNS", 0) as u32,
             max_wall_clock_s: env_or_int("TF_MAX_WALL_CLOCK_S", 0),
             sandbox_cmd: env_or("TF_SANDBOX_CMD", "")
                 .split_whitespace()
@@ -616,6 +653,22 @@ impl Config {
         }
         w
     }
+}
+
+/// Load a workers file from an in-memory JSON string. Test seam + programmatic
+/// use; same validation as the file path.
+pub fn load_workers_str(json: &str) -> Result<Config, String> {
+    let wf: WorkersFile =
+        serde_json::from_str(json).map_err(|e| format!("parse workers: {e}"))?;
+    let warnings = validate(&[], &wf.workers)?;
+    Ok(Config {
+        tasks: Vec::new(),
+        workers: wf.workers,
+        defaults: wf.defaults,
+        by_id: HashMap::new(),
+        repos: BTreeMap::new(),
+        warnings,
+    })
 }
 
 /// Parse `TF_GATE_ENV` ("K=V K2=V2 ...") into (key, value) pairs.

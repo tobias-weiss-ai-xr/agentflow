@@ -86,6 +86,7 @@ impl Cli {
             branch_prefix: "tf".into(),
             poll_secs: 1,
             gate_env: vec![],
+            agent_max_turns: 0,
             tasks_file: self.dir.join("config").join("tasks.json"),
             workers_file: self.dir.join("config").join("workers.json"),
             prompt_file: self.dir.join("no-template.md"),

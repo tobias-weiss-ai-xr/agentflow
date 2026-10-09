@@ -59,6 +59,7 @@ fn fixture(dir: &Path) -> (config::Config, Settings) {
         branch_prefix: "tf".into(),
         poll_secs: 1,
         gate_env: vec![],
+        agent_max_turns: 0,
         tasks_file: tasks,
         workers_file: workers,
         prompt_file: dir.join("no-template.md"),

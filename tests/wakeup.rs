@@ -107,6 +107,7 @@ fn a_finished_task_wakes_the_dispatcher_immediately() {
         branch_prefix: "tf".into(),
         poll_secs: 30,
         gate_env: vec![],
+        agent_max_turns: 0,
         tasks_file: config_dir.join("tasks.json"),
         workers_file: config_dir.join("workers.json"),
         prompt_file: dir.join("no-template.md"),
