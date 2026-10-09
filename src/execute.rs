@@ -87,7 +87,7 @@ pub fn agent_env(
 /// effect sandwich (pi-durable) with durable checkpoints at each boundary:
 ///
 /// 1. **Spawned**: worktree created, agent about to spawn
-/// 2. **AgentDone**: agent exited 0, changes committed to attempt branch  
+/// 2. **AgentDone**: agent exited 0, changes committed to attempt branch
 /// 3. **GatePassed**: acceptance gate passed
 ///
 /// On success: work is merged to base branch.

@@ -73,7 +73,6 @@ reliability. Excluded from all trust calculations:
 `Receipt::counts_as_verdict()` encodes this; `af cost` excludes both from its
 WINS/TOTAL denominator and trust percentage.
 
-### 8.2.4agent,Y
 
 ## 8.3 Scope Enforcement
 
