@@ -13,6 +13,7 @@
 use crate::config::{Settings, Worker};
 use crate::subprocess::{self, CmdKind, EnvMode};
 use serde_json::{json, Value};
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -223,10 +224,6 @@ fn tool_schemas() -> Value {
 // speaks OpenAI chat/completions, so a framework would only add tokio.
 // ---------------------------------------------------------------------------
 
-fn text_head(s: &str, max: usize) -> String {
-    truncate_chars(s, max)
-}
-
 fn chat_once(
     agent: &ureq::Agent,
     url: &str,
@@ -244,15 +241,20 @@ fn chat_once(
             // response here and the body head is read ourselves (contract:
             // non-2xx -> error carrying status + body head).
             let code = resp.status().as_u16();
-            let text = resp
-                .into_body()
-                .read_to_string()
+            // Cap guards against hostile/runaway bodies; an oversized response
+            // exceeds any legitimate chat reply and fails JSON parse with its
+            // head in the error.
+            let mut text = String::new();
+            resp.into_body()
+                .into_reader()
+                .take(1 << 20)
+                .read_to_string(&mut text)
                 .map_err(|e| format!("provider read: {e}"))?;
             if !(200..300).contains(&code) {
-                return Err(format!("provider http {code}: {}", text_head(&text, 512)));
+                return Err(format!("provider http {code}: {}", truncate_chars(&text, 512)));
             }
             serde_json::from_str(&text)
-                .map_err(|e| format!("provider json: {e} (head: {})", text_head(&text, 512)))
+                .map_err(|e| format!("provider json: {e} (head: {})", truncate_chars(&text, 512)))
         }
         Err(ureq::Error::StatusCode(code)) => Err(format!("provider http {code}")),
         Err(e) => Err(format!("provider transport: {e}")),
@@ -271,6 +273,21 @@ fn parse_message(resp: &Value) -> Result<(Value, Vec<Value>), String> {
         .cloned()
         .unwrap_or_default();
     Ok((msg, calls))
+}
+
+/// A message with no signal: absent/null/empty content AND no usable
+/// tool_calls. The provider answering with neither text nor tool calls is a
+/// protocol error, not a normal answer.
+fn is_empty_response(msg: &Value) -> bool {
+    let no_text = !msg
+        .get("content")
+        .and_then(|c| c.as_str())
+        .is_some_and(|c| !c.is_empty());
+    let no_calls = !msg
+        .get("tool_calls")
+        .and_then(|t| t.as_array())
+        .is_some_and(|c| !c.is_empty());
+    no_text && no_calls
 }
 
 fn tool_call_fields(call: &Value) -> (String, String, String) {
@@ -329,6 +346,8 @@ pub fn run(
         if turns >= max_turns {
             break (Stop::TurnCap, Some(format!("harness: turn cap {max_turns} reached")));
         }
+        // Deadline is enforced at turn boundaries; a single tool call may
+        // overshoot by up to TOOL_TIMEOUT.
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
             break (
@@ -360,7 +379,7 @@ pub fn run(
             .pointer("/usage/total_tokens")
             .and_then(|t| t.as_u64())
         {
-            total_tokens += u;
+            total_tokens = total_tokens.saturating_add(u);
         }
         let (msg, calls) = match parse_message(&resp) {
             Ok(m) => m,
@@ -372,13 +391,22 @@ pub fn run(
             .unwrap_or("")
             .to_string();
         if calls.is_empty() {
+            // Spec §8: no text and no tool_calls is a provider error, not a
+            // normal answer.
+            if is_empty_response(&msg) {
+                log(&format!("harness: provider empty response (no text, no tool_calls)"));
+                break (
+                    Stop::ProviderError,
+                    Some("harness: provider empty response (no text, no tool_calls)".to_string()),
+                );
+            }
             log(&format!("harness: done after {turns} turn(s), {total_tokens} tokens"));
             break (Stop::Normal, None);
         }
         messages.push(msg);
         for call in &calls {
             let (id, name, args) = tool_call_fields(call);
-            log(&format!("tool {name} {args}"));
+            log(&format!("tool {name} {}", truncate_chars(&args, 512)));
             let result = run_tool(&name, &args, wt, &env_pairs, &env_allow, log);
             messages.push(json!({
                 "role": "tool",
@@ -527,5 +555,16 @@ mod tests {
     #[test]
     fn parse_message_rejects_malformed() {
         assert!(parse_message(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn is_empty_response_classifies_no_signal_messages() {
+        assert!(is_empty_response(&serde_json::json!({ "content": null })));
+        assert!(is_empty_response(&serde_json::json!({})));
+        assert!(is_empty_response(&serde_json::json!({ "content": "" })));
+        assert!(!is_empty_response(&serde_json::json!({ "content": "hi" })));
+        assert!(!is_empty_response(&serde_json::json!(
+            { "tool_calls": [{ "id": "c1", "function": { "name": "bash", "arguments": "{}" } }] }
+        )));
     }
 }
