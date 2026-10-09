@@ -975,7 +975,7 @@ fn settings_env_defaults_and_overrides_contract() {
 fn builtin_worker_requires_api_base() {
     let err = config::load_workers_str(
         r#"{ "workers": [ { "name": "nat", "provider": "p", "model": "m",
-             "cli": "builtin", "enabled": true } ] }"#,
+             "cli": "builtin", "api_base": "   ", "enabled": true } ] }"#,
     )
     .unwrap_err();
     assert!(err.contains("api_base"), "err: {err}");
@@ -1011,6 +1011,17 @@ fn builtin_worker_parses_with_defaults() {
     )
     .unwrap();
     assert_eq!(cfg.workers[0].max_turns, None);
+}
+
+#[test]
+fn builtin_worker_with_explicit_max_turns_parses_and_validates() {
+    let cfg = config::load_workers_str(
+        r#"{ "workers": [ { "name": "nat", "provider": "p", "model": "m",
+             "api_base": "http://x/v1", "cli": "builtin", "max_turns": 5,
+             "enabled": true } ] }"#,
+    )
+    .unwrap();
+    assert_eq!(cfg.workers[0].max_turns, Some(5));
 }
 
 #[test]
