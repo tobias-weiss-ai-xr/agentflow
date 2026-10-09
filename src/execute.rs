@@ -815,6 +815,16 @@ fn command_argv(tpl: &str, prompt_path: &Path) -> (String, Vec<String>) {
     (shell.to_string(), vec![flag, rendered])
 }
 
+/// Built-in prompt template used when `Settings.prompt_file` is unset
+/// (missing/unreadable file ⇒ this constant). Carries every placeholder
+/// (`{{TASK_ID}}`, `{{TASK_TITLE}}`, `{{SCOPE}}`, `{{ACCEPTANCE}}`,
+/// `{{ACCEPT_CMD}}`, `{{MODEL}}`, `{{PROVIDER}}`) so a default-prompt agent
+/// still sees its scope and the exact acceptance gate command. The native
+/// harness (`cli: "builtin"` in `harness.rs`) exposes three builtin tools —
+/// `bash` (platform shell via `gate::shell`), `write`, and `edit` — but the
+/// template body stays tool-agnostic: CLI workers speak their own CLI, and
+/// the builtin harness layers its own `SYSTEM_PROMPT` (which names those
+/// tools) on top, so the tool surface lives in the harness, not here.
 const DEFAULT_PROMPT: &str = r#"You are an autonomous coding agent working in a git worktree.
 
 TASK ID: {{TASK_ID}}

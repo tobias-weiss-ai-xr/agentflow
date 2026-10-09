@@ -9,6 +9,17 @@
 //! call is logged to the attempt log; tool side effects run under the same
 //! env allowlist as a CLI agent child (sandbox layer 1), so native mode is
 //! strictly tighter than CLI mode.
+//!
+//! Example turn structure — turn 1 MUST carry a user message (strict
+//! gateways such as z.ai error 1214 reject a system-only array), then the
+//! model drives the loop with the three builtin tools until it answers in
+//! plain text:
+//! ```text
+//! messages = [system, user]                       // SYSTEM_PROMPT + task prompt
+//! model -> { tool_calls: [bash{command}, write{path,content}, edit{path,old,new}] }
+//!        -> run each tool, append its result, repeat until a text reply
+//!        -> no tool_calls  =>  Stop::Normal
+//! ```
 
 use crate::config::{Settings, Worker};
 use crate::subprocess::{self, CmdKind, EnvMode};
