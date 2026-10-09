@@ -7,6 +7,11 @@
 //! the assumption "when no provider reports a price, a bigger model is more
 //! expensive" lives.
 //!
+//! **`Basis::Priced` wins.** Of the two variants, `Priced` is the real-money
+//! measure and outranks the `Sized` proxy: when a worker declares both a
+//! price and a size, the price takes precedence, and a price is never
+//! converted into (or compared against) a parameter count.
+//!
 //! **No invented conversion rate.** A `$/Mtok` price and a parameter count are
 //! incommensurable, so [`compare`] refuses to order them and [`Basis`] is an
 //! enum rather than one `f64` weight. There is deliberately no function that
