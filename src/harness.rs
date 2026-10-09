@@ -1,5 +1,5 @@
 //! Native agent harness (`cli: "builtin"`): af owns the LLM loop.
-//! ADR-11 amends ADR-1 narrowly: the orchestrator may originate an agent
+//! ADR-14 amends ADR-1 narrowly: the orchestrator may originate an agent
 //! loop, but only inside this worker mode. CLI workers keep the ADR-1
 //! subprocess contract unchanged.
 //!
@@ -220,7 +220,7 @@ fn tool_schemas() -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// Provider HTTP — one wire format, hand-rolled (ADR-11): every worker target
+// Provider HTTP — one wire format, hand-rolled (ADR-14): every worker target
 // speaks OpenAI chat/completions, so a framework would only add tokio.
 // ---------------------------------------------------------------------------
 

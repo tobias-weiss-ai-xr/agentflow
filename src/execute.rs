@@ -306,7 +306,7 @@ fn execute_attempt(
             crate::subprocess::EnvMode::Allowlist(env_allow)
         };
         append("-- agent --");
-        // Native harness (ADR-11): the loop runs INSIDE af; every tool call
+        // Native harness (ADR-14): the loop runs INSIDE af; every tool call
         // is logged by the harness itself. Its outcome synthesizes the SAME
         // CmdKind contract as a CLI child, so all downstream handling
         // (work integrity, gate, merge, retry memory) is byte-identical.
