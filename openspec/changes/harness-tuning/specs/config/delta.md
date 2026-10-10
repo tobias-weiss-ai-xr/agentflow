@@ -1,30 +1,35 @@
-# config Specification (delta)
+# Capability: config
 
-## Modified Requirement: Task schema loading
+## ADDED Requirements
 
-`af` SHALL support two new optional Task fields:
+### Requirement: Per-task turn cap and readonly task fields
 
-- `max_turns` — a positive integer capping the number of LLM round-trips for a
-  `cli: "builtin"` attempt of THIS task, overriding the worker's `max_turns`,
-  then `TF_AGENT_MAX_TURNS`, then the harness default of 32. Validation SHALL
-  reject a `max_turns` of 0 or negative, naming the task. Absent = no
-  per-task override (existing behavior unchanged).
-- `readonly` — a boolean (default `false`). When `true`, the task is
-  investigation-only: the builtin harness SHALL reject every `write` and
-  `edit` tool call, and the attempt SHALL complete when the agent stops
-  normally without running an acceptance gate or merging. Validation SHALL
-  reject `readonly: true` combined with an `accept` gate (a gate on a
-  read-only task is contradictory) — a hard error naming the task.
+`af` SHALL support two optional Task fields beyond the schema documented
+above.
+
+- `max_turns` — an integer >= 1 capping the number of LLM round-trips for a
+  `cli: "builtin"` attempt of THIS task. It SHALL override the worker's
+  `max_turns`, then `TF_AGENT_MAX_TURNS`, then the harness default of 32, only
+  for this task. Validation SHALL reject `max_turns: 0` or negative with a
+  hard error naming the task. Absent = no per-task override.
+- `readonly` — a boolean (default `false`). When `true` the task is
+  investigation-only: `af` SHALL complete the attempt when the agent stops
+  normally, with no acceptance gate and no merge, and the builtin harness
+  SHALL reject every `write` and `edit` tool call. Validation SHALL reject
+  `readonly: true` combined with an `accept` gate — a gate on a read-only task
+  is contradictory — with a hard error naming the task. Absent = normal task
+  behavior unchanged.
 
 #### Scenario: per-task max_turns parses and validates
 
 WHEN a task declares `max_turns: 12`
-THEN it loads successfully, and a `max_turns: 0` task fails loading with an
-error naming the task.
+THEN it loads successfully.
+WHEN a task declares `max_turns: 0`
+THEN loading fails naming the task.
 
 #### Scenario: readonly parses and validates
 
 WHEN a task declares `readonly: true` and no `accept`
-THEN it loads without warning.
+THEN it loads without the usual no-gate warning.
 WHEN a task declares `readonly: true` and an `accept` command
-THEN loading fails with a hard error naming the task.
+THEN loading fails naming the task.
