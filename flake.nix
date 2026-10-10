@@ -13,6 +13,9 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           cargoToml = pkgs.lib.importTOML ./Cargo.toml;
+          # Single source of truth: derive the crate version once from
+          # Cargo.toml so the package, static build and image tag can never
+          # drift from the crate version.
           version = cargoToml.package.version;
           buildAf = pkgs: pkgs.rustPlatform.buildRustPackage {
             pname = "agentflow";
