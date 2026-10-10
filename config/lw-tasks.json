@@ -190,7 +190,7 @@
         "Assets/LearningWorlds/"
       ],
       "touch": [],
-      "accept": "bash ci/unity-compile.sh",
+      "accept": "bash ci/unity-compile.sh && test -f Temp/unity-compile-ok.txt",
       "acceptance_prose": "TASK: Run the compile gate and fix any C# errors under Assets/LearningWorlds/. In this worktree (Unity project root): bash ci/unity-compile.sh. On exit 1 (compile errors): open Temp/unity-compile.log grep error CS fix ONLY LearningWorlds code missing usings/semicolons/UnityEngine refs; iterate until exit 0. On exit 42 (env/license failure): inspect Temp/unity-compile.log tail if remediable config change apply and retry once; if environmental declare BLOCKER in commit message (fail is ok). Note: first compile imports all PICO SDK Android packages ~20-60 min wait do not kill Unity. Conventions: NO .unity/.prefab/.asset. Only fix errors in LearningWorlds scripts."
     },
     {
