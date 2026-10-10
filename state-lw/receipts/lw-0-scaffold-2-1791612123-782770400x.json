@@ -1,0 +1,12 @@
+{
+  "task": "lw-0-scaffold",
+  "attempt": 2,
+  "worker": "gemini",
+  "model": "gemini-2.5-pro",
+  "wall_clock_s": 55.7687012,
+  "tokens": null,
+  "ts": 1791612123,
+  "outcome": "failed",
+  "error": "agent exited NonZero (code 1)",
+  "cost_micros": null
+}

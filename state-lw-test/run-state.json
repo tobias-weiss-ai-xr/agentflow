@@ -1,0 +1,10 @@
+{
+  "lw-0-scaffold": {
+    "state": "ready",
+    "attempts": 1,
+    "last_error": "agent produced no change: 0 commits ahead of main after 34s",
+    "phase": "spawned",
+    "attempt_started_ts": 1791611674,
+    "attempt_worker": "gpt4o"
+  }
+}

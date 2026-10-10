@@ -1,0 +1,49 @@
+{
+  "_meta": {
+    "round": 17,
+    "theme": "self-audit round — dogfood the orchestrator to double-check the nix/container/docs work and hunt for bugs in cost/router logic",
+    "design": "T1 pins the README quickstart examples with an executable contract test (docs become regression-proof). T2 removes the version drift between flake.nix and Cargo.toml. T3 is a scoped bug hunt over cost/router edge cases with a written findings report. T4 cross-checks README+arc42 against flake.nix/scripts. All gates are worktree-safe: no calls to a prebuilt af binary (target/ is not in worktrees), greps + cargo only."
+  },
+  "tasks": [
+    {
+      "id": "r17-quickstart-contract",
+      "title": "r17-quickstart-contract: add tests/quickstart_examples.rs that embeds the two JSON config examples from the README 'Quick start' section verbatim and asserts they load and validate cleanly (exactly 1 task, 1 enabled worker, exactly one warning about the missing cost basis). This makes the quickstart executable documentation: any config-schema change that breaks the README fails CI.",
+      "deps": [],
+      "manual": false,
+      "priority": 1,
+      "scope": ["tests/quickstart_examples.rs"],
+      "touch": ["tests/quickstart_examples.rs"],
+      "accept": "cargo test --test quickstart_examples 2>&1 | grep -q 'test result: ok'"
+    },
+    {
+      "id": "r17b-flake-version-pin",
+      "title": "r17b-flake-version-pin: flake.nix hardcodes version = \"0.1.0\" for the package, static build and image tag — drift risk vs Cargo.toml. Derive the version once via pkgs.lib.importTOML ./Cargo.toml (package.version) and feed it to all three outputs so they can never diverge from the crate version. Do not change anything else about the flake; nix cannot run in this environment, so correctness is pinned by the grep gate.",
+      "deps": [],
+      "manual": false,
+      "priority": 2,
+      "scope": ["flake.nix"],
+      "touch": ["flake.nix"],
+      "accept": "grep -c 'version = \"0.1.0\"' flake.nix | tr -d '\n' | grep -qx '0' && grep -q 'importTOML ./Cargo.toml' flake.nix"
+    },
+    {
+      "id": "r17b-bug-hunt",
+      "title": "r17b-bug-hunt: audit src/cost.rs for edge-case bugs — window composition, torn/unparseable receipt handling, divide-by-zero or NaN in trust means. Fix ONLY clear bugs, each with a pinning test; do not refactor. Write every finding (fixed or not) to docs/audit/r17b-findings.md as a numbered list: file, symbol, finding, severity (bug|smell|ok), action taken. Limit to src/cost.rs only to fit 48-turn caps; split router to a new task if space remaining.",
+      "deps": [],
+      "manual": false,
+      "priority": 3,
+      "scope": ["src/cost.rs", "tests/**", "docs/audit/**"],
+      "touch": ["docs/audit/r17b-findings.md"],
+      "accept": "test -f docs/audit/r17b-findings.md && cargo test --lib -- cost 2>&1 | grep -q 'test result: ok'"
+    },
+    {
+      "id": "r17b-doc-consistency",
+      "title": "r17b-doc-consistency: cross-check the README 'Quick start' + 'Docker / Nix' sections and docs/arc42/07-deployment-view.md sections 7.5-7.7 against the actual flake.nix and scripts/dist/*.sh — fix any drift in: output symlink names (result-af, result-af-static, result-image), image name/tag, af CLI flags and subcommands, env var names, and command sequences. Do not add prose; only correct inconsistencies.",
+      "deps": [],
+      "manual": false,
+      "priority": 4,
+      "scope": ["README.md", "docs/arc42/07-deployment-view.md"],
+      "touch": ["README.md"],
+      "accept": "cargo build 2>&1 | tail -1 && for c in validate run status cost; do ./target/debug/af $c --help >/dev/null 2>&1 || exit 1; done && grep -q 'result-af-static' README.md && grep -q 'agentflow:' README.md && grep -q 'importTOML\\|version' flake.nix"
+    }
+  ]
+}

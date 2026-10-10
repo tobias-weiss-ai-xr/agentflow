@@ -1,0 +1,12 @@
+{
+  "task": "lw-0-scaffold",
+  "attempt": 2,
+  "worker": "gemini",
+  "model": "gemini-2.5-pro",
+  "wall_clock_s": 1.0009828,
+  "tokens": null,
+  "ts": 1791612103,
+  "outcome": "failed",
+  "error": "worktree add failed (NonZero): Preparing worktree (new branch 'tf/lw-0-scaffold')",
+  "cost_micros": null
+}

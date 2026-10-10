@@ -1,0 +1,12 @@
+{
+  "task": "lw-0-scaffold",
+  "attempt": 1,
+  "worker": "glm",
+  "model": "glm-4.6",
+  "wall_clock_s": 0.6660889,
+  "tokens": null,
+  "ts": 1791612072,
+  "outcome": "failed",
+  "error": "worktree add failed (NonZero): Preparing worktree (new branch 'tf/lw-0-scaffold')",
+  "cost_micros": null
+}
