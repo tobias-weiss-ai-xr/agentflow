@@ -12,73 +12,171 @@
       "deps": [],
       "manual": false,
       "priority": 1,
-      "scope": ["Assets/LearningWorlds/Scripts/LearningWorldsApp.cs", "Assets/LearningWorlds/Scripts/Pse/ElementData.cs", "ci/unity-compile.sh", "Assets/LearningWorlds/Data/elements.json"],
-      "touch": ["Assets/LearningWorlds/Scripts/LearningWorldsApp.cs", "Assets/LearningWorlds/Scripts/Pse/ElementData.cs", "ci/unity-compile.sh"],
+      "scope": [
+        "Assets/LearningWorlds/Scripts/LearningWorldsApp.cs",
+        "Assets/LearningWorlds/Scripts/Pse/ElementData.cs",
+        "ci/unity-compile.sh",
+        "Assets/LearningWorlds/Data/elements.json"
+      ],
+      "touch": [
+        "Assets/LearningWorlds/Scripts/LearningWorldsApp.cs",
+        "Assets/LearningWorlds/Scripts/Pse/ElementData.cs",
+        "ci/unity-compile.sh"
+      ],
       "accept": "bash -n ci/unity-compile.sh && grep -q RuntimeInitializeOnLoadMethod Assets/LearningWorlds/Scripts/LearningWorldsApp.cs && grep -q LoadAll Assets/LearningWorlds/Scripts/Pse/ElementData.cs && test -s Assets/LearningWorlds/Data/elements.json",
       "acceptance_prose": "Conventions: Unity 6000.3.25f1 URP. Code-only NO .unity/.prefab/.asset. Build at runtime. Namespace LearningWorlds*. Use GameObject.CreatePrimitive, Shader.Find Universal Render Pipeline Lit fallback Standard, legacy TextMesh with Font Resources.GetBuiltinResource<Font> LegacyRuntime.ttf, UnityEngine.UI. Only edit inside Assets/LearningWorlds/ plus ci/. Editor: ensure rig DontDestroyOnLoad. German UI, English content. YOU MUST run the accept gate yourself before committing."
     },
     {
       "id": "lw-1-gallery",
       "title": "PSE Gallery: Bohr atom builder, grid of 118 elements, detail info panel via ray selection",
-      "deps": ["lw-0-scaffold"],
+      "deps": [
+        "lw-0-scaffold"
+      ],
       "manual": false,
       "priority": 2,
-      "scope": ["Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs", "Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs", "Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs", "Assets/LearningWorlds/Scripts/Pse/ElectronRotator.cs", "Assets/LearningWorlds/Scripts/Pse/InitializeSelection.cs"],
-      "touch": ["Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs", "Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs", "Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs", "Assets/LearningWorlds/Scripts/Pse/ElectronRotator.cs", "Assets/LearningWorlds/Scripts/Pse/InitializeSelection.cs"],
+      "scope": [
+        "Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs",
+        "Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs",
+        "Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs",
+        "Assets/LearningWorlds/Scripts/Pse/ElectronRotator.cs",
+        "Assets/LearningWorlds/Scripts/Pse/InitializeSelection.cs"
+      ],
+      "touch": [
+        "Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs",
+        "Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs",
+        "Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs",
+        "Assets/LearningWorlds/Scripts/Pse/ElectronRotator.cs",
+        "Assets/LearningWorlds/Scripts/Pse/InitializeSelection.cs"
+      ],
       "accept": "test -f Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs && test -f Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs && test -f Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs && grep -q xpos Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs",
       "acceptance_prose": "Conventions: see lw-0-scaffold. TASK: BohrAtomBuilder.cs: public static GameObject Build(Element e, float scale=1) - nucleus sphere from cpk_hex color fallback category hash, shell rings via thin cylinder primitives rotated horizontal, electrons small spheres on rings rotating in Update, cap at 2 visual shells for gallery. ElementGallery.cs: Build() populates scene - floor plane 40x40, 118 atoms laid out via xpos/z = -ypos *2.0, handle ypos 8/9 rows below grid, each atom collider + selectable; register LearningWorldsApp.Builders[World.PseGallery]=Build. ElementInfoPanel.cs: raycast selection via LearningWorldsApp rig camera - show world-space canvas panel with name, symbol, number, atomic_mass, category, phase, melt/boil K, density, electronegativity, appearance, config, summary wrapped at 60 chars; buttons: Raum betreten -> SelectedElement=e.number Go(World.ElementRoom); Schliessen -> Hide. No .unity/.prefab/.asset."
     },
     {
       "id": "lw-1-room",
       "title": "ElementRoom engine: one data-driven scene for all 118 elements with 5 learning stations",
-      "deps": ["lw-0-scaffold"],
+      "deps": [
+        "lw-0-scaffold"
+      ],
       "manual": false,
       "priority": 2,
-      "scope": ["Assets/LearningWorlds/Scripts/Pse/ElementRoom.cs", "Assets/LearningWorlds/Scripts/Pse/LatticeBuilder.cs", "Assets/LearningWorlds/Scripts/Pse/QuizStation.cs", "Assets/LearningWorlds/Scripts/Pse/TextUtil.cs", "Assets/LearningWorlds/Scripts/Pse/BuildingBuilders.cs", "Assets/LearningWorlds/Scripts/Pse/PedestalCreator.cs"],
-      "touch": ["Assets/LearningWorlds/Scripts/Pse/ElementRoom.cs", "Assets/LearningWorlds/Scripts/Pse/LatticeBuilder.cs", "Assets/LearningWorlds/Scripts/Pse/QuizStation.cs", "Assets/LearningWorlds/Scripts/Pse/TextUtil.cs", "Assets/LearningWorlds/Scripts/Pse/BuildingBuilders.cs", "Assets/LearningWorlds/Scripts/Pse/PedestalCreator.cs"],
+      "scope": [
+        "Assets/LearningWorlds/Scripts/Pse/ElementRoom.cs",
+        "Assets/LearningWorlds/Scripts/Pse/LatticeBuilder.cs",
+        "Assets/LearningWorlds/Scripts/Pse/QuizStation.cs",
+        "Assets/LearningWorlds/Scripts/Pse/TextUtil.cs",
+        "Assets/LearningWorlds/Scripts/Pse/BuildingBuilders.cs",
+        "Assets/LearningWorlds/Scripts/Pse/PedestalCreator.cs"
+      ],
+      "touch": [
+        "Assets/LearningWorlds/Scripts/Pse/ElementRoom.cs",
+        "Assets/LearningWorlds/Scripts/Pse/LatticeBuilder.cs",
+        "Assets/LearningWorlds/Scripts/Pse/QuizStation.cs",
+        "Assets/LearningWorlds/Scripts/Pse/TextUtil.cs",
+        "Assets/LearningWorlds/Scripts/Pse/BuildingBuilders.cs",
+        "Assets/LearningWorlds/Scripts/Pse/PedestalCreator.cs"
+      ],
       "accept": "test -f Assets/LearningWorlds/Scripts/Pse/ElementRoom.cs && test -f Assets/LearningWorlds/Scripts/Pse/LatticeBuilder.cs && test -f Assets/LearningWorlds/Scripts/Pse/QuizStation.cs",
       "acceptance_prose": "Conventions: see lw-0-scaffold. TASK: TextUtil.cs: public static string Wrap(string t, int len=40) inserts newlines at space. ElementRoom.cs: Build() reads SelectedElement builds scene - floor mandala 3 translucent discs category color, giant BohrAtomBuilder (radiusScale=2.5) monument, wall TextMesh symbol+name back at z=-4, ring of 5 stations radius 3.5m 72 deg spacing posts+pedestals+TextMesh labels 1-Kristallstruktur 2-Wo du ihm begegnest 3-Entdeckung 4-Klassisches Experiment 5-Quiz, return portal -> Go(World.PseGallery); register Builders[World.ElementRoom]=Build. LatticeBuilder.cs: public static GameObject BuildStructure(string symbol, string category, Vector3 center, float cell=0.3) - BCC set Fe Cr W V Mo Ta Nb, HCP set Co Zn Mg Ti, diamond C, noble FCC else simple; 3x3x3 cells spheres+LineRenderer bonds. QuizStation.cs: generated questions seed=SelectedElement number/symbol/category/phase templates; 3 answer pedestal cubes ray-triggered correct wrong feedback green/red + correct glow 1.5s Next resets."
     },
     {
       "id": "lw-1-arachno",
       "title": "Arachnophobia VRET: bedroom + spider tiers + graduated exposure + SUDS rating",
-      "deps": ["lw-0-scaffold"],
+      "deps": [
+        "lw-0-scaffold"
+      ],
       "manual": false,
       "priority": 2,
-      "scope": ["Assets/LearningWorlds/Scripts/Arachno/BedroomBuilder.cs", "Assets/LearningWorlds/Scripts/Arachno/SpiderFactory.cs", "Assets/LearningWorlds/Scripts/Arachno/ExposureController.cs", "Assets/LearningWorlds/Scripts/Arachno/SudsRating.cs"],
-      "touch": ["Assets/LearningWorlds/Scripts/Arachno/BedroomBuilder.cs", "Assets/LearningWorlds/Scripts/Arachno/SpiderFactory.cs", "Assets/LearningWorlds/Scripts/Arachno/ExposureController.cs", "Assets/LearningWorlds/Scripts/Arachno/SudsRating.cs"],
+      "scope": [
+        "Assets/LearningWorlds/Scripts/Arachno/BedroomBuilder.cs",
+        "Assets/LearningWorlds/Scripts/Arachno/SpiderFactory.cs",
+        "Assets/LearningWorlds/Scripts/Arachno/ExposureController.cs",
+        "Assets/LearningWorlds/Scripts/Arachno/SudsRating.cs"
+      ],
+      "touch": [
+        "Assets/LearningWorlds/Scripts/Arachno/BedroomBuilder.cs",
+        "Assets/LearningWorlds/Scripts/Arachno/SpiderFactory.cs",
+        "Assets/LearningWorlds/Scripts/Arachno/ExposureController.cs",
+        "Assets/LearningWorlds/Scripts/Arachno/SudsRating.cs"
+      ],
       "accept": "test -f Assets/LearningWorlds/Scripts/Arachno/BedroomBuilder.cs && test -f Assets/LearningWorlds/Scripts/Arachno/SpiderFactory.cs && test -f Assets/LearningWorlds/Scripts/Arachno/ExposureController.cs && test -f Assets/LearningWorlds/Scripts/Arachno/SudsRating.cs && grep -q Builders Assets/LearningWorlds/Scripts/Arachno/*.cs",
-      "acceptance_prose": "Conventions: see lw-0-scaffold. German UI. TASK: BedroomBuilder.cs: Build() - floor 5x4 plate, 4 walls, bed, shelf, desk, lamp Point light range 3 warm white, window emissive plane. SpiderFactory.cs: Build(int tier, Vector3 pos) tier0=cartoon static body 2 spheres dark legs 8 cylinders no anim; tier1 legs animate sine wave; tier2 larger faster darker small drift. ExposureController.cs: CurrentLevel 0-9 distance=4-0.38*level tier=level<3?0:level<6?1:2 motion/anim=level>=1 drift=level>=4; wrist UI canvas bottom-left editor cam LateUpdate: +/-, freeze, always Zurueck zum Hub -> Go(World.Hub); register Builders[World.Arachnophobia]=Build. SudsRating.cs: static Show(Action<int> onSubmit) fullscreen dim Canvas slider 0-100 Wie stark ist deine Angst? (0-100), Bestätigen; writes JSONL {utc,level,suds} appended to Application.persistentDataPath/LearningWorlds/arachno-suds.jsonl ensure dir first. No .unity/.prefab/.asset."
+      "acceptance_prose": "Conventions: see lw-0-scaffold. German UI. TASK: BedroomBuilder.cs: Build() - floor 5x4 plate, 4 walls, bed, shelf, desk, lamp Point light range 3 warm white, window emissive plane. SpiderFactory.cs: Build(int tier, Vector3 pos) tier0=cartoon static body 2 spheres dark legs 8 cylinders no anim; tier1 legs animate sine wave; tier2 larger faster darker small drift. ExposureController.cs: CurrentLevel 0-9 distance=4-0.38*level tier=level<3?0:level<6?1:2 motion/anim=level>=1 drift=level>=4; wrist UI canvas bottom-left editor cam LateUpdate: +/-, freeze, always Zurueck zum Hub -> Go(World.Hub); register Builders[World.Arachnophobia]=Build. SudsRating.cs: static Show(Action<int> onSubmit) fullscreen dim Canvas slider 0-100 Wie stark ist deine Angst? (0-100), Best\u00c3\u00a4tigen; writes JSONL {utc,level,suds} appended to Application.persistentDataPath/LearningWorlds/arachno-suds.jsonl ensure dir first. No .unity/.prefab/.asset."
     },
     {
       "id": "lw-1-hub",
       "title": "LandingHub: learning-themed lobby with 3 portal doors to PSE, Arachnophobia, Research Labs",
-      "deps": ["lw-0-scaffold"],
+      "deps": [
+        "lw-0-scaffold"
+      ],
       "manual": false,
       "priority": 2,
-      "scope": ["Assets/LearningWorlds/Scripts/Hub/Portal.cs", "Assets/LearningWorlds/Scripts/Hub/LandingHub.cs", "Assets/LearningWorlds/Scripts/Hub/LearningSignage.cs"],
-      "touch": ["Assets/LearningWorlds/Scripts/Hub/Portal.cs", "Assets/LearningWorlds/Scripts/Hub/LandingHub.cs", "Assets/LearningWorlds/Scripts/Hub/LearningSignage.cs"],
+      "scope": [
+        "Assets/LearningWorlds/Scripts/Hub/Portal.cs",
+        "Assets/LearningWorlds/Scripts/Hub/LandingHub.cs",
+        "Assets/LearningWorlds/Scripts/Hub/LearningSignage.cs"
+      ],
+      "touch": [
+        "Assets/LearningWorlds/Scripts/Hub/Portal.cs",
+        "Assets/LearningWorlds/Scripts/Hub/LandingHub.cs",
+        "Assets/LearningWorlds/Scripts/Hub/LearningSignage.cs"
+      ],
       "accept": "test -f Assets/LearningWorlds/Scripts/Hub/Portal.cs && test -f Assets/LearningWorlds/Scripts/Hub/LandingHub.cs && test -f Assets/LearningWorlds/Scripts/Hub/LearningSignage.cs && grep -q Builders Assets/LearningWorlds/Scripts/Hub/LandingHub.cs",
       "acceptance_prose": "Conventions: see lw-0-scaffold. TASK: Portal.cs: static GameObject Create(string label, World world, Vector3 pos, float yaw=0) - 2 posts 2.5m tall + lintel cube dark #333, door plane 0.05m emissive cyan, TextMesh label above; trigger box, OnTriggerEnter/ray call debounced 2s LearningWorldsApp.Go(world) plus pulse effect. LandingHub.cs: Build() - floor disc radius 15, 3 portals at 120 deg radius 4m yaw tow center: 'Periodensystem (3D-PSE)' World.PseGallery, 'Mut-Training: Spinnen' World.Arachnophobia, 'Forschungslabor' LearningWorldsApp.OpenLab(); register Builders[World.Hub]=Build. LearningSignage.cs: Build() add TextMesh panels Concourse center Willkommen in PicoLearningRoom alles ist Lernen panels left Lernprinzipien and right Mut-Trainingshort phrases. No .unity/.prefab/.asset."
     },
     {
       "id": "lw-2-wire",
       "title": "Wire up state machine: portal callbacks, rig persistence, unloading, editor menu to open hub",
-      "deps": ["lw-1-gallery", "lw-1-room", "lw-1-arachno", "lw-1-hub"],
+      "deps": [
+        "lw-1-gallery",
+        "lw-1-room",
+        "lw-1-arachno",
+        "lw-1-hub"
+      ],
       "manual": false,
       "priority": 3,
-      "scope": ["Assets/LearningWorlds/Scripts/LearningWorldsApp.cs", "Assets/LearningWorlds/Scripts/Hub/Portal.cs", "Assets/LearningWorlds/Editor/LearningWorldsMenus.cs"],
-      "touch": ["Assets/LearningWorlds/Editor/LearningWorldsMenus.cs"],
+      "scope": [
+        "Assets/LearningWorlds/Scripts/LearningWorldsApp.cs",
+        "Assets/LearningWorlds/Scripts/Hub/Portal.cs",
+        "Assets/LearningWorlds/Editor/LearningWorldsMenus.cs"
+      ],
+      "touch": [
+        "Assets/LearningWorlds/Editor/LearningWorldsMenus.cs"
+      ],
       "accept": "test -f Assets/LearningWorlds/Editor/LearningWorldsMenus.cs && grep -q MenuItem Assets/LearningWorlds/Editor/LearningWorldsMenus.cs && grep -q EnsureRig Assets/LearningWorlds/Scripts/LearningWorldsApp.cs && grep -q Go Assets/LearningWorlds/Scripts/Hub/Portal.cs",
       "acceptance_prose": "Conventions: see lw-0-scaffold. TASK: LearningWorldsApp.cs - Boot only when scene name starts with LearningWorlds-; EnsureRig() creates DontDestroyOnLoad LW-Rig camera WASD+RMB fly editor; Go(World w, int ele=-1) unload old LearningWorlds scene via SceneManager.UnloadSceneAsync await then create new scene LearningWorlds-World scene set active call Builders[w](); persistent rig survives; LabSceneName: scan Assets/Scenes/*.unity find one with Menu/Aoi name fallback '00_Menu' static field; OpenLab() calls SceneManager.LoadScene(LabSceneName). Portal.cs: OnTriggerEnter use cooldown calls LearningWorldsApp.Go(targetWorld). Editor/LearningWorldsMenus.cs namespace LearningWorlds.Editor [MenuItem LearningWorlds/Open Hub Scene] static void OpenHub() { if Application.isPlaying return; EditorSceneManager.NewScene(DefaultGameObjects Single) then open Assets/Scenes/LearningWorlds-Hub.unity } [MenuItem LearningWorlds/Register Build Scenes] static void Register() { add LearningWorlds-Hub scene to EditorBuildSettings.scenes }."
     },
     {
+      "id": "lw-1-tutors",
+      "title": "Socratic Tutors: Convai-based AI tutors for each learning world (Chemiker, Forscher, Therapeut, Wegweiser)",
+      "deps": [
+        "lw-0-scaffold"
+      ],
+      "manual": false,
+      "priority": 2,
+      "scope": [
+        "Assets/LearningWorlds/Scripts/Tutors/SocraticTutorManager.cs",
+        "Assets/LearningWorlds/Scripts/Tutors/SocraticTutorConfig.cs",
+        "Assets/LearningWorlds/Scripts/Analytics/LearningAnalytics.cs",
+        "Assets/LearningWorlds/Editor/TutorSetupMenu.cs"
+      ],
+      "touch": [
+        "Assets/LearningWorlds/Scripts/Tutors/SocraticTutorManager.cs",
+        "Assets/LearningWorlds/Scripts/Tutors/SocraticTutorConfig.cs",
+        "Assets/LearningWorlds/Scripts/Analytics/LearningAnalytics.cs"
+      ],
+      "accept": "test -f Assets/LearningWorlds/Scripts/Tutors/SocraticTutorManager.cs && grep -q ConvaiNPC Assets/LearningWorlds/Scripts/Tutors/SocraticTutorManager.cs && grep -q World Assets/LearningWorlds/Scripts/Tutors/SocraticTutorManager.cs && test -f Assets/LearningWorlds/Scripts/Analytics/LearningAnalytics.cs && test -f Assets/LearningWorlds/Scripts/Tutors/SocraticTutorConfig.cs",
+      "acceptance_prose": "Conventions: see lw-0-scaffold. Code-only NO .unity/.prefab/.asset. TASK: SocraticTutorManager.cs: Singleton DontDestroyOnLoad, manages Convai NPC tutors for each World: public enum World { Hub, PseGallery, ElementRoom, Arachnophobia }. public class TutorConfig { public World world; public string characterId; public Vector3 spawnPosition; public Vector3 spawnRotation; }. SpawnTutor(TutorConfig) instantiates ConvaiNPC prefab at position/rotation. ActivateTutorForWorld(World w) enables only the tutor for current world; deactivates others. ToggleTutorVisibility() hides/shows current tutor. SendContextMessage(World w, string context) sends world-specific prompts to tutor. SocraticTutorConfig.cs: ScriptableObject with List<TutorConfig> for Unity Inspector setup. LearningAnalytics.cs: Singleton, public class InteractionLog { timestamp, world, action, context, duration, sudsRating }, public void LogInteraction(string world, string action, string context, float duration, int sudsRating), public void LogTutorInteraction(World world, string tutorName, string question, string answer, float duration), public void ExportToCSV(). Editor/TutorSetupMenu.cs: [MenuItem LearningWorlds/Setup Socratic Tutors] static void Setup() creates default SocraticTutorConfig asset and assigns to SocraticTutorManager in scene. NO using UnityEditor in runtime scripts."
+    },
+    {
       "id": "lw-2-compile",
       "title": "Compile fix: run Unity batchmode compile gate, fix all compile errors under LearningWorlds",
-      "deps": ["lw-2-wire"],
+      "deps": [
+        "lw-2-wire"
+      ],
       "manual": false,
       "priority": 4,
-      "scope": ["Assets/LearningWorlds/"],
+      "scope": [
+        "Assets/LearningWorlds/"
+      ],
       "touch": [],
       "accept": "bash ci/unity-compile.sh",
       "acceptance_prose": "TASK: Run the compile gate and fix any C# errors under Assets/LearningWorlds/. In this worktree (Unity project root): bash ci/unity-compile.sh. On exit 1 (compile errors): open Temp/unity-compile.log grep error CS fix ONLY LearningWorlds code missing usings/semicolons/UnityEngine refs; iterate until exit 0. On exit 42 (env/license failure): inspect Temp/unity-compile.log tail if remediable config change apply and retry once; if environmental declare BLOCKER in commit message (fail is ok). Note: first compile imports all PICO SDK Android packages ~20-60 min wait do not kill Unity. Conventions: NO .unity/.prefab/.asset. Only fix errors in LearningWorlds scripts."
@@ -86,11 +184,19 @@
     {
       "id": "lw-3-docs",
       "title": "Editor menus finalized and README rewrite as Learning-Worlds landing page",
-      "deps": ["lw-2-compile"],
+      "deps": [
+        "lw-2-compile"
+      ],
       "manual": false,
       "priority": 5,
-      "scope": ["README.md", "Assets/LearningWorlds/Editor/LearningWorldsMenus.cs"],
-      "touch": ["README.md", "Assets/LearningWorlds/Editor/LearningWorldsMenus.cs"],
+      "scope": [
+        "README.md",
+        "Assets/LearningWorlds/Editor/LearningWorldsMenus.cs"
+      ],
+      "touch": [
+        "README.md",
+        "Assets/LearningWorlds/Editor/LearningWorldsMenus.cs"
+      ],
       "accept": "grep -qi LearningWorlds README.md && grep -qi Periodensystem README.md && test -f Assets/LearningWorlds/Editor/LearningWorldsMenus.cs && grep -q MenuItem Assets/LearningWorlds/Editor/LearningWorldsMenus.cs",
       "acceptance_prose": "Conventions: see lw-0-scaffold. README at repo root markdown. TASK: README.md rewrite - title PicoLearningRooms learning worlds VR Unity 6000 PICO 4 Enterprise; section About VR learning experiences retrieval practice graded exposure; Worlds bullet Periodensystem 3D-PSE 118 elements 5 stations Mut-Training Spinnen exposure therapy Forschungslabore existing AOI research; Get Started open Unity menu LearningWorlds Open Hub Scene press Play WASD+mouse; Ports from periodic-table WebXR https tobias-weiss-ai-xr.github.io periodic-table and WebXR arachnophobia demo at pse.chemie-lernen.org arachnophobia; Design/Specs link docs/superpowers/specs/2026-10-09-learning-worlds-design.md; History old PicoLearningRooms template SDK250 preserved git history and D:/unity/pico/PLR-pre-purge-backup.bundle. Editor/LearningWorldsMenus.cs ensure both menu items Open Hub Scene and Register Build Scenes complete Robust null safe."
     }

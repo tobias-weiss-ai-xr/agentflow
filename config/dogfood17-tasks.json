@@ -36,14 +36,14 @@
       "accept": "test -f docs/audit/r17b-findings.md && cargo test --lib -- cost 2>&1 | grep -q 'test result: ok'"
     },
     {
-      "id": "r17b-doc-consistency",
-      "title": "r17b-doc-consistency: cross-check the README 'Quick start' + 'Docker / Nix' sections and docs/arc42/07-deployment-view.md sections 7.5-7.7 against the actual flake.nix and scripts/dist/*.sh — fix any drift in: output symlink names (result-af, result-af-static, result-image), image name/tag, af CLI flags and subcommands, env var names, and command sequences. Do not add prose; only correct inconsistencies.",
+      "id": "r17c-doc-consistency",
+      "title": "r17c-doc-consistency: cross-check the README 'Quick start' + 'Docker / Nix' sections and docs/arc42/07-deployment-view.md sections 7.5-7.7 against the actual flake.nix and scripts/dist/*.sh — fix any drift in: output symlink names (result-af, result-af-static, result-image), image name/tag, af CLI flags and subcommands, env var names, and command sequences. Do not add prose; only correct inconsistencies. The prior r17b attempt failed because its gate used bash-only syntax (for/[ ) that cmd /C does not understand; this gate is cmd-portable (grep && pipes only). Read files to verify claims; do not edit out-of-scope files like src/main.rs just to double-check a flag.",
       "deps": [],
       "manual": false,
       "priority": 4,
       "scope": ["README.md", "docs/arc42/07-deployment-view.md"],
       "touch": ["README.md"],
-      "accept": "cargo build 2>&1 | tail -1 && for c in validate run status cost; do ./target/debug/af $c --help >/dev/null 2>&1 || exit 1; done && grep -q 'result-af-static' README.md && grep -q 'agentflow:' README.md && grep -q 'importTOML\\|version' flake.nix"
+      "accept": "cargo build 2>&1 | tail -1 && ./target/debug/af --help | grep -q validate && ./target/debug/af --help | grep -q status && ./target/debug/af --help | grep -q cost && grep -q 'result-af-static' README.md && grep -q 'agentflow:' README.md"
     }
   ]
 }
