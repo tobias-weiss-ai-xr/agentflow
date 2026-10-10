@@ -173,6 +173,14 @@ pub struct Worker {
     /// Ignored for CLI workers (their flags live in `args`).
     #[serde(default)]
     pub max_turns: Option<u32>,
+    /// Attempts to give EACH task this worker accepts. Agentflow's
+    /// scheduling reads the retry budget once, globally, from the
+    /// `defaults.max_attempts` block of workers.json — a value placed here
+    /// (per worker) is a common footgun that serde would otherwise swallow
+    /// silently, so it is parsed and rejected by `validate` with a pointer
+    /// to `defaults`.
+    #[serde(default)]
+    pub max_attempts: Option<u32>,
 }
 
 impl Default for Worker {
@@ -191,6 +199,7 @@ impl Default for Worker {
             params_b: None,
             price_per_mtok_usd: None,
             max_turns: None,
+            max_attempts: None,
         }
     }
 }
@@ -368,6 +377,18 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
         }
     }
 
+    // A per-worker `max_attempts` is silently ignored (the retry budget is
+    // the single `defaults.max_attempts` number), so a worker config that
+    // sets it is a config bug wearing the correct-looking shape. Surface it
+    // as a warning with the fix, instead of quietly running at the default.
+    for w in workers {
+        if let Some(ma) = w.max_attempts {
+            warnings.push(format!(
+                "worker '{}': max_attempts {} lives on the worker, but the retry budget is read from the top-level 'defaults' block — af ignored it (running at defaults.max_attempts). Move it: {{ \"defaults\": {{ \"max_attempts\": {} }} }}",
+                w.name, ma, ma
+            ));
+        }
+    }
     // A declared `touch` entry no `scope` entry covers is a hard error, not
     // a warning: the task would be unpassable by construction (it must edit
     // a file its own scope forbids), so it must fail at config time, before
