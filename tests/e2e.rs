@@ -240,7 +240,7 @@ fn happy_path_dependency_and_merge() {
 fn happy_path_command_template_dispatch() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     std::env::remove_var("FAKE_AGENT_EXIT");
-    std::env::set_var("FAKE_AGENT_TOUCH", "1");
+    std::env::set_var("FAKE_AGENT_TOUCH", "A.txt");
     let f = fixture(
         &format!(
             r#"{{ "tasks": [
