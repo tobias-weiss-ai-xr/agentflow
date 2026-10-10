@@ -82,6 +82,19 @@ fn quickstart_examples_load_and_validate() {
     assert!(cfg.workers[0].enabled, "worker should be enabled");
     assert_eq!(cfg.workers[0].cli, "builtin");
     assert_eq!(cfg.workers[0].max_turns, Some(48));
+    // The README's endpoint/key-env lines, verbatim.
+    assert_eq!(
+        cfg.workers[0].api_base,
+        Some("https://api.z.ai/api/paas/v4".to_string())
+    );
+    assert_eq!(
+        cfg.workers[0].api_key_env,
+        Some("ZAI_API_KEY".to_string())
+    );
+
+    // The README's `defaults` block is honoured verbatim.
+    assert_eq!(cfg.defaults.accept_timeout_s, 600);
+    assert_eq!(cfg.defaults.max_attempts, 2);
 
     // Exactly one warning about the missing cost basis
     assert_eq!(cfg.warnings.len(), 1, "should have exactly 1 warning");
