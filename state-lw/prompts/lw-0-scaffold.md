@@ -99,9 +99,3 @@ If the task is too large, do it in this order and commit progressively:
    - Any follow-up needed
 
 Do not push; the orchestrator merges and pushes.
-
-
-## Previous attempts on this task (avoid repeating these failures)
-- attempt 1: worktree add failed (NonZero): Preparing worktree (new branch 'tf/lw-0-scaffold')
-- attempt 2: worktree add failed (NonZero): Preparing worktree (new branch 'tf/lw-0-scaffold')
-- attempt 2: agent exited NonZero (code 1)

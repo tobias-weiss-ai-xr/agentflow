@@ -1,10 +1,10 @@
 {
   "lw-0-scaffold": {
-    "state": "failed",
-    "attempts": 3,
-    "last_error": "agent exited NonZero (code 1)",
+    "state": "ready",
+    "attempts": 0,
+    "last_error": null,
     "phase": "spawned",
-    "attempt_started_ts": 1791612153,
-    "attempt_worker": "gemini"
+    "attempt_started_ts": null,
+    "attempt_worker": null
   }
 }

@@ -3,26 +3,15 @@
     "accept_timeout_s": 5400,
     "max_attempts": 3,
     "retry_delay_s": 30,
-    "agent_timeout_s": 3600
+    "agent_timeout_s": 7200
   },
   "workers": [
     {
-      "name": "glm",
-      "provider": "zai",
-      "model": "glm-4.6",
+      "name": "tud",
+      "provider": "tud",
+      "model": "Ministral-3-14B-Instruct-2512",
       "cli": "C:\\Users\\Tobias\\AppData\\Local\\pi-node\\current\\pi.cmd",
       "args": ["--approve"],
-      "api_key_env": "ZHIPUAI_API_KEY",
-      "enabled": true
-    },
-    {
-      "name": "gemini",
-      "provider": "google",
-      "model": "gemini-2.5-pro",
-      "cli": "C:\\Users\\Tobias\\AppData\\Local\\pi-node\\current\\pi.cmd",
-      "args": ["--approve"],
-      "api_base": "https://generativelanguage.googleapis.com/v1beta/openai/",
-      "api_key_env": "GOOGLE_API_KEY",
       "enabled": true
     }
   ]
