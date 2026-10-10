@@ -1,15 +1,15 @@
-- [ ] config.rs: add `max_turns: Option<u32>` and `readonly: bool` to `Task` (both `#[serde(default)]`); validation: `max_turns == Some(0)` hard error; `readonly && accept.is_some()` hard error.
-- [ ] harness.rs: `run()` gains `task_max_turns: Option<u32>`, `task_scope: &[String]`, `readonly: bool`; `effective_max_turns` resolves task > worker > env > 32.
-- [ ] harness.rs: tool guard on `write`/`edit` — resolve path, reject when readonly or scope non-empty and `execute::scope_violations(&[rel], scope)` non-empty; message names path + allowed scope.
-- [ ] harness.rs contract tests: out-of-scope write/edit rejected; in-scope allowed; readonly rejects all writes; task max_turns overrides worker.
-- [ ] execute.rs: pass task fields into `harness::run`; readonly completion path — normal agent stop → done, no gate + no merge; work preserved by standard archive.
-- [ ] router.rs: `pick()` exploitation mean = `(wins+1)/(n+2)`; `trust()` stays raw; update UCB1 doc comments.
-- [ ] router tests: laplace prior changes small-N ordering; trust stays raw.
-- [ ] config validation tests: readonly+accept rejected; max_turns 0 rejected.
-- [ ] Docs: README task schema rows (`max_turns`, `readonly`), scope row (tool-time enforcement), trust-routing paragraph (Laplace prior; `af cost` shows raw).
-- [ ] Docs: arc42 §8.2.1 (prior), §8.3.2 (fail-fast scope + readonly).
-- [ ] gate.rs: shell() prefers POSIX `sh` on Windows when reachable (cmd fallback), shared by gates + builtin bash tool; windows test proves a bash-idiom gate passes.
-- [ ] Full suite green (`cargo test`; 4 pre-existing e2e failures unchanged).
-- [ ] Commit + push change + spec.
-- [ ] Dogfood round 18: probe new knobs with real tasks (readonly audit task, per-task max_turns, out-of-scope write fast-fail).
-- [ ] Dogfood round 18 rerun: doc-consistency with the POSIX gate (fresh id r18b).
+- [x] config.rs: add `max_turns: Option<u32>` and `readonly: bool` to `Task` (both `#[serde(default)]`); validation: `max_turns == Some(0)` hard error; `readonly && accept.is_some()` hard error.
+- [x] harness.rs: `run()` gains `task_max_turns: Option<u32>`, `task_scope: &[String]`, `readonly: bool`; `effective_max_turns` resolves task > worker > env > 32.
+- [x] harness.rs: tool guard on `write`/`edit` — resolve path, reject when readonly or scope non-empty and `execute::scope_violations(&[rel], scope)` non-empty; message names path + allowed scope.
+- [x] harness.rs contract tests: out-of-scope write/edit rejected; in-scope allowed; readonly rejects all writes; task max_turns overrides worker.
+- [x] execute.rs: pass task fields into `harness::run`; readonly completion path — normal agent stop → done, no gate + no merge; work preserved by standard archive.
+- [x] router.rs: `pick()` exploitation mean = `(wins+1)/(n+2)`; `trust()` stays raw; update UCB1 doc comments.
+- [x] router tests: laplace prior changes small-N ordering; trust stays raw.
+- [x] config validation tests: readonly+accept rejected; max_turns 0 rejected.
+- [x] Docs: README task schema rows (`max_turns`, `readonly`), scope row (tool-time enforcement), trust-routing paragraph (Laplace prior; `af cost` shows raw).
+- [x] Docs: arc42 §8.2.1 (prior), §8.3.2 (fail-fast scope + readonly).
+- [x] gate.rs: shell() prefers POSIX `sh` on Windows when reachable (cmd fallback), shared by gates + builtin bash tool; windows test proves a bash-idiom gate passes.
+- [x] Full suite green (`cargo test`; 4 pre-existing e2e failures unchanged).
+- [x] Commit + push change + spec.
+- [x] Dogfood round 18: probe new knobs with real tasks (readonly audit task, per-task max_turns, out-of-scope write fast-fail).
+- [x] Dogfood round 18 rerun: doc-consistency with the POSIX gate (fresh id r18b).
