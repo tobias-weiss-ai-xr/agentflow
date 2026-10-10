@@ -380,37 +380,57 @@ fn execute_attempt(
             append(&body);
         }
         if !agent_out.passed() {
-            // Preserve the paid-for committed (and any dirty) work before
-            // the cleanup that follows this failure: a stall-watchdog kill,
-            // the total timeout, and any non-zero exit land here, and a
-            // worker that committed before it stalled must not lose its
-            // work. Best-effort — `None` leaves the message unchanged.
-            let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
-            cleanup(&repo, &wt);
-            // Same single failure path, distinct diagnosis: a stall names
-            // the configured window (it is a different disease than "ran
-            // out of total time"), every other failure keeps the
-            // historical "agent exited …" shape that callers match on.
-            let reason = if agent_out.kind == crate::subprocess::CmdKind::Stalled {
-                format!(
-                    "agent stalled: produced no output for {}s (stall window, TF_AGENT_STALL_S={}); killed before agent_timeout_s={}",
-                    ctx.st.agent_stall_s,
-                    ctx.st.agent_stall_s,
-                    ctx.st.agent_timeout_s
-                )
-            } else {
-                format!(
-                    "agent exited {:?} (code {})",
-                    agent_out.kind,
-                    agent_out
-                        .code
-                        .map(|c| c.to_string())
-                        .unwrap_or_else(|| "-".into())
-                )
-            };
-            // The spend was real (and captured) even though the attempt
-            // failed — the receipt is the cost ledger.
-            return (Outcome::Failed(format!("{reason}{kept}")), spend);
+            // A non-zero exit is NOT proof of no work: the agent may have
+            // committed its finished edits and then died on the LAST model
+            // request (transport failures — e.g. vllm "Duplicate tool call
+            // id" — crash the agent after its work is already durable).
+            // The acceptance gate is the judge, not the exit code. Only a
+            // zero-commit exit is a real failure. Committed work falls
+            // through to the normal commit_all/ahead/scope/gate/merge path
+            // below; a gate failure then keeps the branch for a gate-only
+            // retry (existing behaviour), so nothing is lost.
+            let base_branch = worktree::current_branch(&repo).ok();
+            let committed_ahead = base_branch
+                .as_deref()
+                .and_then(|b| worktree::commits_ahead(&repo, b, &wt.branch).ok())
+                .unwrap_or(0)
+                > 0;
+            if !committed_ahead {
+                // Preserve the paid-for committed (and any dirty) work before
+                // the cleanup that follows this failure: a stall-watchdog kill,
+                // the total timeout, and any non-zero exit land here, and a
+                // worker that committed before it stalled must not lose its
+                // work. Best-effort — `None` leaves the message unchanged.
+                let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
+                cleanup(&repo, &wt);
+                // Same single failure path, distinct diagnosis: a stall names
+                // the configured window (it is a different disease than "ran
+                // out of total time"), every other failure keeps the
+                // historical "agent exited …" shape that callers match on.
+                let reason = if agent_out.kind == crate::subprocess::CmdKind::Stalled {
+                    format!(
+                        "agent stalled: produced no output for {}s (stall window, TF_AGENT_STALL_S={}); killed before agent_timeout_s={}",
+                        ctx.st.agent_stall_s,
+                        ctx.st.agent_stall_s,
+                        ctx.st.agent_timeout_s
+                    )
+                } else {
+                    format!(
+                        "agent exited {:?} (code {})",
+                        agent_out.kind,
+                        agent_out
+                            .code
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "-".into())
+                    )
+                };
+                // The spend was real (and captured) even though the attempt
+                // failed — the receipt is the cost ledger.
+                return (Outcome::Failed(format!("{reason}{kept}")), spend);
+            }
+            append(&format!(
+                "-- agent exited non-zero but committed work ahead of {base_branch:?}; judging committed work --"
+            ));
         }
     }
 
