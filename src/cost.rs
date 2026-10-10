@@ -156,10 +156,18 @@ pub fn attempt_expense(
             estimated: false,
         }),
         None => match basis {
-            Some(Basis::Priced(price)) => tokens.map(|t| Expense::Usd {
-                micros: estimate_usd_micros(t, price),
-                estimated: true,
-            }),
+            Some(Basis::Priced(price)) => {
+                // An unusable declared price (NaN, zero, negative, infinite)
+                // yields no estimate — never a silent $0 — mirroring the
+                // Sized branch, which rejects unusable params via size_ratio.
+                if !is_usable(price) {
+                    return None;
+                }
+                tokens.map(|t| Expense::Usd {
+                    micros: estimate_usd_micros(t, price),
+                    estimated: true,
+                })
+            }
             Some(Basis::Sized(params)) => {
                 tokens?; // no tokens recorded → unknown, not a rate
                 Some(Expense::Ratio(size_ratio(params, all_declared)?))
@@ -371,6 +379,51 @@ mod tests {
         assert_eq!(
             attempt_expense(None, Some(Basis::Sized(f64::INFINITY)), Some(100), &all),
             None
+        );
+    }
+
+    /// Pinning test: an unusable declared PRICE (NaN, zero, negative,
+    /// infinite) with recorded tokens yields UNKNOWN, not a silent $0
+    /// estimate. `estimate_usd_micros` returns 0 for an unusable price, so
+    /// without this guard the Priced branch would fabricate a $0 estimated
+    /// cost that understates a worker's expense and misleads the router.
+    /// This mirrors the Sized branch, which already rejects unusable params.
+    #[test]
+    fn attempt_expense_unusable_price_with_tokens_is_unknown() {
+        let all = [Basis::Sized(4.0)];
+        // NaN price → unknown, not a $0 estimate.
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Priced(f64::NAN)), Some(500_000), &all),
+            None
+        );
+        // Zero price → unknown, not a $0 estimate.
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Priced(0.0)), Some(500_000), &all),
+            None
+        );
+        // Negative price → unknown, not a negative-dollar estimate.
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Priced(-1.0)), Some(500_000), &all),
+            None
+        );
+        // Infinite price → unknown.
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Priced(f64::INFINITY)), Some(500_000), &all),
+            None
+        );
+        // An unusable price with NO tokens is also unknown (and was already so
+        // because tokens.map on None yields None).
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Priced(f64::NAN)), None, &all),
+            None
+        );
+        // A usable price still estimates normally (regression guard).
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Priced(2.0)), Some(500_000), &all),
+            Some(Expense::Usd {
+                micros: 1_000_000,
+                estimated: true
+            })
         );
     }
 }
