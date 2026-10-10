@@ -1,0 +1,40 @@
+{
+  "_meta": {
+    "round": 18,
+    "theme": "dogfood the tuning change — exercise readonly tasks, per-task max_turns, and narrow-scope writes on the push, and finish the doc-consistency cross-check",
+    "design": "T1 is a readonly task (new knob: investigation only, no gate/merge, completes on normal agent stop) probing the router prior. T2 is a tiny write task with per-task max_turns: 6 (turn cap bound) plus a grep gate. T3 re-runs the doc-consistency cross-check (r17c never finished: 5 attempts, provider timeouts near the 70-min wall) as a fresh id with task-level max_turns 90 and the workers' agent_timeout_s raised to 7200. All gates are cmd-portable (grep && pipes only; gates run via cmd /C on Windows) and worktree-safe (cargo build first, no prebuilt af)."
+  },
+  "tasks": [
+    {
+      "id": "r18-readonly-probe",
+      "title": "r18-readonly-probe: read src/router.rs and answer in your final message: (1) which formula does the routing mean use (exact expression), (2) what does trust() return, and (3) does 'af cost' show the raw or smoothed rate? This task is READONLY — you must not write or edit any file; use bash to read only. Report the three answers concisely.",
+      "deps": [],
+      "manual": false,
+      "priority": 3,
+      "scope": [],
+      "readonly": true
+    },
+    {
+      "id": "r18-max-turns-probe",
+      "title": "r18-max-turns-probe: verify that src/cost.rs size_ratio guards params_b with is_usable, then append exactly one line 'r18 probe ok' to docs/audit/r18-probe.md (create the file if missing). Commit your change. This task's turn cap is 6 — be efficient: one read, one write, one commit, then run the gate.",
+      "deps": [],
+      "manual": false,
+      "priority": 2,
+      "max_turns": 6,
+      "scope": ["docs/audit/**"],
+      "touch": ["docs/audit/r18-probe.md"],
+      "accept": "grep -q 'r18 probe ok' docs/audit/r18-probe.md"
+    },
+    {
+      "id": "r18-doc-consistency",
+      "title": "r18-doc-consistency: cross-check the README 'Quick start' + 'Docker / Nix' sections and docs/arc42/07-deployment-view.md sections 7.5-7.7 against the actual flake.nix and scripts/dist/*.sh — fix any drift in: output symlink names (result-af, result-af-static, result-image), image name/tag, af CLI flags and subcommands, env var names, and command sequences. Do not add prose; only correct inconsistencies. Prior attempts (r17b, r17c) failed on bash-only gates and timeout — this gate is cmd-portable and the attempt budget is larger; read files to verify claims, commit your corrections, then run the gate.",
+      "deps": [],
+      "manual": false,
+      "priority": 4,
+      "max_turns": 90,
+      "scope": ["README.md", "docs/arc42/07-deployment-view.md"],
+      "touch": ["README.md"],
+      "accept": "cargo build 2>&1 | tail -1 && ./target/debug/af --help | grep -q validate && ./target/debug/af --help | grep -q status && ./target/debug/af --help | grep -q cost && grep -q 'result-af-static' README.md && grep -q 'agentflow:' README.md"
+    }
+  ]
+}
