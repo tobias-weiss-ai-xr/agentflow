@@ -152,6 +152,22 @@ fn main() -> ExitCode {
             .status();
     }
 
+    // Transport-crash knob: the agent COMMITS its finished work, then dies
+    // with a non-zero exit on the "last request" (the failure shape behind
+    // vllm's "Duplicate tool call id" and other provider-side crashes that
+    // don't reject the work). The orchestrator must judge the committed
+    // work through the gate instead of discarding it: the exit code is
+    // transport noise, the acceptance gate is the contract.
+    if let Some(code) = std::env::var("FAKE_AGENT_EXIT_AFTER_COMMIT")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+    {
+        if code != 0 {
+            eprintln!("example_agent: transport crash after commit: exit {code}");
+            return ExitCode::from(code.clamp(0, 255) as u8);
+        }
+    }
+
     ExitCode::SUCCESS
 }
 

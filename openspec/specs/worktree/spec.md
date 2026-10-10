@@ -96,21 +96,24 @@ that cannot be resolved)
 THEN the attempt still fails with its original message unchanged and no empty
 suffix, exactly as if archiving had not been attempted.
 
-#### Scenario: a stalled agent archives the committed work
+#### Scenario: a stalled agent's committed work is judged by the gate
 
 WHEN the agent commits work and then stops producing output until the stall
 watchdog kills the attempt
-THEN the committed branch is archived as `<branch>-rejected-<attempt>-<now>` before
-cleanup, the receipt names that branch, the archived tip contains the agent's
-work, the task does NOT reach `done`, and the original branch is removed.
+THEN the committed work is NOT discarded: if the acceptance gate passes it is
+merged and the task reaches `done` (the non-zero exit is transport noise, the
+gate is the verdict); if the gate fails, the attempt branch is kept with its
+committed work for a gate-only retry, the task fails, and the work is
+recoverable.
 
-#### Scenario: a timed out agent archives the committed work
+#### Scenario: a timed out agent's committed work is judged by the gate
 
 WHEN the agent commits work and then runs past the total agent timeout with
 the stall watchdog disabled
-THEN the committed branch is archived as `<branch>-rejected-<attempt>-<now>` before
-cleanup, the receipt names that branch, the archived tip contains the agent's
-work, and the task does NOT reach `done`.
+THEN the committed work is NOT discarded: if the acceptance gate passes it is
+merged and the task reaches `done`; if the gate fails, the attempt branch is
+kept with its committed work for a gate-only retry, the task fails, and the
+work is recoverable.
 
 #### Scenario: a second gate failure archives the reused work
 
