@@ -12,9 +12,11 @@
       packages = forAll (system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          cargoToml = pkgs.lib.importTOML ./Cargo.toml;
+          version = cargoToml.package.version;
           buildAf = pkgs: pkgs.rustPlatform.buildRustPackage {
             pname = "agentflow";
-            version = "0.1.0";
+            version = version;
             src = self;
             cargoLock.lockFile = ./Cargo.lock;
             # CI owns the 340-test suite; nix builds stay fast and green.
@@ -29,7 +31,7 @@
           # need (cargo gates, git worktrees, bash gates, TLS for the API).
           image = pkgs.dockerTools.buildImage {
             name = "agentflow";
-            tag = "0.1.0";
+            tag = version;
             copyToRoot = pkgs.buildEnv {
               name = "af-image-root";
               paths = [ af pkgs.git pkgs.bash pkgs.cargo pkgs.rustc pkgs.stdenv.cc pkgs.cacert
