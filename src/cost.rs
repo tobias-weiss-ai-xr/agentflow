@@ -104,6 +104,10 @@ pub fn size_ratio(params_b: f64, all_declared: &[Basis]) -> Option<f64> {
     if !is_usable(cheapest) {
         return None;
     }
+    // Also validate params_b: if it's not usable, the ratio would be invalid.
+    if !is_usable(params_b) {
+        return None;
+    }
     Some(params_b / cheapest)
 }
 
@@ -327,5 +331,46 @@ mod tests {
         // Mix of unusable values.
         let all_mixed = [Basis::Sized(0.0), Basis::Sized(f64::NAN), Basis::Sized(-1.0)];
         assert_eq!(size_ratio(400.0, &all_mixed), None);
+    }
+
+    /// Pinning test: size_ratio must return None when params_b is unusable.
+    /// BUG FIX: Previously, if params_b was NaN/infinite/zero/negative, the
+    /// function would return an invalid ratio instead of None.
+    #[test]
+    fn size_ratio_returns_none_when_params_b_is_unusable() {
+        let all = [Basis::Sized(4.0)];
+        // NaN params_b returns None.
+        assert_eq!(size_ratio(f64::NAN, &all), None);
+        // Infinite params_b returns None.
+        assert_eq!(size_ratio(f64::INFINITY, &all), None);
+        assert_eq!(size_ratio(f64::NEG_INFINITY, &all), None);
+        // Zero params_b returns None.
+        assert_eq!(size_ratio(0.0, &all), None);
+        // Negative params_b returns None.
+        assert_eq!(size_ratio(-1.0, &all), None);
+        // Valid params_b works normally.
+        assert_eq!(size_ratio(8.0, &all), Some(2.0));
+    }
+
+    /// Pinning test: attempt_expense propagates size_ratio validation.
+    /// When a Sized basis has invalid params, attempt_expense returns None.
+    #[test]
+    fn attempt_expense_propagates_invalid_params() {
+        let all = [Basis::Sized(4.0)];
+        // NaN params in Sized basis → None.
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Sized(f64::NAN)), Some(100), &all),
+            None
+        );
+        // Zero params in Sized basis → None.
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Sized(0.0)), Some(100), &all),
+            None
+        );
+        // Infinite params in Sized basis → None.
+        assert_eq!(
+            attempt_expense(None, Some(Basis::Sized(f64::INFINITY)), Some(100), &all),
+            None
+        );
     }
 }
