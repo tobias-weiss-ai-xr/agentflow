@@ -91,9 +91,9 @@ export ZAI_API_KEY=...            # whatever api_key_env names
 gcc, bash, coreutils — enough for cargo-gated tasks end to end):
 
 ```sh
-nix build .#default   # plain binary        → result-af/bin/af
-nix build .#static    # fully static musl    → result-af-static/bin/af (any Linux, no glibc requirement)
-nix build .#image     # docker image         → result-image
+nix build .#default -o result-af          # plain binary        → result-af/bin/af
+nix build .#static -o result-af-static    # fully static musl    → result-af-static/bin/af (any Linux, no glibc requirement)
+nix build .#image -o result-image         # docker image         → result-image
 
 docker load < result-image
 docker run --rm -v "$TF_REPO_DIR":/repo -v "$PWD/config":/config \

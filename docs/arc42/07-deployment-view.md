@@ -72,9 +72,9 @@ across machines. Declared for `x86_64-linux` and `aarch64-linux`.
 
 | Output | Command | Result | What it is |
 |--------|---------|--------|------------|
-| `.#default` | `nix build .#default` | `result-af/bin/af` | glibc binary; prebuilt nixpkgs toolchain |
-| `.#static` | `nix build .#static` | `result-af-static/bin/af` | **static-pie musl ELF** — no interpreter, no glibc floor; runs on any Linux |
-| `.#image` | `nix build .#image` | `result-image` → `docker load` | campaign-runner image `agentflow:<ver>` (§7.7) |
+| `.#default` | `nix build .#default -o result-af` | `result-af/bin/af` | glibc binary; prebuilt nixpkgs toolchain |
+| `.#static` | `nix build .#static -o result-af-static` | `result-af-static/bin/af` | **static-pie musl ELF** — no interpreter, no glibc floor; runs on any Linux |
+| `.#image` | `nix build .#image -o result-image` | `result-image` → `docker load` | campaign-runner image `agentflow:<ver>` (§7.7) |
 
 Driver script `scripts/dist/nix-build.sh <default\|static\|image>` wraps the
 nix invocation (PATH + experimental features) for environments where nix is
