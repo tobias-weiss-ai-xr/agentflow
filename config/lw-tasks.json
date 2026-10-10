@@ -136,13 +136,16 @@
       "scope": [
         "Assets/LearningWorlds/Scripts/LearningWorldsApp.cs",
         "Assets/LearningWorlds/Scripts/Hub/Portal.cs",
-        "Assets/LearningWorlds/Editor/LearningWorldsMenus.cs"
+        "Assets/LearningWorlds/Editor/LearningWorldsMenus.cs",
+        "Assets/LearningWorlds/Scripts/Tutors/SocraticTutorManager.cs"
       ],
       "touch": [
-        "Assets/LearningWorlds/Editor/LearningWorldsMenus.cs"
+        "Assets/LearningWorlds/Editor/LearningWorldsMenus.cs",
+        "Assets/LearningWorlds/Scripts/Hub/Portal.cs",
+        "Assets/LearningWorlds/Scripts/LearningWorldsApp.cs"
       ],
-      "accept": "test -f Assets/LearningWorlds/Editor/LearningWorldsMenus.cs && grep -q MenuItem Assets/LearningWorlds/Editor/LearningWorldsMenus.cs && grep -q EnsureRig Assets/LearningWorlds/Scripts/LearningWorldsApp.cs && grep -q Go Assets/LearningWorlds/Scripts/Hub/Portal.cs",
-      "acceptance_prose": "Conventions: see lw-0-scaffold. TASK: LearningWorldsApp.cs - Boot only when scene name starts with LearningWorlds-; EnsureRig() creates DontDestroyOnLoad LW-Rig camera WASD+RMB fly editor; Go(World w, int ele=-1) unload old LearningWorlds scene via SceneManager.UnloadSceneAsync await then create new scene LearningWorlds-World scene set active call Builders[w](); persistent rig survives; LabSceneName: scan Assets/Scenes/*.unity find one with Menu/Aoi name fallback '00_Menu' static field; OpenLab() calls SceneManager.LoadScene(LabSceneName). Portal.cs: OnTriggerEnter use cooldown calls LearningWorldsApp.Go(targetWorld). Editor/LearningWorldsMenus.cs namespace LearningWorlds.Editor [MenuItem LearningWorlds/Open Hub Scene] static void OpenHub() { if Application.isPlaying return; EditorSceneManager.NewScene(DefaultGameObjects Single) then open Assets/Scenes/LearningWorlds-Hub.unity } [MenuItem LearningWorlds/Register Build Scenes] static void Register() { add LearningWorlds-Hub scene to EditorBuildSettings.scenes }."
+      "accept": "test -f Assets/LearningWorlds/Editor/LearningWorldsMenus.cs && grep -q MenuItem Assets/LearningWorlds/Editor/LearningWorldsMenus.cs && grep -q EnsureRig Assets/LearningWorlds/Scripts/LearningWorldsApp.cs && grep -q Go Assets/LearningWorlds/Scripts/Hub/Portal.cs && grep -q ActivateTutorForWorld Assets/LearningWorlds/Scripts/LearningWorldsApp.cs && grep -q SendContextMessage Assets/LearningWorlds/Scripts/Tutors/SocraticTutorManager.cs",
+      "acceptance_prose": "Conventions: see lw-0-scaffold. NO NEW FILES. ONLY EDIT EXISTING FILES in scope. TASK: LearningWorldsApp.cs - Boot only when scene name starts with LearningWorlds-; EnsureRig() creates DontDestroyOnLoad LW-Rig camera WASD+RMB fly editor+RMB rotate; Go(World w, int ele=-1): unload old LearningWorlds scene via SceneManager.UnloadSceneAsync await then create new scene named LearningWorlds-World set active then call LearningWorldsApp.Builders[w](ele) if Builders dict exists; persistent rig survives scenes; LabSceneName: scan Assets/Scenes/*.unity find one with Menu/Aoi name fallback '00_Menu' static readonly field; OpenLab() calls SceneManager.LoadScene(LabSceneName). In Go() after scene load call SocraticTutorManager.Instance.ActivateTutorForWorld(w). Portal.cs: OnTriggerEnter cooldown 2s calls LearningWorldsApp.Go(targetWorld) ShowTooltip via SocraticTutorManager GetTutorNameForWorld. Editor/LearningWorldsMenus.cs: namespace LearningWorlds.Editor [MenuItem LearningWorlds/Open Hub Scene] static void OpenHub() { if Application.isPlaying return; EditorSceneManager.NewScene(DefaultGameObjects.Single) open Assets/Scenes/LearningWorlds-Hub.unity } [MenuItem LearningWorlds/Register Build Scenes] static void Register() add Assets/Scenes/LearningWorlds-Hub.unity to EditorBuildSettings.scenes if not present."
     },
     {
       "id": "lw-1-tutors",
