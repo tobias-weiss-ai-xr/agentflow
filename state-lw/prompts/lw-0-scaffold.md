@@ -23,6 +23,7 @@ Conventions: Unity 6000.3.25f1 URP. Code-only NO .unity/.prefab/.asset. Build at
 Assets/LearningWorlds/Scripts/LearningWorldsApp.cs
 Assets/LearningWorlds/Scripts/Pse/ElementData.cs
 ci/unity-compile.sh
+Assets/LearningWorlds/Data/elements.json
 ```
 
 Editing files outside this scope risks merge conflicts with parallel tasks
@@ -99,8 +100,3 @@ If the task is too large, do it in this order and commit progressively:
    - Any follow-up needed
 
 Do not push; the orchestrator merges and pushes.
-
-
-## Previous attempts on this task (avoid repeating these failures)
-- attempt 1: attempt edited files out of scope: Assets/LearningWorlds/Data/elements.json (allowed: Assets/LearningWorlds/Scripts/LearningWorldsApp.cs, Assets/LearningWorlds/Scripts/Pse/ElementData.cs, ci/unity-com
-- attempt 2: attempt edited files out of scope: Assets/LearningWorlds/Data/elements.json (allowed: Assets/LearningWorlds/Scripts/LearningWorldsApp.cs, Assets/LearningWorlds/Scripts/Pse/ElementData.cs, ci/unity-com

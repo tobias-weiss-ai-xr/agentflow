@@ -11,7 +11,7 @@
       "provider": "tud",
       "model": "Ministral-3-14B-Instruct-2512",
       "cli": "C:\\Users\\Tobias\\AppData\\Local\\pi-node\\current\\pi.cmd",
-      "args": ["--approve"],
+      "args": ["--approve", "--no-extensions", "--mode", "text"],
       "enabled": true
     }
   ]

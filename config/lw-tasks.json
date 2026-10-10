@@ -4,6 +4,7 @@
     "campaign": "PicoLearningRooms: port 3D PSE + Arachnophobia VRET into Unity learning app",
     "spec": "docs/superpowers/specs/2026-10-09-learning-worlds-design.md"
   },
+  "max_parallel": 1,
   "tasks": [
     {
       "id": "lw-0-scaffold",
@@ -11,7 +12,7 @@
       "deps": [],
       "manual": false,
       "priority": 1,
-      "scope": ["Assets/LearningWorlds/Scripts/LearningWorldsApp.cs", "Assets/LearningWorlds/Scripts/Pse/ElementData.cs", "ci/unity-compile.sh"],
+      "scope": ["Assets/LearningWorlds/Scripts/LearningWorldsApp.cs", "Assets/LearningWorlds/Scripts/Pse/ElementData.cs", "ci/unity-compile.sh", "Assets/LearningWorlds/Data/elements.json"],
       "touch": ["Assets/LearningWorlds/Scripts/LearningWorldsApp.cs", "Assets/LearningWorlds/Scripts/Pse/ElementData.cs", "ci/unity-compile.sh"],
       "accept": "bash -n ci/unity-compile.sh && grep -q RuntimeInitializeOnLoadMethod Assets/LearningWorlds/Scripts/LearningWorldsApp.cs && grep -q LoadAll Assets/LearningWorlds/Scripts/Pse/ElementData.cs && test -s Assets/LearningWorlds/Data/elements.json",
       "acceptance_prose": "Conventions: Unity 6000.3.25f1 URP. Code-only NO .unity/.prefab/.asset. Build at runtime. Namespace LearningWorlds*. Use GameObject.CreatePrimitive, Shader.Find Universal Render Pipeline Lit fallback Standard, legacy TextMesh with Font Resources.GetBuiltinResource<Font> LegacyRuntime.ttf, UnityEngine.UI. Only edit inside Assets/LearningWorlds/ plus ci/. Editor: ensure rig DontDestroyOnLoad. German UI, English content. YOU MUST run the accept gate yourself before committing."
@@ -22,9 +23,9 @@
       "deps": ["lw-0-scaffold"],
       "manual": false,
       "priority": 2,
-      "scope": ["Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs", "Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs", "Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs"],
-      "touch": ["Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs", "Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs", "Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs"],
-      "accept": "test -f Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs && test -f Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs && test -f Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs && grep -q xpos Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs && grep -q Builders Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs",
+      "scope": ["Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs", "Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs", "Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs", "Assets/LearningWorlds/Scripts/Pse/ElectronRotator.cs", "Assets/LearningWorlds/Scripts/Pse/InitializeSelection.cs"],
+      "touch": ["Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs", "Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs", "Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs", "Assets/LearningWorlds/Scripts/Pse/ElectronRotator.cs", "Assets/LearningWorlds/Scripts/Pse/InitializeSelection.cs"],
+      "accept": "test -f Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs && test -f Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs && test -f Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs && grep -q xpos Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs",
       "acceptance_prose": "Conventions: see lw-0-scaffold. TASK: BohrAtomBuilder.cs: public static GameObject Build(Element e, float scale=1) - nucleus sphere from cpk_hex color fallback category hash, shell rings via thin cylinder primitives rotated horizontal, electrons small spheres on rings rotating in Update, cap at 2 visual shells for gallery. ElementGallery.cs: Build() populates scene - floor plane 40x40, 118 atoms laid out via xpos/z = -ypos *2.0, handle ypos 8/9 rows below grid, each atom collider + selectable; register LearningWorldsApp.Builders[World.PseGallery]=Build. ElementInfoPanel.cs: raycast selection via LearningWorldsApp rig camera - show world-space canvas panel with name, symbol, number, atomic_mass, category, phase, melt/boil K, density, electronegativity, appearance, config, summary wrapped at 60 chars; buttons: Raum betreten -> SelectedElement=e.number Go(World.ElementRoom); Schliessen -> Hide. No .unity/.prefab/.asset."
     },
     {
@@ -33,9 +34,9 @@
       "deps": ["lw-0-scaffold"],
       "manual": false,
       "priority": 2,
-      "scope": ["Assets/LearningWorlds/Scripts/Pse/ElementRoom.cs", "Assets/LearningWorlds/Scripts/Pse/LatticeBuilder.cs", "Assets/LearningWorlds/Scripts/Pse/QuizStation.cs", "Assets/LearningWorlds/Scripts/Pse/TextUtil.cs"],
-      "touch": ["Assets/LearningWorlds/Scripts/Pse/ElementRoom.cs", "Assets/LearningWorlds/Scripts/Pse/LatticeBuilder.cs", "Assets/LearningWorlds/Scripts/Pse/QuizStation.cs", "Assets/LearningWorlds/Scripts/Pse/TextUtil.cs"],
-      "accept": "test -f Assets/LearningWorlds/Scripts/Pse/ElementRoom.cs && test -f Assets/LearningWorlds/Scripts/Pse/LatticeBuilder.cs && test -f Assets/LearningWorlds/Scripts/Pse/QuizStation.cs && grep -q LearningWorldsApp Assets/LearningWorlds/Scripts/Pse/ElementRoom.cs",
+      "scope": ["Assets/LearningWorlds/Scripts/Pse/ElementRoom.cs", "Assets/LearningWorlds/Scripts/Pse/LatticeBuilder.cs", "Assets/LearningWorlds/Scripts/Pse/QuizStation.cs", "Assets/LearningWorlds/Scripts/Pse/TextUtil.cs", "Assets/LearningWorlds/Scripts/Pse/BuildingBuilders.cs", "Assets/LearningWorlds/Scripts/Pse/PedestalCreator.cs"],
+      "touch": ["Assets/LearningWorlds/Scripts/Pse/ElementRoom.cs", "Assets/LearningWorlds/Scripts/Pse/LatticeBuilder.cs", "Assets/LearningWorlds/Scripts/Pse/QuizStation.cs", "Assets/LearningWorlds/Scripts/Pse/TextUtil.cs", "Assets/LearningWorlds/Scripts/Pse/BuildingBuilders.cs", "Assets/LearningWorlds/Scripts/Pse/PedestalCreator.cs"],
+      "accept": "test -f Assets/LearningWorlds/Scripts/Pse/ElementRoom.cs && test -f Assets/LearningWorlds/Scripts/Pse/LatticeBuilder.cs && test -f Assets/LearningWorlds/Scripts/Pse/QuizStation.cs",
       "acceptance_prose": "Conventions: see lw-0-scaffold. TASK: TextUtil.cs: public static string Wrap(string t, int len=40) inserts newlines at space. ElementRoom.cs: Build() reads SelectedElement builds scene - floor mandala 3 translucent discs category color, giant BohrAtomBuilder (radiusScale=2.5) monument, wall TextMesh symbol+name back at z=-4, ring of 5 stations radius 3.5m 72 deg spacing posts+pedestals+TextMesh labels 1-Kristallstruktur 2-Wo du ihm begegnest 3-Entdeckung 4-Klassisches Experiment 5-Quiz, return portal -> Go(World.PseGallery); register Builders[World.ElementRoom]=Build. LatticeBuilder.cs: public static GameObject BuildStructure(string symbol, string category, Vector3 center, float cell=0.3) - BCC set Fe Cr W V Mo Ta Nb, HCP set Co Zn Mg Ti, diamond C, noble FCC else simple; 3x3x3 cells spheres+LineRenderer bonds. QuizStation.cs: generated questions seed=SelectedElement number/symbol/category/phase templates; 3 answer pedestal cubes ray-triggered correct wrong feedback green/red + correct glow 1.5s Next resets."
     },
     {

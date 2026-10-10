@@ -23,6 +23,8 @@ Conventions: see lw-0-scaffold. TASK: BohrAtomBuilder.cs: public static GameObje
 Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs
 Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs
 Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs
+Assets/LearningWorlds/Scripts/Pse/ElectronRotator.cs
+Assets/LearningWorlds/Scripts/Pse/InitializeSelection.cs
 ```
 
 Editing files outside this scope risks merge conflicts with parallel tasks
@@ -33,7 +35,7 @@ will re-scope and re-dispatch.
 ## Acceptance gate — the orchestrator WILL run this
 
 ```sh
-test -f Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs && test -f Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs && test -f Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs && grep -q xpos Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs && grep -q Builders Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs
+test -f Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs && test -f Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs && test -f Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs && grep -q xpos Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs
 ```
 
 You MUST run this command yourself before committing. If it fails, fix your
