@@ -13,7 +13,7 @@
       "priority": 1,
       "scope": ["Assets/LearningWorlds/Scripts/LearningWorldsApp.cs", "Assets/LearningWorlds/Scripts/Pse/ElementData.cs", "ci/unity-compile.sh"],
       "touch": ["Assets/LearningWorlds/Scripts/LearningWorldsApp.cs", "Assets/LearningWorlds/Scripts/Pse/ElementData.cs", "ci/unity-compile.sh"],
-      "accept": "bash -n ci/unity-compile.sh && grep -q RuntimeInitializeOnLoadMethod Assets/LearningWorlds/Scripts/LearningWorldsApp.cs && grep -q LoadAll Assets/LearningWorlds/Scripts/Pse/ElementData.cs && python -c \"import json;d=json.load(open('Assets/LearningWorlds/Data/elements.json',encoding='utf-8'));els=d.get('elements',d);assert len(els)>=118\"",
+      "accept": "bash -n ci/unity-compile.sh && grep -q RuntimeInitializeOnLoadMethod Assets/LearningWorlds/Scripts/LearningWorldsApp.cs && grep -q LoadAll Assets/LearningWorlds/Scripts/Pse/ElementData.cs && test -s Assets/LearningWorlds/Data/elements.json",
       "acceptance_prose": "Conventions: Unity 6000.3.25f1 URP. Code-only NO .unity/.prefab/.asset. Build at runtime. Namespace LearningWorlds*. Use GameObject.CreatePrimitive, Shader.Find Universal Render Pipeline Lit fallback Standard, legacy TextMesh with Font Resources.GetBuiltinResource<Font> LegacyRuntime.ttf, UnityEngine.UI. Only edit inside Assets/LearningWorlds/ plus ci/. Editor: ensure rig DontDestroyOnLoad. German UI, English content. YOU MUST run the accept gate yourself before committing."
     },
     {

@@ -1,10 +1,18 @@
 {
   "lw-0-scaffold": {
-    "state": "ready",
+    "state": "done",
+    "attempts": 3,
+    "last_error": null,
+    "phase": "gate_passed",
+    "attempt_started_ts": 1791616618,
+    "attempt_worker": "tud"
+  },
+  "lw-1-gallery": {
+    "state": "running",
     "attempts": 0,
     "last_error": null,
     "phase": "spawned",
-    "attempt_started_ts": null,
-    "attempt_worker": null
+    "attempt_started_ts": 1791616742,
+    "attempt_worker": "tud"
   }
 }

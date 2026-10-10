@@ -1,0 +1,12 @@
+{
+  "task": "lw-0-scaffold",
+  "attempt": 3,
+  "worker": "tud",
+  "model": "Ministral-3-14B-Instruct-2512",
+  "wall_clock_s": 111.8116327,
+  "tokens": null,
+  "ts": 1791616730,
+  "outcome": "merged",
+  "error": null,
+  "cost_micros": null
+}

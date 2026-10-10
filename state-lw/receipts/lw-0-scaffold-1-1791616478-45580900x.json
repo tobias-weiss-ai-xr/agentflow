@@ -1,0 +1,12 @@
+{
+  "task": "lw-0-scaffold",
+  "attempt": 1,
+  "worker": "tud",
+  "model": "Ministral-3-14B-Instruct-2512",
+  "wall_clock_s": 55.1583696,
+  "tokens": null,
+  "ts": 1791616478,
+  "outcome": "failed",
+  "error": "attempt edited files out of scope: Assets/LearningWorlds/Data/elements.json (allowed: Assets/LearningWorlds/Scripts/LearningWorldsApp.cs, Assets/LearningWorlds/Scripts/Pse/ElementData.cs, ci/unity-com",
+  "cost_micros": null
+}

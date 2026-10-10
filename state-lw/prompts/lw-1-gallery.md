@@ -1,4 +1,4 @@
-# Worker Task: lw-0-scaffold — Scaffold: LearningWorldsApp, ElementData parser, Unity compile gate script
+# Worker Task: lw-1-gallery — PSE Gallery: Bohr atom builder, grid of 118 elements, detail info panel via ray selection
 
 You are an autonomous worker agent in the agentflow pipeline.
 You have been assigned **exactly one task**. Do it well, verify it, commit it.
@@ -12,17 +12,17 @@ You have been assigned **exactly one task**. Do it well, verify it, commit it.
 
 ## Your task
 
-**ID:** `lw-0-scaffold`
-**Title:** Scaffold: LearningWorldsApp, ElementData parser, Unity compile gate script
+**ID:** `lw-1-gallery`
+**Title:** PSE Gallery: Bohr atom builder, grid of 118 elements, detail info panel via ray selection
 
-Conventions: Unity 6000.3.25f1 URP. Code-only NO .unity/.prefab/.asset. Build at runtime. Namespace LearningWorlds*. Use GameObject.CreatePrimitive, Shader.Find Universal Render Pipeline Lit fallback Standard, legacy TextMesh with Font Resources.GetBuiltinResource<Font> LegacyRuntime.ttf, UnityEngine.UI. Only edit inside Assets/LearningWorlds/ plus ci/. Editor: ensure rig DontDestroyOnLoad. German UI, English content. YOU MUST run the accept gate yourself before committing.
+Conventions: see lw-0-scaffold. TASK: BohrAtomBuilder.cs: public static GameObject Build(Element e, float scale=1) - nucleus sphere from cpk_hex color fallback category hash, shell rings via thin cylinder primitives rotated horizontal, electrons small spheres on rings rotating in Update, cap at 2 visual shells for gallery. ElementGallery.cs: Build() populates scene - floor plane 40x40, 118 atoms laid out via xpos/z = -ypos *2.0, handle ypos 8/9 rows below grid, each atom collider + selectable; register LearningWorldsApp.Builders[World.PseGallery]=Build. ElementInfoPanel.cs: raycast selection via LearningWorldsApp rig camera - show world-space canvas panel with name, symbol, number, atomic_mass, category, phase, melt/boil K, density, electronegativity, appearance, config, summary wrapped at 60 chars; buttons: Raum betreten -> SelectedElement=e.number Go(World.ElementRoom); Schliessen -> Hide. No .unity/.prefab/.asset.
 
 ## File scope — edit ONLY these paths
 
 ```
-Assets/LearningWorlds/Scripts/LearningWorldsApp.cs
-Assets/LearningWorlds/Scripts/Pse/ElementData.cs
-ci/unity-compile.sh
+Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs
+Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs
+Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs
 ```
 
 Editing files outside this scope risks merge conflicts with parallel tasks
@@ -33,7 +33,7 @@ will re-scope and re-dispatch.
 ## Acceptance gate — the orchestrator WILL run this
 
 ```sh
-bash -n ci/unity-compile.sh && grep -q RuntimeInitializeOnLoadMethod Assets/LearningWorlds/Scripts/LearningWorldsApp.cs && grep -q LoadAll Assets/LearningWorlds/Scripts/Pse/ElementData.cs && test -s Assets/LearningWorlds/Data/elements.json
+test -f Assets/LearningWorlds/Scripts/Pse/BohrAtomBuilder.cs && test -f Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs && test -f Assets/LearningWorlds/Scripts/Pse/ElementInfoPanel.cs && grep -q xpos Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs && grep -q Builders Assets/LearningWorlds/Scripts/Pse/ElementGallery.cs
 ```
 
 You MUST run this command yourself before committing. If it fails, fix your
@@ -91,7 +91,7 @@ If the task is too large, do it in this order and commit progressively:
 
 1. Run the acceptance gate. It must be green.
 2. `git add -A` the files in your scope (and ONLY those).
-3. Commit with message: `feat(lw-0-scaffold): Scaffold: LearningWorldsApp, ElementData parser, Unity compile gate script`
+3. Commit with message: `feat(lw-1-gallery): PSE Gallery: Bohr atom builder, grid of 118 elements, detail info panel via ray selection`
 4. Reply with a concise summary:
    - What you implemented (1–4 bullets)
    - Test count added/passed
@@ -99,8 +99,3 @@ If the task is too large, do it in this order and commit progressively:
    - Any follow-up needed
 
 Do not push; the orchestrator merges and pushes.
-
-
-## Previous attempts on this task (avoid repeating these failures)
-- attempt 1: attempt edited files out of scope: Assets/LearningWorlds/Data/elements.json (allowed: Assets/LearningWorlds/Scripts/LearningWorldsApp.cs, Assets/LearningWorlds/Scripts/Pse/ElementData.cs, ci/unity-com
-- attempt 2: attempt edited files out of scope: Assets/LearningWorlds/Data/elements.json (allowed: Assets/LearningWorlds/Scripts/LearningWorldsApp.cs, Assets/LearningWorlds/Scripts/Pse/ElementData.cs, ci/unity-com

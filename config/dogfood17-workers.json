@@ -19,7 +19,7 @@
       "enabled": true,
       "cli": "builtin",
       "price_per_mtok_usd": 0.324,
-      "max_turns": 48
+      "max_turns": 128
     },
     {
       "name": "saia-qwen397b",
@@ -31,7 +31,7 @@
       "cli": "builtin",
       "params_b": 397,
       "price_per_mtok_usd": 1.287,
-      "max_turns": 48
+      "max_turns": 128
     },
     {
       "name": "tud-glm52",
@@ -43,7 +43,7 @@
       "cli": "builtin",
       "params_b": 355,
       "price_per_mtok_usd": 1.095,
-      "max_turns": 48
+      "max_turns": 128
     }
   ]
 }
