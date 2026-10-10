@@ -39,7 +39,7 @@ Worker selection uses **UCB1** (Upper Confidence Bound 1):
 
 ```
 score = mean_reward + exploration_term
-  where mean_reward = wins / total
+  where mean_reward = (wins + 1) / (total + 2)   # Laplace-smoothed
         exploration_term = √(2 * ln(N_total + 1) / (n_worker + 1))
 ```
 
@@ -47,6 +47,12 @@ score = mean_reward + exploration_term
 worker gets an attempt eventually; a strictly higher mean always displaces the
 incumbent unconditionally (measured reliability outranks every assumed
 heuristic).
+
+The trust mean is **Laplace-smoothed** `(wins+1)/(total+2)` rather than the raw
+`wins/total`: a single attempt is 0-or-1 noise, so a lone failure scores 1/3
+(not 0) and a lone win 2/3 (not 1), converging to the empirical rate as
+receipts accumulate. `af cost`'s TRUST column deliberately shows the RAW rate
+— measured data stays measured; the smoothed mean is the routing term only.
 
 ### 8.2.2 Tie-breaking rules
 
@@ -94,6 +100,15 @@ the task's `scope` globs. Non-empty violations → `Failed` with the file list.
 An agent that edits but never commits is now **caught**: T1 of round 13
 commitsthe dirty worktree BEFORE judging, so scope check, gate, and merge all
 judge exactly the same committed tree.
+
+**Fail-fast (round 18)**: the builtin harness additionally rejects a `write`/
+`edit` whose target lies outside `scope` at TOOL-CALL time — the model sees
+the error as the tool result and can correct course, so a scope violation
+often costs seconds instead of a full attempt. The end-of-attempt check
+remains as the backstop for `bash`-tool writes and CLI workers (a `bash`
+command can always write anywhere). Readonly tasks (`readonly: true`) reject
+every `write`/`edit` and complete on a normal agent stop without gate or
+merge.
 
 ### 8.3.3 The `touch` contract (ADR-12)
 

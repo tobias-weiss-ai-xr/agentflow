@@ -277,13 +277,15 @@ to block the command: the readable history is still accounted for.
 | `id` | Unique task id (branch names, status keys) |
 | `title` | Human-readable description (injected into the prompt) |
 | `deps` | Task ids that must reach `done` first |
-| `scope` | File globs the task may modify (contention + advisory) |
+| `scope` | File globs the task may modify — contention + enforced for builtin workers (a `write`/`edit` outside scope fails at tool-call time; end-of-attempt enforcement remains for `bash`-tool writes and CLI workers) |
 | `touch` | Optional declaration of the files you believe the task MUST edit; `af validate` rejects the config when one is covered by no `scope` entry (that task cannot pass) |
 | `accept` | Shell command run in the task's worktree; exit 0 = pass |
 | `acceptance_prose` | Natural-language success criteria (injected into the prompt) |
 | `manual` | Skip the acceptance gate (manual sign-off) |
 | `priority` | Tie-breaker when multiple tasks are ready |
 | `gate_replay` | Whether the gate is replay-safe (default `true`); `false` = side effects |
+| `max_turns` | Per-task turn cap for builtin workers (overrides the worker's `max_turns`, then `TF_AGENT_MAX_TURNS`, then 32) |
+| `readonly` | `true` = investigation-only: the builtin harness rejects `write`/`edit`, the attempt counts done on a normal agent stop (no gate, no merge) |
 
 Replay contract: the `accept` command MUST be idempotent; declare
 `gate_replay: false` for a gate with side effects — an interrupted such gate
@@ -452,7 +454,11 @@ score(worker) =  mean(worker)  +  sqrt( 2 * ln(N + 1) / (n + 1) )
                 └─ exploitation ┘   └─ exploration bonus ┘
 ```
 
-- `mean` = `wins ÷ attempts` — the worker's measured trust rate.
+- `mean` = `(wins + 1) ÷ (attempts + 2)` — a **Laplace-smoothed** trust rate,
+  so a single attempt can't score a flat `0` or `1`: 0/1 scores ~0.33, 1/1
+  scores ~0.67, converging to the empirical rate as attempts accumulate.
+  (`af cost`'s TRUST column shows the raw `wins ÷ attempts` rate, so measured
+data stays measured; the smoothed version is the routing term only.)
 - `N` = total attempts across all workers; `n` = this worker's attempts.
 
 A tie between equally scoring workers is broken in a fixed order: the cheaper
@@ -465,13 +471,14 @@ only a tie-break: wall-clock is confounded by task difficulty (the hard tasks
 go to the trusted worker), so making it part of the score would penalise a
 worker for being given the hard work and starve it.
 
-With no receipts yet, every worker scores `0` (a tie), broken in **config
-order** — the first configured worker (`opus`) takes the first ripe task and
-`gpt4o` takes the second, so both run concurrently. As receipts accumulate, a
-worker that keeps failing lowers its `mean`, while the exploration term gives
-an under-tried (or untried) worker the chance to be routed past it. `af cost`
-shows each worker's live trust rate — and the `MEAN_S` the tie-break reads —
-so you can watch routing adapt between campaigns.
+With no receipts yet, every worker scores the prior mean `0.5` (a tie),
+broken in **config order** — the first configured worker (`opus`) takes the
+first ripe task and `gpt4o` takes the second, so both run concurrently. As
+receipts accumulate, a worker that keeps failing lowers its `mean`, while the
+exploration term gives an under-tried (or untried) worker the chance to be
+routed past it. `af cost` shows each worker's live trust rate — and the
+`MEAN_S` the tie-break reads — so you can watch routing adapt between
+campaigns.
 
 ## Testing
 
