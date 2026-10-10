@@ -55,3 +55,28 @@ merged to the base.
 GIVEN a readonly builtin attempt
 WHEN it calls `write`
 THEN the tool result is an error stating the task is read-only.
+
+### Requirement: Gate and agent-tool shell selection
+
+Acceptance gates and the builtin harness's `bash` tool SHALL run via
+`/bin/sh -c` on unix. On Windows, `af` SHALL prefer a POSIX `sh` on PATH
+(git-bash) — probed once per process and cached — and SHALL fall back to
+`cmd /C` only when no `sh` is reachable, so that POSIX-authored gates and
+agent commands keep working on Windows hosts that ship git-bash. The
+selection SHALL be a single shared decision: the agent's `bash` tool and
+the acceptance gate runner MUST use the same shell function, so a dialect
+that works for one works for the other.
+
+#### Scenario: bash-idiom gate passes on Windows with git-bash
+
+GIVEN a Windows host with git-bash `sh` on PATH
+WHEN a gate uses POSIX idioms (`[ ]`, backticks, single-quoted pipes,
+`./prog`)
+THEN the gate passes under `sh` (where it previously failed as
+"'.' is not recognized").
+
+#### Scenario: no POSIX sh falls back to cmd
+
+GIVEN a Windows host without `sh` on PATH
+WHEN a gate runs
+THEN the gate runs via `cmd /C`.

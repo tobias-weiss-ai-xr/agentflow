@@ -1,0 +1,20 @@
+{
+  "_meta": {
+    "round": "18b",
+    "theme": "doc-consistency rerun with the POSIX gate shell fix (gate.rs prefers git-bash sh on Windows)",
+    "design": "r18-doc-consistency failed on a gate using './target/debug/af' which cmd /C cannot run; the fix makes gates and the builtin bash tool prefer git-bash 'sh' on Windows. This round reruns the same cross-check as a fresh id so the bash-idiom gate finally exercises for real. cmd-safe gate is no longer required (POSIX works), but bash only."
+  },
+  "tasks": [
+    {
+      "id": "r18b-doc-consistency",
+      "title": "r18b-doc-consistency: cross-check the README 'Quick start' + 'Docker / Nix' sections and docs/arc42/07-deployment-view.md sections 7.5-7.7 against the actual flake.nix and scripts/dist/*.sh — fix any drift in: nix output symlink names (note scripts/dist/nix-build.sh passes '-o result-af' / '-o result-af-static' / '-o result-image'), image name/tag, af CLI flags and subcommands, env var names, and command sequences. Do not add prose; only correct inconsistencies. Prior attempts found and committed the correct '-o' fixes but a cmd-shell gate blocked them; gates now run under git-bash sh. Read the files to verify, commit your corrections, then run the gate.",
+      "deps": [],
+      "manual": false,
+      "priority": 4,
+      "max_turns": 90,
+      "scope": ["README.md", "docs/arc42/07-deployment-view.md"],
+      "touch": ["README.md"],
+      "accept": "cargo build 2>&1 | tail -1 && ./target/debug/af --help | grep -q validate && ./target/debug/af --help | grep -q status && ./target/debug/af --help | grep -q cost && grep -q 'result-af-static' README.md && grep -q 'agentflow:' README.md"
+    }
+  ]
+}

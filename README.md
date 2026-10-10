@@ -292,6 +292,10 @@ Replay contract: the `accept` command MUST be idempotent; declare
 is settled as failed instead of re-run. The gate process receives the
 decision in `TF_GATE_REPLAY` (`1`/`0`).
 
+Gates (and the builtin agent's `bash` tool) run via `/bin/sh -c` on unix;
+on Windows `af` prefers a POSIX `sh` on PATH (git-bash) and falls back to
+`cmd /C` only when none exists — author gates in POSIX shell.
+
 ## Worker schema (`config/workers.json`)
 
 `defaults` (`accept_timeout_s`, `max_attempts`, `retry_delay_s`, `agent_timeout_s`)

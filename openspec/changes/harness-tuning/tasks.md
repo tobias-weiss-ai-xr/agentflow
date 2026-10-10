@@ -8,6 +8,8 @@
 - [ ] config validation tests: readonly+accept rejected; max_turns 0 rejected.
 - [ ] Docs: README task schema rows (`max_turns`, `readonly`), scope row (tool-time enforcement), trust-routing paragraph (Laplace prior; `af cost` shows raw).
 - [ ] Docs: arc42 §8.2.1 (prior), §8.3.2 (fail-fast scope + readonly).
+- [ ] gate.rs: shell() prefers POSIX `sh` on Windows when reachable (cmd fallback), shared by gates + builtin bash tool; windows test proves a bash-idiom gate passes.
 - [ ] Full suite green (`cargo test`; 4 pre-existing e2e failures unchanged).
 - [ ] Commit + push change + spec.
 - [ ] Dogfood round 18: probe new knobs with real tasks (readonly audit task, per-task max_turns, out-of-scope write fast-fail).
+- [ ] Dogfood round 18 rerun: doc-consistency with the POSIX gate (fresh id r18b).
