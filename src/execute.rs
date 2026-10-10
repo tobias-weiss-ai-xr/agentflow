@@ -311,7 +311,16 @@ fn execute_attempt(
         // CmdKind contract as a CLI child, so all downstream handling
         // (work integrity, gate, merge, retry memory) is byte-identical.
         let agent_out = if native {
-            let out = crate::harness::run(worker, &prompt, &wt_path, &ctx.st, &append);
+            let out = crate::harness::run(
+                worker,
+                &prompt,
+                &wt_path,
+                &ctx.st,
+                task.max_turns,
+                &task.scope,
+                task.readonly,
+                &append,
+            );
             append(&format!(
                 "harness: stop={:?} turns={} tokens={}",
                 out.stop, out.turns, out.total_tokens
@@ -432,6 +441,19 @@ fn execute_attempt(
                 "-- agent exited non-zero but committed work ahead of {base_branch:?}; judging committed work --"
             ));
         }
+    }
+
+    // Readonly tasks: investigation-only — the deliverable is the agent's
+    // normal stop itself. No acceptance gate, no merge, no "no change"
+    // failure (a readonly agent produces no committed task work by
+    // construction; for a CLI worker any committed work stays on the
+    // attempt branch). Anything the agent left is preserved by the standard
+    // archive path before cleanup.
+    if task.readonly {
+        append("-- readonly task: agent stopped normally; done without gate or merge --");
+        let _ = preserve_and_note(&repo, &wt, id, attempt, &mut append);
+        cleanup(&repo, &wt);
+        return (Outcome::Merged, spend);
     }
 
     // 2a) WORK INTEGRITY (r13): make the agent's work durable BEFORE it is

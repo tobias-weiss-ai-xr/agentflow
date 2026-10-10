@@ -1,6 +1,6 @@
 //! Router: measured worker selection (ADR-12). Replays receipts into
 //! per-worker (wins, total, mean-duration) stats; picks free workers by
-//! UCB1 (`mean + sqrt(2·ln(N+1)/(n+1))`). A strictly higher score always
+//! UCB1 (`prior-mean + sqrt(2·ln(N+1)/(n+1))`). A strictly higher score always
 //! wins; on a score tie the cheaper DECLARED cost basis wins when the two
 //! are comparable (see [`crate::cost`]); when the costs do not decide the
 //! worker with the strictly lower MEAN duration over its verdict attempts
@@ -107,7 +107,13 @@ impl Router {
         let mut best: Option<(f64, Option<Basis>, Option<f64>, &Worker)> = None;
         for w in eligible {
             let (wins, n) = self.stats.get(&w.name).copied().unwrap_or((0, 0));
-            let mean = wins as f64 / n.max(1) as f64;
+            // Laplace-smoothed trust mean: (wins+1)/(n+2). A worker with a
+            // single loss scores 1/3, not 0; a single win 2/3, not 1 — with
+            // N=1 the raw rate is 0-or-1 noise. Converges to the empirical
+            // rate as n grows (n=100, 50 wins: 51/102 ≈ 0.5). `trust()` keeps
+            // returning the RAW rate for the cost report; this smoothed mean
+            // is the routing term only.
+            let mean = (wins as f64 + 1.0) / (n as f64 + 2.0);
             let explore = (2.0 * (n_total as f64 + 1.0).ln() / (n as f64 + 1.0)).sqrt();
             let score = mean + explore;
             // Declared cost basis and mean duration, consulted ONLY on a tie.
@@ -212,6 +218,41 @@ mod tests {
         }
         let pool = [worker("a"), worker("b")];
         assert_eq!(r.pick(pool.iter()).unwrap().name, "a");
+    }
+
+    #[test]
+    fn laplace_prior_changes_small_n_ordering() {
+        // Pins the Laplace-smoothed mean (wins+1)/(n+2), not the raw rate.
+        // a: 3/5 (above the midpoint → prior pulls it DOWN: 4/7 ≈ 0.571 raw 0.6)
+        // b: 0/2 (below the midpoint → prior pulls it UP: 1/4 = 0.25 raw 0)
+        // n_total = 7:
+        //   explore(a) = sqrt(2·ln8/6) ≈ 0.832 → raw 1.432 vs prior 1.403
+        //   explore(b) = sqrt(2·ln8/3) ≈ 1.177 → raw 1.177 vs prior 1.427
+        // A raw-rate router keeps the high-mean favourite (a); the prior lets
+        // the recovering underdog (b) edge out — the exact small-N regime the
+        // change targets. This test FAILS with the raw mean.
+        let mut r = Router::default();
+        for _ in 0..5 {
+            r.record("a", true, Some(1.0));
+        }
+        for _ in 0..2 {
+            r.record("a", false, Some(1.0));
+        }
+        for _ in 0..2 {
+            r.record("b", false, Some(1.0));
+        }
+        let pool = [worker("a"), worker("b")];
+        assert_eq!(r.pick(pool.iter()).unwrap().name, "b");
+    }
+
+    #[test]
+    fn trust_stays_raw_while_pick_uses_the_prior() {
+        let mut r = Router::default();
+        for _ in 0..3 {
+            r.record("a", true, Some(1.0));
+            r.record("a", false, Some(1.0));
+        }
+        assert_eq!(r.trust("a"), Some(0.5));
     }
 
     #[test]

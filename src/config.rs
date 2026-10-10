@@ -97,6 +97,19 @@ pub struct Task {
     /// gate with side effects (mirrors pi-durable's `replay: "safe"` marks).
     #[serde(default = "default_true")]
     pub gate_replay: bool,
+    /// Per-task turn cap for the builtin harness (`cli: "builtin"`) — the
+    /// loop stops (and the attempt fails, archive-preserving) after this many
+    /// LLM round-trips on THIS task. Overrides the worker's `max_turns`, then
+    /// `TF_AGENT_MAX_TURNS`, then the harness default of 32. Ignored for CLI
+    /// workers. Absent = no per-task override.
+    #[serde(default)]
+    pub max_turns: Option<u32>,
+    /// Investigation-only task: the builtin harness rejects every `write` and
+    /// `edit` tool call, and the attempt completes when the agent stops
+    /// normally — no acceptance gate, no merge. Validation rejects combining
+    /// `readonly` with an `accept` gate (contradictory). Default `false`.
+    #[serde(default)]
+    pub readonly: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -337,8 +350,17 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
     }
 
     for t in tasks {
+        if t.max_turns == Some(0) {
+            return Err(format!("task '{}': max_turns must be >= 1", t.id));
+        }
+        if t.readonly && t.accept.is_some() {
+            return Err(format!(
+                "task '{}': readonly task cannot declare an accept gate",
+                t.id
+            ));
+        }
         // No gate and not manual: legacy corpus runs these gate-less; warn.
-        if t.accept.is_none() && !t.manual {
+        if t.accept.is_none() && !t.manual && !t.readonly {
             warnings.push(format!(
                 "task '{}': no acceptance gate and not manual — gate will be skipped",
                 t.id
@@ -759,6 +781,40 @@ mod tests {
         );
         let e = load(&d.join("tasks.json"), &d.join("workers.json")).unwrap_err();
         assert!(e.contains("duplicate task id: A"), "{e}");
+    }
+
+    #[test]
+    fn readonly_with_accept_rejected() {
+        let d = tmpdir("cfg-readonly");
+        wt(
+            &d.join("tasks.json"),
+            r#"{ "tasks": [
+                {"id":"A","title":"x","readonly":true,"accept":"true"}
+            ]}"#,
+        );
+        wt(
+            &d.join("workers.json"),
+            r#"{ "workers": [{"name":"w1","provider":"p","model":"m"}]}"#,
+        );
+        let e = load(&d.join("tasks.json"), &d.join("workers.json")).unwrap_err();
+        assert!(e.contains("readonly task cannot declare"), "{e}");
+    }
+
+    #[test]
+    fn task_max_turns_zero_rejected() {
+        let d = tmpdir("cfg-maxturns");
+        wt(
+            &d.join("tasks.json"),
+            r#"{ "tasks": [
+                {"id":"A","title":"x","max_turns":0}
+            ]}"#,
+        );
+        wt(
+            &d.join("workers.json"),
+            r#"{ "workers": [{"name":"w1","provider":"p","model":"m"}]}"#,
+        );
+        let e = load(&d.join("tasks.json"), &d.join("workers.json")).unwrap_err();
+        assert!(e.contains("max_turns must be >= 1"), "{e}");
     }
 
     #[test]

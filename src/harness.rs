@@ -75,12 +75,12 @@ pub struct Output {
     pub error: Option<String>,
 }
 
-/// Effective turn cap: worker field wins, then TF_AGENT_MAX_TURNS (>0),
-/// then 32.
-fn effective_max_turns(worker: &Worker, st: &Settings) -> u32 {
-    worker
+/// Effective turn cap: per-task override wins, then worker field, then
+/// TF_AGENT_MAX_TURNS (>0), then 32.
+fn effective_max_turns(worker: &Worker, st: &Settings, task: Option<u32>) -> u32 {
+    task.or(worker
         .max_turns
-        .or((st.agent_max_turns > 0).then_some(st.agent_max_turns))
+        .or((st.agent_max_turns > 0).then_some(st.agent_max_turns)))
         .unwrap_or(DEFAULT_MAX_TURNS)
 }
 
@@ -174,15 +174,46 @@ fn tool_bash(
     ))
 }
 
-/// Dispatch one tool call. Tool errors are the model's problem: they come
-/// back as the tool-result content so the model can correct course — they
-/// do NOT abort the attempt.
+/// Tool-time path guard for `write`/`edit`: a readonly task allows no
+/// writes at all; otherwise the resolved (worktree-relative) path must be
+/// covered by the task scope when one is declared. Fail-fast — the model
+/// sees the error as the tool result and can correct course instead of
+/// burning the attempt; the end-of-attempt scope check stays as the
+/// backstop for `bash`-tool writes and CLI workers.
+fn guard_path(wt: &Path, path: &str, scope: &[String], readonly: bool) -> Result<(), String> {
+    if readonly {
+        return Err(
+            "readonly task: write/edit are disabled (investigation only — read via bash)".into(),
+        );
+    }
+    let full = resolve_inside(wt, path)?;
+    if scope.is_empty() {
+        return Ok(());
+    }
+    let rel = full
+        .strip_prefix(wt)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default();
+    // Same matcher as enforcement (`execute::scope_violations` -> the
+    // scheduler glob matcher) so admission and enforcement always agree.
+    if !crate::execute::scope_violations(std::slice::from_ref(&rel), scope).is_empty() {
+        return Err(format!(
+            "path outside task scope: {rel} (allowed: {}) — reads via bash are allowed",
+            scope.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+/// Dispatch one tool call to a fully resolved, scope-guarded path.
 fn run_tool(
     name: &str,
     args: &str,
     wt: &Path,
     env: &[(String, String)],
     env_allow: &[String],
+    scope: &[String],
+    readonly: bool,
     log: &dyn Fn(&str),
 ) -> String {
     let parsed: Value = serde_json::from_str(args).unwrap_or_else(|_| json!({}));
@@ -196,7 +227,10 @@ fn run_tool(
             .map(|c| tool_bash(wt, &c, env, env_allow))
             .unwrap_or_else(|| Err("bash: missing command".into())),
         "write" => match (req_field("path", "write"), req_field("content", "write")) {
-            (Ok(path), Ok(content)) => tool_write(wt, &path, &content),
+            (Ok(path), Ok(content)) => match guard_path(wt, &path, scope, readonly) {
+                Ok(()) => tool_write(wt, &path, &content),
+                Err(e) => Err(e),
+            },
             (Err(e), _) | (_, Err(e)) => Err(e),
         },
         "edit" => match (
@@ -204,7 +238,10 @@ fn run_tool(
             req_field("old", "edit"),
             req_field("new", "edit"),
         ) {
-            (Ok(path), Ok(old), Ok(new)) => tool_edit(wt, &path, &old, &new),
+            (Ok(path), Ok(old), Ok(new)) => match guard_path(wt, &path, scope, readonly) {
+                Ok(()) => tool_edit(wt, &path, &old, &new),
+                Err(e) => Err(e),
+            },
             (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Err(e),
         },
         other => Err(format!("unknown tool: {other}")),
@@ -341,9 +378,12 @@ pub fn run(
     prompt: &str,
     wt: &Path,
     st: &Settings,
+    task_max_turns: Option<u32>,
+    task_scope: &[String],
+    readonly: bool,
     log: &dyn Fn(&str),
 ) -> Output {
-    let max_turns = effective_max_turns(worker, st);
+    let max_turns = effective_max_turns(worker, st, task_max_turns);
     let deadline = Instant::now() + Duration::from_secs(st.agent_timeout_s);
     let url = format!(
         "{}/chat/completions",
@@ -440,7 +480,7 @@ pub fn run(
         for call in &calls {
             let (id, name, args) = tool_call_fields(call);
             log(&format!("tool {name} {}", truncate_chars(&args, 512)));
-            let result = run_tool(&name, &args, wt, &env_pairs, &env_allow, log);
+            let result = run_tool(&name, &args, wt, &env_pairs, &env_allow, task_scope, readonly, log);
             messages.push(json!({
                 "role": "tool",
                 "tool_call_id": id,
@@ -525,12 +565,68 @@ mod tests {
         let logged = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let lg = logged.clone();
         let log = move |s: &str| lg.lock().unwrap().push(s.to_string());
-        let out = run_tool("nope", "{}", &d, &[], &[], &log);
+        let out = run_tool("nope", "{}", &d, &[], &[], &[], false, &log);
         assert!(out.starts_with("ERROR: unknown tool"), "{out}");
-        let out = run_tool("edit", "not json", &d, &[], &[], &log);
+        let out = run_tool("edit", "not json", &d, &[], &[], &[], false, &log);
         assert!(out.contains("ERROR"), "{out}");
-        let out = run_tool("write", r#"{"path":"x.txt","content":123}"#, &d, &[], &[], &log);
+        let out = run_tool("write", r#"{"path":"x.txt","content":123}"#, &d, &[], &[], &[], false, &log);
         assert!(out.starts_with("ERROR:"), "{out}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn write_guard_flags_out_of_scope_and_readonly() {
+        let d = wt();
+        std::fs::create_dir_all(d.join("src")).unwrap();
+        let scope = vec!["src/**".to_string()];
+        // Out of scope: rejected at tool-call time, model sees the message.
+        let logged = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let lg = logged.clone();
+        let log = move |s: &str| lg.lock().unwrap().push(s.to_string());
+        let out = run_tool(
+            "write",
+            r#"{"path":"README.md","content":"x"}"#,
+            &d, &[], &[], &scope, false, &log,
+        );
+        assert!(out.contains("outside task scope"), "{out}");
+        assert!(out.contains("src/**"), "{out}");
+        assert!(!d.join("README.md").exists());
+        // In scope: allowed.
+        let out = run_tool(
+            "write",
+            r#"{"path":"src/lib.rs","content":"fn x() {}"}"#,
+            &d, &[], &[], &scope, false, &log,
+        );
+        assert!(out.starts_with("wrote"), "{out}");
+        // Edit out of scope: rejected.
+        let out = run_tool(
+            "edit",
+            r#"{"path":"README.md","old":"a","new":"b"}"#,
+            &d, &[], &[], &scope, false, &log,
+        );
+        assert!(out.contains("outside task scope"), "{out}");
+        // Readonly: every write/edit rejected regardless of scope.
+        let scope_empty: Vec<String> = Vec::new();
+        let out = run_tool(
+            "write",
+            r#"{"path":"any.txt","content":"x"}"#,
+            &d, &[], &[], &scope_empty, true, &log,
+        );
+        assert!(out.contains("readonly"), "{out}");
+        assert!(!d.join("any.txt").exists());
+        let out = run_tool(
+            "edit",
+            r#"{"path":"src/lib.rs","old":"a","new":"b"}"#,
+            &d, &[], &[], &scope, true, &log,
+        );
+        assert!(out.contains("readonly"), "{out}");
+        // Empty scope means any file is allowed.
+        let out = run_tool(
+            "write",
+            r#"{"path":"notes.md","content":"x"}"#,
+            &d, &[], &[], &scope_empty, false, &log,
+        );
+        assert!(out.starts_with("wrote"), "{out}");
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -545,16 +641,18 @@ mod tests {
     }
 
     #[test]
-    fn turn_cap_resolution_prefers_worker_then_env_then_default() {
+    fn turn_cap_resolution_prefers_task_then_worker_then_env_then_default() {
         let mut w = Worker::default();
         w.max_turns = Some(7);
         let mut st = Settings::from_env();
         st.agent_max_turns = 9;
-        assert_eq!(effective_max_turns(&w, &st), 7);
+        assert_eq!(effective_max_turns(&w, &st, Some(3)), 3);
+        assert_eq!(effective_max_turns(&w, &st, None), 7);
         w.max_turns = None;
-        assert_eq!(effective_max_turns(&w, &st), 9);
+        assert_eq!(effective_max_turns(&w, &st, None), 9);
         st.agent_max_turns = 0;
-        assert_eq!(effective_max_turns(&w, &st), DEFAULT_MAX_TURNS);
+        assert_eq!(effective_max_turns(&w, &st, None), DEFAULT_MAX_TURNS);
+        assert_eq!(effective_max_turns(&w, &st, Some(128)), 128);
     }
 
     #[test]

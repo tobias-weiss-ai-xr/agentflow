@@ -129,7 +129,8 @@
         "lw-1-gallery",
         "lw-1-room",
         "lw-1-arachno",
-        "lw-1-hub"
+        "lw-1-hub",
+        "lw-1-saia-tutors"
       ],
       "manual": false,
       "priority": 3,
@@ -137,7 +138,8 @@
         "Assets/LearningWorlds/Scripts/LearningWorldsApp.cs",
         "Assets/LearningWorlds/Scripts/Hub/Portal.cs",
         "Assets/LearningWorlds/Editor/LearningWorldsMenus.cs",
-        "Assets/LearningWorlds/Scripts/Tutors/SocraticTutorManager.cs"
+        "Assets/LearningWorlds/Scripts/Tutors/SocraticTutorManager.cs",
+        "Assets/LearningWorlds/Scripts/avatars/TutorAvatar.cs"
       ],
       "touch": [
         "Assets/LearningWorlds/Editor/LearningWorldsMenus.cs",
@@ -145,29 +147,36 @@
         "Assets/LearningWorlds/Scripts/LearningWorldsApp.cs"
       ],
       "accept": "test -f Assets/LearningWorlds/Editor/LearningWorldsMenus.cs && grep -q MenuItem Assets/LearningWorlds/Editor/LearningWorldsMenus.cs && grep -q EnsureRig Assets/LearningWorlds/Scripts/LearningWorldsApp.cs && grep -q Go Assets/LearningWorlds/Scripts/Hub/Portal.cs",
-      "acceptance_prose": "Conventions: see lw-0-scaffold. NO NEW FILES. ONLY EDIT EXISTING FILES in scope. TASK: LearningWorldsApp.cs - Boot only when scene name starts with LearningWorlds-; EnsureRig() creates DontDestroyOnLoad LW-Rig camera WASD+RMB fly editor+RMB rotate; Go(World w, int ele=-1): unload old LearningWorlds scene via SceneManager.UnloadSceneAsync await then create new scene named LearningWorlds-World set active then call LearningWorldsApp.Builders[w](ele) if Builders dict exists; persistent rig survives scenes; LabSceneName: scan Assets/Scenes/*.unity find one with Menu/Aoi name fallback '00_Menu' static readonly field; OpenLab() calls SceneManager.LoadScene(LabSceneName). In Go() after scene load call SocraticTutorManager.Instance.ActivateTutorForWorld(w). Portal.cs: OnTriggerEnter cooldown 2s calls LearningWorldsApp.Go(targetWorld) ShowTooltip via SocraticTutorManager GetTutorNameForWorld. Editor/LearningWorldsMenus.cs: namespace LearningWorlds.Editor [MenuItem LearningWorlds/Open Hub Scene] static void OpenHub() { if Application.isPlaying return; EditorSceneManager.NewScene(DefaultGameObjects.Single) open Assets/Scenes/LearningWorlds-Hub.unity } [MenuItem LearningWorlds/Register Build Scenes] static void Register() add Assets/Scenes/LearningWorlds-Hub.unity to EditorBuildSettings.scenes if not present."
+      "acceptance_prose": "Conventions: see lw-0-scaffold. NO NEW FILES. ONLY EDIT EXISTING FILES in scope. TASK: LearningWorldsApp.cs - Boot only when scene name starts with LearningWorlds-; EnsureRig() creates DontDestroyOnLoad LW-Rig camera WASD+RMB fly editor+RMB rotate; Go(World w, int ele=-1): unload old LearningWorlds scene via SceneManager.UnloadSceneAsync await then create new scene named LearningWorlds-World set active then call LearningWorldsApp.Builders[w](ele) if Builders dict exists; persistent rig survives scenes; LabSceneName: scan Assets/Scenes/*.unity find one with Menu/Aoi name fallback '00_Menu' static readonly field; OpenLab() calls SceneManager.LoadScene(LabSceneName). In Go() after scene load call SocraticTutorManager.Instance.ActivateTutorForWorld(w). Portal.cs: OnTriggerEnter cooldown 2s calls LearningWorldsApp.Go(targetWorld) ShowTooltip via SocraticTutorManager GetTutorNameForWorld. Editor/LearningWorldsMenus.cs: namespace LearningWorlds.Editor [MenuItem LearningWorlds/Open Hub Scene] static void OpenHub() { if Application.isPlaying return; EditorSceneManager.NewScene(DefaultGameObjects.Single) open Assets/Scenes/LearningWorlds-Hub.unity } [MenuItem LearningWorlds/Register Build Scenes] static void Register() add Assets/Scenes/LearningWorlds-Hub.unity to EditorBuildSettings.scenes if not present. In Go() after scene load call SaiaTutorManager.Instance.ActivateTutorForWorld(w)."
     },
     {
-      "id": "lw-1-tutors",
-      "title": "Socratic Tutors: Convai-based AI tutors for each learning world (Chemiker, Forscher, Therapeut, Wegweiser)",
+      "id": "lw-1-saia-tutors",
+      "title": "Saia Tutors: Local AI tutors with avatars + animations (Chemiker, Forscher, Therapeut, Wegweiser)",
       "deps": [
-        "lw-0-scaffold"
+        "lw-1-gallery",
+        "lw-1-room",
+        "lw-1-arachno",
+        "lw-1-hub"
       ],
       "manual": false,
       "priority": 2,
       "scope": [
+        "Assets/LearningWorlds/Scripts/Tutors/SaiaTutorManager.cs",
+        "Assets/LearningWorlds/Scripts/Tutors/SaiaTutor.cs",
+        "Assets/LearningWorlds/Scripts/Tutors/SaiaTutorConfig.cs",
         "Assets/LearningWorlds/Scripts/Tutors/SocraticTutorManager.cs",
-        "Assets/LearningWorlds/Scripts/Tutors/SocraticTutorConfig.cs",
         "Assets/LearningWorlds/Scripts/Analytics/LearningAnalytics.cs",
-        "Assets/LearningWorlds/Editor/TutorSetupMenu.cs"
+        "Assets/LearningWorlds/Editor/TutorSetupMenu.cs",
+        "Assets/LearningWorlds/Scripts/avatars/TutorAvatar.cs"
       ],
       "touch": [
-        "Assets/LearningWorlds/Scripts/Tutors/SocraticTutorManager.cs",
-        "Assets/LearningWorlds/Scripts/Tutors/SocraticTutorConfig.cs",
-        "Assets/LearningWorlds/Scripts/Analytics/LearningAnalytics.cs"
+        "Assets/LearningWorlds/Scripts/Tutors/SaiaTutorManager.cs",
+        "Assets/LearningWorlds/Scripts/Tutors/SaiaTutor.cs",
+        "Assets/LearningWorlds/Scripts/Tutors/SaiaTutorConfig.cs",
+        "Assets/LearningWorlds/Scripts/Tutors/SocraticTutorManager.cs"
       ],
-      "accept": "test -f Assets/LearningWorlds/Scripts/Tutors/SocraticTutorManager.cs && grep -q ConvaiNPC Assets/LearningWorlds/Scripts/Tutors/SocraticTutorManager.cs && grep -q World Assets/LearningWorlds/Scripts/Tutors/SocraticTutorManager.cs && test -f Assets/LearningWorlds/Scripts/Analytics/LearningAnalytics.cs && test -f Assets/LearningWorlds/Scripts/Tutors/SocraticTutorConfig.cs",
-      "acceptance_prose": "Conventions: see lw-0-scaffold. Code-only NO .unity/.prefab/.asset. TASK: SocraticTutorManager.cs: Singleton DontDestroyOnLoad, manages Convai NPC tutors for each World: public enum World { Hub, PseGallery, ElementRoom, Arachnophobia }. public class TutorConfig { public World world; public string characterId; public Vector3 spawnPosition; public Vector3 spawnRotation; }. SpawnTutor(TutorConfig) instantiates ConvaiNPC prefab at position/rotation. ActivateTutorForWorld(World w) enables only the tutor for current world; deactivates others. ToggleTutorVisibility() hides/shows current tutor. SendContextMessage(World w, string context) sends world-specific prompts to tutor. SocraticTutorConfig.cs: ScriptableObject with List<TutorConfig> for Unity Inspector setup. LearningAnalytics.cs: Singleton, public class InteractionLog { timestamp, world, action, context, duration, sudsRating }, public void LogInteraction(string world, string action, string context, float duration, int sudsRating), public void LogTutorInteraction(World world, string tutorName, string question, string answer, float duration), public void ExportToCSV(). Editor/TutorSetupMenu.cs: [MenuItem LearningWorlds/Setup Socratic Tutors] static void Setup() creates default SocraticTutorConfig asset and assigns to SocraticTutorManager in scene. NO using UnityEditor in runtime scripts."
+      "accept": "test -f Assets/LearningWorlds/Scripts/Tutors/SaiaTutorManager.cs && grep -q SendToSTT Assets/LearningWorlds/Scripts/Tutors/SaiaTutorManager.cs && grep -q SendToLLM Assets/LearningWorlds/Scripts/Tutors/SaiaTutor.cs && grep -q PlayAnimation Assets/LearningWorlds/Scripts/avatars/TutorAvatar.cs && test -f Assets/LearningWorlds/Scripts/Analytics/LearningAnalytics.cs",
+      "acceptance_prose": "Conventions: see lw-0-scaffold. Code-only NO .unity/.prefab/.asset. TASK: SaiaTutorManager.cs: Singleton DontDestroyOnLoad, manages local AI tutors via Saia/Ollama APIs. public class TutorConfig { world, name, systemPrompt, voiceId, spawnPosition, spawnRotation }. SpawnTutor(TutorConfig) instantiates TutorAvatar prefab with SaiaTutor + Animator. ActivateTutorForWorld(World w) enables only the tutor for current world. StartRecording() captures microphone via Unity Microphone. SendToSTT(byte[] audio) POST to Saia/Whisper API (http://localhost:8080/v1/audio/transcriptions). SendToTTS(string text) POST to Saia/TTS API returns AudioClip. SaiaTutor.cs: SendToLLM(string userText) POST to local LLM API, PlayAudio(AudioClip) plays response + triggers Animator.SetTrigger(\"Talk\"). SaiaTutorConfig.cs: ScriptableObject with List<TutorConfig> for Unity Inspector. TutorAvatar.cs: MonoBehaviour with Animator anim, AudioSource audioSource; public void PlayAnimation(string trigger) calls anim.SetTrigger(trigger); public void PlayAudio(AudioClip clip) stops current audio and plays clip. SocraticTutorManager.cs: public enum World { Hub, PseGallery, ElementRoom, Arachnophobia }; SendContextMessage(World, string) for world-specific prompts. LearningAnalytics.cs: LogTutorInteraction. Editor/TutorSetupMenu.cs: [MenuItem LearningWorlds/Setup Saia Tutors] creates default SaiaTutorConfig asset. NO using UnityEditor in runtime scripts."
     },
     {
       "id": "lw-2-compile",
