@@ -1,8 +1,8 @@
 # Compliance Reporting
 
-`scripts/compliance.py` runs the full test suite and writes timestamped,
-machine-readable evidence of a passing build: git info, environment, every
-test result, and overall duration.
+`scripts/compliance.py` runs the project's static checks and full test suite,
+then writes timestamped, machine-readable evidence of the run: git info,
+environment, every test result, and overall duration.
 
 ## Running
 
@@ -11,7 +11,8 @@ make compliance
 ```
 
 This is the single command to check overall project health before shipping.
-It exits non-zero if any test fails, so it also works as a CI gate.
+It exits non-zero if any test fails or a static check is dirty, so it also
+works as a CI gate.
 
 ## Reports
 
@@ -36,11 +37,17 @@ python3 scripts/compliance.py /some/other/dir
 | `result` | `PASS` / `FAIL` |
 | `command` | the test command executed (`cargo test`) |
 | `git` | commit SHA, branch, `git describe`, and dirty-file list |
-| `environment` | Python, platform, `cargo` and `rustc` versions |
-| `tests` | summed passed/failed plus one entry per `test result:` line |
+| `environment` | Python, platform, uname, and git / cargo / rustc versions |
+| `static_checks` | result of `cargo fmt --check` (`clean` / `dirty`) |
+| `tests` | summed passed/failed, the names of any failing tests, and one entry per `test result:` line |
 | `output` | full captured test output (stdout, with stderr merged) |
 
-Self-check of the result parser (no tests run):
+A run only reports `PASS` when the static check is clean, no test result line
+is `FAILED`, and the test process exits 0.
+
+## Self-check
+
+Sanity-check the result parser (no tests run):
 
 ```sh
 python3 scripts/compliance.py --selfcheck

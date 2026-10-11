@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Run all tests and emit timestamped compliance reports (JSON + Markdown).
+"""Run the project's static test suite and emit timestamped compliance reports.
 
-Reports include git info, environment, every test result, and duration.
-Written to <repo>/target/compliance/ (gitignored) unless a directory is
-given as argv[1]. Exit code mirrors the test run (0 = all passed).
+Generates `compliance-<ts>.json` (machine-readable) and `compliance-<ts>.md`
+(human-readable) containing git info, environment, the test command run, every
+test result, and wall duration. Written to `target/compliance/` (gitignored)
+unless a directory is passed as argv[1]. Exit code mirrors the run:
+0 = PASS, 1 = FAIL (any test failure or a non-clean static check).
 
 Usage:
-  scripts/compliance.py                 # run all tests, write reports
-  scripts/compliance.py --selfcheck     # sanity-check the parser, no tests
+  scripts/compliance.py                  # run suite, write reports
+  scripts/compliance.py /some/other/dir  # write reports elsewhere
+  scripts/compliance.py --selfcheck      # parser sanity check, no tests
 """
 import json
 import os
@@ -20,6 +23,8 @@ import time
 from datetime import datetime, timezone
 
 RESULT_RE = re.compile(r"test result: (ok|FAILED)\.?\s+(\d+) passed; (\d+) failed")
+# cargo lists failures as "---- <test name> stdout ----"
+FAILURE_RE = re.compile(r"^---- (\S+) stdout ----$")
 
 
 def run(cmd, cwd=None):
@@ -29,7 +34,7 @@ def run(cmd, cwd=None):
 
 
 def parse_results(stdout):
-    """Sum passed/failed across every 'test result' line (one per test binary)."""
+    """Sum passed/failed across every 'test result' line; collect failing names."""
     passed = failed = 0
     lines = []
     for line in stdout.splitlines():
@@ -39,7 +44,8 @@ def parse_results(stdout):
             passed += p
             failed += f
             lines.append({"result": m.group(1), "passed": p, "failed": f, "line": line.strip()})
-    return passed, failed, lines
+    failures = [FAILURE_RE.match(l).group(1) for l in stdout.splitlines() if FAILURE_RE.match(l)]
+    return passed, failed, lines, failures
 
 
 def main():
@@ -56,10 +62,12 @@ def main():
         sample = (
             "running 3 tests\n"
             "test result: ok. 340 passed; 1 failed; 0 ignored; finished in 0.63s\n"
+            "---- broken_one stdout ----\n"
             "test result: FAILED. 2 passed; 1 failed; finished in 0.10s\n"
         )
-        passed, failed, _ = parse_results(sample)
+        passed, failed, _, failures = parse_results(sample)
         assert passed == 342 and failed == 2, (passed, failed)
+        assert failures == ["broken_one"], failures
         print("compliance: parser self-check OK")
         return 0
 
@@ -82,21 +90,33 @@ def main():
     git["dirty_files"] = out.splitlines() if code == 0 else []
 
     # Environment
+    _, uname, _ = run(["uname", "-a"])
     env = {
         "python": platform.python_version(),
         "platform": platform.platform(),
+        "uname": uname,
+        "git": run(["git", "--version"])[1],
         "cargo": run(["cargo", "--version"])[1],
         "rustc": run(["rustc", "--version"])[1],
     }
 
-    # Run all tests once, capturing output for the report
+    # Static checks (no tests run): formatting must be clean for a PASS.
+    fmt_code, _, fmt_err = run(["cargo", "fmt", "--check"], cwd=repo_root)
+    static_checks = {"cargo_fmt_check": "clean" if fmt_code == 0 else "dirty"}
+    if fmt_code != 0:
+        static_checks["cargo_fmt_check_output"] = (fmt_err or "cargo fmt --check failed")
+
+    # Run the full test suite once, capturing output for the report.
     print("compliance: running `cargo test` ...")
-    proc = subprocess.Popen(["cargo", "test"], cwd=repo_root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc = subprocess.Popen(
+        ["cargo", "test"], cwd=repo_root,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
     tout, _ = proc.communicate()
     duration = round(time.monotonic() - started, 2)
 
-    passed, failed, results = parse_results(tout)
-    ok = proc.returncode == 0 and failed == 0
+    passed, failed, results, failures = parse_results(tout)
+    ok = proc.returncode == 0 and failed == 0 and fmt_code == 0
 
     report = {
         "generated": generated,
@@ -105,7 +125,8 @@ def main():
         "command": "cargo test",
         "git": git,
         "environment": env,
-        "tests": {"passed": passed, "failed": failed, "results": results},
+        "static_checks": static_checks,
+        "tests": {"passed": passed, "failed": failed, "failures": failures, "results": results},
         "output": {"stdout": tout},
     }
 
@@ -116,8 +137,10 @@ def main():
         fh.write(render_markdown(report))
 
     try:
-        print(f"compliance: {report['result']} — {passed} passed, {failed} failed, "
-              f"{duration}s — reports in {out_dir}")
+        print(
+            f"compliance: {report['result']} — {passed} passed, {failed} failed, "
+            f"{duration}s — reports in {out_dir}"
+        )
     except BrokenPipeError:
         pass
     return 0 if ok else 1
@@ -143,6 +166,13 @@ def render_markdown(r):
     lines += ["", "## Environment", ""]
     for k, v in r["environment"].items():
         lines.append(f"- {k}: `{v}`")
+    lines += ["", "## Static checks", ""]
+    for k, v in r["static_checks"].items():
+        lines.append(f"- {k}: `{v}`")
+    if r["tests"]["failures"]:
+        lines += ["", "## Failed tests", ""]
+        for name in r["tests"]["failures"]:
+            lines.append(f"- `{name}`")
     lines += ["", "## Test results", ""]
     for res in r["tests"]["results"]:
         lines.append(f"- {res['result']:6} {res['passed']} passed, {res['failed']} failed")
