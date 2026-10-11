@@ -1,0 +1,20 @@
+{
+  "_meta": {
+    "round": "19",
+    "theme": "calibration: re-run max-turns-probe with raised cap (12) to verify happy path; plus investigate/finalize max_turns recommendations in docs",
+    "design": "Round-18 showed max_turns: 6 is too tight for write+commit+gate (bash, edit, git add/commit) on slow pools. This round verifies 12 is enough and documents the calibration."
+  },
+  "tasks": [
+    {
+      "id": "r19-max-turns-calibration",
+      "title": "r19-max-turns-calibration: verify max_turns=12 is enough for a write+commit+gate task. Look for any docs that still recommend 6 and update them to 12-16. Add a note to README.md max_turns row: 'Suggest 12-16 for write+commit+gate tasks; 6 Often too tight.'. Prior r18 task (r18-max-turns-probe) failed with 6 turns (knob verified); now try 12.",
+      "deps": [],
+      "manual": false,
+      "priority": 4,
+      "max_turns": 12,
+      "scope": ["README.md"],
+      "touch": ["README.md"],
+      "accept": "grep -q 'Suggest 12-16 for write' README.md && grep -q 'max_turns' README.md"
+    }
+  ]
+}
