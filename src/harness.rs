@@ -174,6 +174,63 @@ fn tool_bash(
     ))
 }
 
+/// Fail-fast scope probe for bash-origin changes: after a bash tool
+/// call, run `git status --porcelain -uall` and flag any uncommitted
+/// out-of-scope paths immediately (the write/edit tools are already
+/// pre-guarded, and CLI workers are unreachable here). Git errors (no
+/// repo or not available) are ignored so absent git doesn't break things.
+fn scope_probe(wt: &Path, scope: &[String], log: &dyn Fn(&str)) -> Result<(), String> {
+    if scope.is_empty() {
+        return Ok(());
+    }
+    let out = match std::process::Command::new("git")
+        .arg("-C")
+        .arg(wt)
+        .arg("status")
+        .arg("--porcelain")
+        .arg("-uall")
+        .output()
+    {
+        Ok(out) => out,
+        Err(_) => return Ok(()), // git not available — skip silently
+    };
+    if !out.status.success() {
+        return Ok(());
+    }
+    let mut paths: Vec<String> = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        if line.len() < 4 {
+            continue;
+        }
+        // Porcelain: XY<space>path  where XY is 2 chars (?? for untracked).
+        if line.len() >= 3 && line.chars().nth(2) == Some(' ') {
+            let rest = &line[3..];
+            let path = if rest.starts_with('"') && rest.ends_with('"') {
+                // Git quotes filenames with special chars
+                rest[1..rest.len() - 1].to_string()
+            } else {
+                rest.to_string()
+            };
+            paths.push(path.replace('\\', "/"));
+        }
+        // renames include a score tab then paths — we only need the second
+        // path here; simpler to accept miss on complex — the end check
+        // still has the exact solution.
+        // "R099\told\tnew" — we detect one of the names.
+    }
+    let violations = crate::execute::scope_violations(&paths, scope);
+    if !violations.is_empty() {
+        let list = violations.join(", ");
+        log(&format!("scope-probe: bash created out-of-scope file(s): {}", list));
+        return Err(format!(
+            "bash created out-of-scope files: {} — revert/delete and retry (allowed: {})",
+            list,
+            scope.join(", ")
+        ));
+    }
+    Ok(())
+}
+
 /// Tool-time path guard for `write`/`edit`: a readonly task allows no
 /// writes at all; otherwise the resolved (worktree-relative) path must be
 /// covered by the task scope when one is declared. Fail-fast — the model
@@ -215,17 +272,23 @@ fn run_tool(
     scope: &[String],
     readonly: bool,
     log: &dyn Fn(&str),
-) -> String {
+) -> Result<String, String> {
     let parsed: Value = serde_json::from_str(args).unwrap_or_else(|_| json!({}));
     let field = |k: &str| parsed.get(k).and_then(|v| v.as_str()).map(str::to_string);
     let req_field = |k: &str, tool: &str| {
         field(k).ok_or_else(|| format!("{tool}: missing or non-string '{k}'"))
     };
     let result = match name {
-        "bash" => field("command")
-            .filter(|c| !c.is_empty())
-            .map(|c| tool_bash(wt, &c, env, env_allow))
-            .unwrap_or_else(|| Err("bash: missing command".into())),
+        "bash" => {
+            let cmd = field("command").filter(|c| !c.is_empty())
+                .ok_or_else(|| "bash: missing command".to_string())?;
+            let out = tool_bash(wt, &cmd, env, env_allow)?;
+            if let Err(e) = scope_probe(wt, scope, log) {
+                Err(e)
+            } else {
+                Ok(out)
+            }
+        }
         "write" => match (req_field("path", "write"), req_field("content", "write")) {
             (Ok(path), Ok(content)) => match guard_path(wt, &path, scope, readonly) {
                 Ok(()) => tool_write(wt, &path, &content),
@@ -246,16 +309,13 @@ fn run_tool(
         },
         other => Err(format!("unknown tool: {other}")),
     };
-    match result {
-        Ok(s) => {
-            log(&format!("  -> {s}"));
-            s
-        }
-        Err(e) => {
-            log(&format!("  -> ERROR {e}"));
-            format!("ERROR: {e}")
-        }
-    }
+    result.map(|s| {
+        log(&format!("  -> {s}"));
+        s
+    }).map_err(|e| {
+        log(&format!("  -> ERROR {e}"));
+        e
+    })
 }
 
 /// Tool schemas sent as `tools` on every request (static — build once).
@@ -480,11 +540,15 @@ pub fn run(
         for call in &calls {
             let (id, name, args) = tool_call_fields(call);
             log(&format!("tool {name} {}", truncate_chars(&args, 512)));
-            let result = run_tool(&name, &args, wt, &env_pairs, &env_allow, task_scope, readonly, log);
+            let tool_result = run_tool(&name, &args, wt, &env_pairs, &env_allow, task_scope, readonly, log);
+            let content = match tool_result {
+                Ok(s) => s,
+                Err(e) => format!("ERROR: {e}"),
+            };
             messages.push(json!({
                 "role": "tool",
                 "tool_call_id": id,
-                "content": result,
+                "content": content,
             }));
         }
     };
@@ -565,12 +629,12 @@ mod tests {
         let logged = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let lg = logged.clone();
         let log = move |s: &str| lg.lock().unwrap().push(s.to_string());
-        let out = run_tool("nope", "{}", &d, &[], &[], &[], false, &log);
-        assert!(out.starts_with("ERROR: unknown tool"), "{out}");
-        let out = run_tool("edit", "not json", &d, &[], &[], &[], false, &log);
-        assert!(out.contains("ERROR"), "{out}");
-        let out = run_tool("write", r#"{"path":"x.txt","content":123}"#, &d, &[], &[], &[], false, &log);
-        assert!(out.starts_with("ERROR:"), "{out}");
+        let err = run_tool("nope", "{}", &d, &[], &[], &[], false, &log).unwrap_err();
+        assert!(err.contains("unknown tool"), "{err}");
+        let err = run_tool("edit", "not json", &d, &[], &[], &[], false, &log).unwrap_err();
+        assert!(!err.is_empty(), "{err}");
+        let err = run_tool("write", r#"{"path":"x.txt","content":123}"#, &d, &[], &[], &[], false, &log).unwrap_err();
+        assert!(!err.is_empty(), "{err}");
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -583,49 +647,49 @@ mod tests {
         let logged = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let lg = logged.clone();
         let log = move |s: &str| lg.lock().unwrap().push(s.to_string());
-        let out = run_tool(
+        let err = run_tool(
             "write",
             r#"{"path":"README.md","content":"x"}"#,
             &d, &[], &[], &scope, false, &log,
-        );
-        assert!(out.contains("outside task scope"), "{out}");
-        assert!(out.contains("src/**"), "{out}");
+        ).unwrap_err();
+        assert!(err.contains("outside task scope"), "{err}");
+        assert!(err.contains("src/**"), "{err}");
         assert!(!d.join("README.md").exists());
         // In scope: allowed.
         let out = run_tool(
             "write",
             r#"{"path":"src/lib.rs","content":"fn x() {}"}"#,
             &d, &[], &[], &scope, false, &log,
-        );
+        ).unwrap();
         assert!(out.starts_with("wrote"), "{out}");
         // Edit out of scope: rejected.
-        let out = run_tool(
+        let err = run_tool(
             "edit",
             r#"{"path":"README.md","old":"a","new":"b"}"#,
             &d, &[], &[], &scope, false, &log,
-        );
-        assert!(out.contains("outside task scope"), "{out}");
+        ).unwrap_err();
+        assert!(err.contains("outside task scope"), "{err}");
         // Readonly: every write/edit rejected regardless of scope.
         let scope_empty: Vec<String> = Vec::new();
-        let out = run_tool(
+        let err = run_tool(
             "write",
             r#"{"path":"any.txt","content":"x"}"#,
             &d, &[], &[], &scope_empty, true, &log,
-        );
-        assert!(out.contains("readonly"), "{out}");
+        ).unwrap_err();
+        assert!(err.contains("readonly"), "{err}");
         assert!(!d.join("any.txt").exists());
-        let out = run_tool(
+        let err = run_tool(
             "edit",
             r#"{"path":"src/lib.rs","old":"a","new":"b"}"#,
             &d, &[], &[], &scope, true, &log,
-        );
-        assert!(out.contains("readonly"), "{out}");
+        ).unwrap_err();
+        assert!(err.contains("readonly"), "{err}");
         // Empty scope means any file is allowed.
         let out = run_tool(
             "write",
             r#"{"path":"notes.md","content":"x"}"#,
             &d, &[], &[], &scope_empty, false, &log,
-        );
+        ).unwrap();
         assert!(out.starts_with("wrote"), "{out}");
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -697,5 +761,69 @@ mod tests {
         assert!(!is_empty_response(&serde_json::json!(
             { "tool_calls": [{ "id": "c1", "function": { "name": "bash", "arguments": "{}" } }] }
         )));
+    }
+
+    #[test]
+    fn scope_probe_detects_out_of_scope_bash_file() {
+        let d = wt();
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(&d)
+            .status().ok();
+        std::process::Command::new("git")
+            .arg("config")
+            .arg("user.email")
+            .arg("t@t.t")
+            .current_dir(&d)
+            .status().ok();
+        std::process::Command::new("git")
+            .arg("config")
+            .arg("user.name")
+            .arg("t")
+            .current_dir(&d)
+            .status().ok();
+        std::fs::create_dir_all(d.join("src")).unwrap();
+        std::fs::write(d.join("src/main.rs"), "fn main(){}").unwrap();
+        std::fs::write(d.join("out.txt"), "bad").unwrap();
+        let err = scope_probe(&d, &["src/**".to_string()], &|_| {})
+            .expect_err("should flag out-of-scope out.txt");
+        assert!(err.contains("out.txt"));
+        assert!(err.contains("src/**"));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn scope_probe_allows_in_scope_bash_file() {
+        let d = wt();
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(&d)
+            .status().ok();
+        std::process::Command::new("git")
+            .arg("config")
+            .arg("user.email")
+            .arg("t@t.t")
+            .current_dir(&d)
+            .status().ok();
+        std::process::Command::new("git").current_dir(&d).arg("config").arg("user.name").arg("t").status().ok();
+        std::fs::create_dir_all(d.join("src")).unwrap();
+        std::fs::write(d.join("src/main.rs"), "fn main(){}").unwrap();
+        scope_probe(&d, &["src/**".to_string()], &|_| {}).expect("src/main.rs should be in scope");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn scope_probe_empty_scope_allows_any() {
+        let d = wt();
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(&d)
+            .status().ok();
+        std::fs::write(d.join("anywhere.txt"), "ok").unwrap();
+        scope_probe(&d, &[], &|_| {}).expect("empty scope allows all");
+        std::fs::remove_dir_all(&d).ok();
     }
 }
