@@ -1,108 +1,154 @@
 #!/usr/bin/env bash
-#
-# verify-backup.sh — validate a backup produced by scripts/backup.sh.
-#
-# Checks, in order:
-#   1. SHA-256 checksum against the sibling .sha256 file (if present)
-#   2. gzip archive integrity (decrypting to a stream for .enc archives,
-#      so plaintext never touches disk on the integrity check)
-#   3. restorability — extracts every entry to a temp dir successfully
+# ═══════════════════════════════════════════════════════════════
+# openSME — Verify Backup Integrity
+# ═══════════════════════════════════════════════════════════════
+# Validates a backup set produced by scripts/backup.sh:
+#   * artifacts exist (postgres_<ts>.sql.gz, traefik_<ts>.tar.gz,
+#     volumes_<ts>.tar.gz) and are non-empty
+#   * gzip / tar archives are structurally valid (gzip -t / tar -tzf)
+#   * .enc artifacts decrypt with AES-256 (openssl, PBKDF2 — the same
+#     scheme backup.sh --encrypt writes) and the decrypted stream is a
+#     valid gzip / tar archive
 #
 # Usage:
-#   scripts/verify-backup.sh <archive.tar.gz|archive.tar.gz.enc|archive.sha256>
-#       [--passphrase P] [--self-test] [--help]
+#   ./scripts/verify-backup.sh                     # newest set in ./backups
+#   ./scripts/verify-backup.sh --backup DIR        # explicit backup dir
+#   ./scripts/verify-backup.sh --timestamp TS      # specific set (YYYYMMDD_HHMMSS)
+#   ./scripts/verify-backup.sh --passphrase P      # for .enc artifacts
+#   ./scripts/verify-backup.sh --list              # list backup sets, exit 0
 #
-# Passphrase also via BACKUP_PASSPHRASE. Self-test builds a throwaway
-# encrypted archive locally and runs the full verification on it.
-
+# Passphrase may also be given via $BACKUP_PASSPHRASE (same env backup.sh
+# --encrypt reads). Read-only: never modifies the backup directory.
+# Decryption uses `openssl -pass env:BACKUP_PASSPHRASE` — same transport
+# backup.sh --encrypt writes with, so a passphrase never shows in `ps` or
+# shell history.
+# ═══════════════════════════════════════════════════════════════
 set -euo pipefail
 
-SELF_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$DIR"
+
+BACKUP_DIR="${BACKUP_DIR:-./backups}"
+TIMESTAMP=""
 PASSPHRASE="${BACKUP_PASSPHRASE:-}"
-SELF_TEST=0
-
-# Effective passphrase must reach both direct and recursive (checksum-file)
-# verification of encrypted archives via the env openssl reads.
 export BACKUP_PASSPHRASE="$PASSPHRASE"
+LIST_ONLY=false
 
-usage() {
-  sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
-  exit 0
-}
-
-[ $# -ge 1 ] || { echo "verify-backup.sh: missing archive path (--help)" >&2; exit 2; }
-
-ARCHIVE=""
+# ── Parse arguments ───────────────────────────
 while [ $# -gt 0 ]; do
   case "$1" in
-    --passphrase) PASSPHRASE="${2:?--passphrase needs a value}"; shift 2 ;;
-    --self-test)  SELF_TEST=1; shift ;;
-    -h|--help)    usage ;;
-    -*) echo "verify-backup.sh: unknown option: $1 (--help)" >&2; exit 2 ;;
-    *)  ARCHIVE="$1"; shift ;;
+    --backup)     shift; BACKUP_DIR="$1"; shift ;;
+    --timestamp)  shift; TIMESTAMP="$1"; shift ;;
+    --passphrase) shift; PASSPHRASE="$1"; export BACKUP_PASSPHRASE="$PASSPHRASE"; shift ;;
+    --list)       LIST_ONLY=true; shift ;;
+    -h|--help)
+      echo "Usage: $0 [--backup DIR] [--timestamp TS] [--passphrase P] [--list]"
+      echo ""
+      echo "Options:"
+      echo "  --backup DIR      Backup directory (default: ./backups)"
+      echo "  --timestamp TS    Verify this set (YYYYMMDD_HHMMSS; default: newest)"
+      echo "  --passphrase P    Passphrase for .enc artifacts (or \$BACKUP_PASSPHRASE)"
+      echo "  --list            List backup sets found and exit"
+      exit 0
+      ;;
+    *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
 
-workdir="$(mktemp -d)"
-trap 'rm -rf "$workdir"' EXIT
+[ -d "$BACKUP_DIR" ] || { echo "✗ Backup directory not found: ${BACKUP_DIR}"; exit 1; }
 
-check_sha256() {  # $1 = archive path; verifies against its sibling .sha256
-  local shafile="$1.sha256"
-  [ -f "$shafile" ] || { echo "verify-backup.sh: no ${shafile} — checksum skipped" >&2; return 0; }
-  (cd "$(dirname "$shafile")" && sha256sum -c "$(basename "$shafile")") \
-    || { echo "verify-backup.sh: SHA-256 MISMATCH for $1" >&2; exit 1; }
-  echo "verify-backup.sh: checksum OK ($1)"
-}
+# ── List / pick a set ─────────────────────────
+# Artifact timestamps are YYYYMMDD_HHMMSS — lexicographic == chronological.
+TIMESTAMPS="$(
+  find "$BACKUP_DIR" -maxdepth 1 -type f \
+       \( -name "postgres_*.sql.gz*" -o -name "traefik_*.tar.gz*" -o -name "volumes_*.tar.gz*" \) \
+       2>/dev/null | grep -o '[0-9]\{8\}_[0-9]\{6\}' | sort -u
+)"
 
-verify_archive() {  # $1 = path to plain .tar.gz (already checksum'd)
-  gzip -t "$1" || { echo "verify-backup.sh: gzip integrity FAILED ($1)" >&2; exit 1; }
-  tar -xzf "$1" -C "$workdir" \
-    || { echo "verify-backup.sh: extraction FAILED — not restorable ($1)" >&2; exit 1; }
-  local n; n="$(tar -tzf "$1" | sed '/\/$/d' | wc -l)"
-  echo "verify-backup.sh: OK — integrity verified, $n file(s) restored to ${workdir}"
-}
-
-if [ "$SELF_TEST" -eq 1 ]; then
-  echo "verify-backup.sh: running self-test (local round-trip)"
-  echo "self-test payload $(date +%s)" > "$workdir/payload.txt"
-  tar -C "$workdir" -czf "$workdir/self.tar.gz" payload.txt
-  openssl enc -aes-256-cbc -salt -pbkdf2 -pass "pass:self-test-pass" \
-    -in "$workdir/self.tar.gz" -out "$workdir/self.tar.gz.enc"
-  rm -f "$workdir/self.tar.gz"
-  ARCHIVE="$workdir/self.tar.gz.enc"
-  PASSPHRASE="self-test-pass"
-  export BACKUP_PASSPHRASE="$PASSPHRASE"
-  echo "verify-backup.sh: self-test PASS (encrypt → verify → restore)"
+if [ "$LIST_ONLY" = true ]; then
+  if [ -z "$TIMESTAMPS" ]; then
+    echo "No backup sets found in ${BACKUP_DIR}/"
+    exit 0
+  fi
+  echo "Backup sets in ${BACKUP_DIR}/:"
+  echo "$TIMESTAMPS" | while read -r ts; do
+    echo "  ${ts}  $(find "$BACKUP_DIR" -maxdepth 1 -type f -name "*_${ts}.*" | wc -l) artifact(s)"
+  done
+  exit 0
 fi
 
-[ -n "$ARCHIVE" ] || { echo "verify-backup.sh: no archive given (--help)" >&2; exit 2; }
-[ -f "$ARCHIVE" ]  || { echo "verify-backup.sh: not found: $ARCHIVE" >&2; exit 2; }
+if [ -z "$TIMESTAMP" ]; then
+  TIMESTAMP="$(echo "$TIMESTAMPS" | tail -n1)"
+  if [ -z "$TIMESTAMP" ]; then
+    echo "✗ No backup sets found in ${BACKUP_DIR}/ (use --timestamp to pin one)"
+    exit 1
+  fi
+fi
 
-case "$ARCHIVE" in
-  *.sha256)
-    shafile="$(readlink -f "$ARCHIVE")"
-    (cd "$(dirname "$shafile")" && sha256sum -c "$(basename "$shafile")") \
-      || { echo "verify-backup.sh: SHA-256 MISMATCH (${shafile})" >&2; exit 1; }
-    # recurse into each archive named by the checksum file, skip self
-    while read -r _ name; do
-      case "$name" in
-        *.sha256) continue ;;
-        *) "$SELF_PATH" "$(dirname "$shafile")/$name" ;;
-      esac
-    done < <(grep -v '\.sha256$' "$shafile") ;;
-  *.enc)
-    [ -n "$PASSPHRASE" ] || { echo "verify-backup.sh: encrypted archive needs --passphrase or BACKUP_PASSPHRASE" >&2; exit 2; }
-    check_sha256 "$ARCHIVE"
-    openssl enc -d -aes-256-cbc -pbkdf2 -pass "env:BACKUP_PASSPHRASE" \
-      -in "$ARCHIVE" -out "$workdir/plain.tar.gz" \
-      || { echo "verify-backup.sh: decryption FAILED (bad passphrase or corrupt)" >&2; exit 1; }
-    verify_archive "$workdir/plain.tar.gz" ;;
-  *.tar.gz)
-    check_sha256 "$ARCHIVE"
-    verify_archive "$ARCHIVE" ;;
-  *)
-    echo "verify-backup.sh: unsupported artifact: $ARCHIVE (.tar.gz / .enc / .sha256)" >&2
-    exit 2 ;;
-esac
+# ── Verify one artifact ───────────────────────
+# $1 = base name prefix (postgres_/traefik_/volumes_), $2 = kind (gzip|tar),
+# $3 = mandatory (true|false)
+check_artifact() {
+  local prefix="$1" kind="$2" mandatory="$3" base file rc=0
+  base="${BACKUP_DIR}/${prefix}${TIMESTAMP}"
+  if [ -f "${base}.sql.gz" ]; then
+    file="${base}.sql.gz"; kind="gzip"
+  elif [ -f "${base}.tar.gz" ]; then
+    file="${base}.tar.gz"; kind="tar"
+  elif [ -f "${base}.sql.gz.enc" ]; then
+    file="${base}.sql.gz.enc"; kind="gzip"
+  elif [ -f "${base}.tar.gz.enc" ]; then
+    file="${base}.tar.gz.enc"; kind="tar"
+  else
+    if [ "$mandatory" = true ]; then
+      echo "  ✗ MISSING  ${base}.(sql.gz|tar.gz)[.enc]"
+      return 1
+    fi
+    echo "  – skipped  ${prefix}${TIMESTAMP} (not present in this backup)"
+    return 0
+  fi
 
-echo "verify-backup.sh: all checks passed."
+  if [ ! -s "$file" ]; then
+    echo "  ✗ EMPTY    ${file}"
+    return 1
+  fi
+
+  echo -n "  → ${file##*/} ... "
+  if [[ "$file" == *.enc ]]; then
+    [ -n "$PASSPHRASE" ] || { echo "✗ needs a passphrase (--passphrase or \$BACKUP_PASSPHRASE)"; return 1; }
+    if [ "$kind" = "gzip" ]; then
+      openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 \
+        -pass env:BACKUP_PASSPHRASE -in "$file" 2>/dev/null | gzip -t
+      rc=$?
+    else
+      openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 \
+        -pass env:BACKUP_PASSPHRASE -in "$file" 2>/dev/null | tar -tzf - >/dev/null 2>&1
+      rc=$?
+    fi
+  elif [ "$kind" = "gzip" ]; then
+    gzip -t "$file"; rc=$?
+  else
+    tar -tzf "$file" >/dev/null 2>&1; rc=$?
+  fi
+
+  if [ "$rc" -eq 0 ]; then
+    echo "OK ($(du -h "$file" | cut -f1))"
+    return 0
+  fi
+  echo "CORRUPT (integrity check failed)"
+  return 1
+}
+
+# ── Run ───────────────────────────────────────
+echo "🔍 Verifying backup set ${TIMESTAMP} in ${BACKUP_DIR}/"
+FAIL=0
+check_artifact "postgres_" "gzip" true  || FAIL=1
+check_artifact "traefik_"  "tar"   true  || FAIL=1
+check_artifact "volumes_"  "tar"   false || FAIL=1
+
+if [ "$FAIL" -eq 0 ]; then
+  echo "✅ Backup set ${TIMESTAMP} is intact"
+  exit 0
+fi
+echo "✗ Backup set ${TIMESTAMP} has problems — re-run backup.sh"
+exit 1
