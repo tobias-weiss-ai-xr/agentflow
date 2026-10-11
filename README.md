@@ -284,7 +284,7 @@ to block the command: the readable history is still accounted for.
 | `manual` | Skip the acceptance gate (manual sign-off) |
 | `priority` | Tie-breaker when multiple tasks are ready |
 | `gate_replay` | Whether the gate is replay-safe (default `true`); `false` = side effects |
-| `max_turns` | Per-task turn cap for builtin workers (overrides the worker's `max_turns`, then `TF_AGENT_MAX_TURNS`, then 32) |
+| `max_turns` | Per-task turn cap for builtin workers (overrides the worker's `max_turns`, then `TF_AGENT_MAX_TURNS`, then 32). Suggest 12-16 for write+commit+gate tasks; 6 Often too tight. |
 | `readonly` | `true` = investigation-only: the builtin harness rejects `write`/`edit`, the attempt counts done on a normal agent stop (no gate, no merge) |
 
 Replay contract: the `accept` command MUST be idempotent; declare
