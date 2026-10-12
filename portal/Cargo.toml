@@ -1,0 +1,27 @@
+[package]
+name = "opensme-portal"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.5", features = ["cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+feed-rs = "3.0.0"
+futures = "0.3.34"
+# Prometheus instrumentation (text exposition only — no protobuf/push)
+prometheus = { version = "0.14", default-features = false }
+
+[dev-dependencies]
+# SOTA test methods:
+# - tower "util" → in-process HTTP contract tests (router::oneshot, no sockets)
+# - proptest    → property-based testing of parsers (announcements/escape)
+# - serde_json/macros already in tree; mock AI upstream uses axum+tokio itself
+tower = { version = "0.4", features = ["util"] }
+proptest = "1"
+http-body-util = "0.1"
