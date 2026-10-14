@@ -127,3 +127,91 @@ World-Office honing slices shipped 1 merged + 1 recovered. Grounded findings:
 **Note on process:** agentflow is openspec-driven (`openspec/`), so the natural
 next step is to fold the accepted items here into OpenSpec change proposals
 (esp. §2, §3, §5) before implementation.
+
+## 6. openEduSuite-Kampagne (2026-10-14) — gemeldete af-Befunde
+
+Kontext: 5-Task-Kampagne (Repo openEduSuite-hrz), Worker saia + litellm-local,
+kubectl-Cluster-Gates. Betrieb als `setsid nohup af run … TF_STATE_DIR=…`.
+Alle Punkte mit Reproduktion. Laufende Tasks: cfix-dify-redeployable (saia),
+cfix-discourse-smtp (litellm-local).
+
+### 6.1 `af status` ignoriert `TF_STATE_DIR` und liest immer das Default-`state/` (Bug, reproduziert)
+
+**Repro.**
+```sh
+# Kampagne läuft in state-cfix-oct25 (run-state.json: cfix-*-Tasks 'running')
+TF_STATE_DIR=$PWD/state-cfix-oct25 af status     # → zeigt 'FC-1 Ready' (alte Kampagne aus ./state/)
+TF_STATE_DIR=$PWD/state-cfix-oct25 af status --json  # → {"FC-1":{...}} statt cfix-* 
+af status                                        # → ebenfalls 'FC-1 Ready'
+```
+`state-cfix-oct25/run-state.json` enthält nachweislich `cfix-dify-redeployable
+running` + `cfix-discourse-smtp running`; `status` zeigt sie nie. `af run`
+nutzt `env_or("TF_STATE_DIR","state")` (config.rs:526), `status` offenbar
+nicht — es liest still das Default-`state/`, und die Ausgabe nennt nicht,
+welches State-Dir konsultiert wurde. Stale Rückstände früherer Kampagnen in
+`./state/` erzeugen irreführende Zustände („Task ist ready", obwohl eine
+andere Kampagne läuft).
+
+**Erwartet:** `status`/`api` ehren dieselbe `TF_STATE_DIR`-Resolution wie `run`
+und drucken das gelesene State-Dir mit aus. Leeres/fehlendes run-state =
+expliziter Fehler („keine Kampagne in <dir>"), nicht stille leere Ausgabe.
+
+### 6.2 Scope/Config werden bei Retries nicht neu geladen → ein falsch deklarierter Scope verbrennt alle Versuche (Bug/Wart)
+
+**Repro.** Task `cfix-dify-redeployable` war mit zu engem `scope`
+(`k8s/opendesk-edu/…`) deklariert; der Worker korrekt editierte
+`k8s/openedusuite/deploy-dify-api.yaml` u.a. → Attempt 1 abgelehnt
+(„edited files out of scope", Arbeit nach `tf/<task>-rejected-<ts>` archiviert).
+Die automatische Retry-Runde lief **mit demselben, in-memory geladenen Scope**
+weiter — die Korrektur in `TF_TASKS_JSON` griff erst nach Prozess-Neustart
+(`af run` lädt Config nur einmal bei `load_cfg`, main.rs:133/config.rs:245),
+was die laufenden Agenten tötete.
+
+**Folgen:** (a) Ein schlecht deklarierter Scope kostet bis `max_attempts`
+komplette Round-Trips; (b) es gibt keinen Operator-Pfad, eine funktional
+fertige, aber scope-verletzende Arbeit zu übernehmen (Archiv-Branch liegt da,
+`af recover` nutzt dieselbe Config → würde erneut ablehnen); (c) Neustart
+wirft laufende Agent-Arbeit weg.
+
+**Vorschläge:**
+- Retries re-lesen die Task-Definition aus `TF_TASKS_JSON` (billig) ODER
+- `af recover --task` um `--scope-override` / `--accept-out-of-scope`
+  (Operator bestätigt absichtliche Abweichung) erweitern, damit aus einer
+  abgelehnten Runde adoptiert werden kann statt sie zu verwerfen.
+
+### 6.3 Orphaned agent processes wenn `af run` stirbt; kein Crash-Log, kein Recovery-Hinweis (Bug)
+
+**Repro.** Nach einem Werfer-Neustart (Config-Fix nötig, s.o.) blieben die
+vom vorherigen `af run` gespawnten `pi`-Agenten-Prozesse am Leben (weiterer
+Child-Bash, kein `af run`-Prozess mehr in der Baum), während
+`run-state.json` weiter `running/spawned` führte — die Arbeit wurde nie
+geerntet/committet. Kein Log zum Stopp-Grund, kein Hinweis, dass der
+Orchestrator fehlt.
+
+**Erwartet:** Beim Start `running/spawned`-Tasks, deren Agent-PID tot ist,
+als `interrupted` behandeln und den Attempt sauber neu starten (oder laut
+loggen); bei unerwartetem Loop-Ende eine Crash-Datei schreiben (Signal/Erlöse).
+
+### 6.4 Neustart-Semantik: direkter `kill` der Agents ist die einzige Option (Ergonomie)
+
+Es gibt kein `af stop`/`af restart`/`af resume`, das die laufenden Agents
+koordiniert parkt (Worktrees/Attempts behalten) statt hart zu killen. Mein
+`kill <af-pid>` + `xargs kill <pi-Agents>` war destruktiv; Worktree-Inhalt
+blieb, aber die laufende Agent-Rechnung ging verloren.
+
+**Vorschlag:** `af stop` (SIGTERM an Loop+Agents, Attempts als `interrupted`
+archivieren) + `af resume` (interrupted → weiter mit nächstem Versuch).
+
+### 6.5 `priority` ordnet die Dispatch-Reihenfolge nicht (Beobachtung)
+
+Bei 5 ready Tasks (2× `priority=1`: umr-sweep, openproject; 3× `priority=2`)
+startete die erste Welle die beiden `priority=2`-Tasks (dify, discourse);
+der p1-Task openproject (scope-disjunkt zu allen) blieb unbemerkt zurück.
+Entweder Sortierung nach `(priority, deps)` einführen oder im README klar
+sagen, dass `priority` nur Tore, nicht ordnet.
+
+### 6.6 Sonstiges (Bestätigt-Funktional)
+
+- Coole Mechanismen: rejected-Arbeit bleibt auf `tf/<task>-rejected-<ts>`
+  erhalten (kein Datenverlust); pacing-retry (15s) sauber geloggt; „no
+  archived branch to reuse" transparent.
