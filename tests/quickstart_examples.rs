@@ -36,10 +36,7 @@ const README_WORKERS_JSON: &str = r#"{ "defaults": { "accept_timeout_s": 600, "m
 /// Fresh, uniquely-named temp directory (one per call), emptied if a stale
 /// one exists. Unique across tests via pid.
 fn fresh_dir(label: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!(
-        "af-quickstart-{label}-{}",
-        std::process::id()
-    ));
+    let d = std::env::temp_dir().join(format!("af-quickstart-{label}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).expect("create unique temp dir");
     d
@@ -68,7 +65,10 @@ fn quickstart_examples_load_and_validate() {
     assert_eq!(cfg.tasks[0].id, "hello");
     assert_eq!(cfg.tasks[0].title, "Add a hello module");
     assert_eq!(cfg.tasks[0].scope, vec!["src/**"]);
-    assert_eq!(cfg.tasks[0].accept, Some("test -f src/hello.rs".to_string()));
+    assert_eq!(
+        cfg.tasks[0].accept,
+        Some("test -f src/hello.rs".to_string())
+    );
     assert_eq!(
         cfg.tasks[0].acceptance_prose,
         Some("src/hello.rs exists and declares pub fn hello().".to_string())
@@ -87,10 +87,7 @@ fn quickstart_examples_load_and_validate() {
         cfg.workers[0].api_base,
         Some("https://api.z.ai/api/paas/v4".to_string())
     );
-    assert_eq!(
-        cfg.workers[0].api_key_env,
-        Some("ZAI_API_KEY".to_string())
-    );
+    assert_eq!(cfg.workers[0].api_key_env, Some("ZAI_API_KEY".to_string()));
 
     // The README's `defaults` block is honoured verbatim.
     assert_eq!(cfg.defaults.accept_timeout_s, 600);

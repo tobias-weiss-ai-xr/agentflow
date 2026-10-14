@@ -30,7 +30,7 @@
 //! The env-reading tests (`Settings::from_env`, `env_lookup_pairs`)
 //! document their own race avoidance in place.
 
-use agentflow::config as config;
+use agentflow::config;
 use agentflow::config::{detect_cycle, load, load_repos, parse_gate_env, Priority};
 use agentflow::router::Router;
 use agentflow::run::pick_worker;

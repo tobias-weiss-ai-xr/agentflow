@@ -320,7 +320,10 @@ mod tests {
         // Valid receipt with tokens works.
         assert_eq!(
             attempt_expense(None, Some(Basis::Priced(2.0)), Some(500_000), &all),
-            Some(Expense::Usd { micros: 1_000_000, estimated: true })
+            Some(Expense::Usd {
+                micros: 1_000_000,
+                estimated: true
+            })
         );
     }
 
@@ -337,7 +340,11 @@ mod tests {
         let all_neg = [Basis::Sized(-1.0), Basis::Sized(-8.0)];
         assert_eq!(size_ratio(400.0, &all_neg), None);
         // Mix of unusable values.
-        let all_mixed = [Basis::Sized(0.0), Basis::Sized(f64::NAN), Basis::Sized(-1.0)];
+        let all_mixed = [
+            Basis::Sized(0.0),
+            Basis::Sized(f64::NAN),
+            Basis::Sized(-1.0),
+        ];
         assert_eq!(size_ratio(400.0, &all_mixed), None);
     }
 
@@ -408,7 +415,12 @@ mod tests {
         );
         // Infinite price → unknown.
         assert_eq!(
-            attempt_expense(None, Some(Basis::Priced(f64::INFINITY)), Some(500_000), &all),
+            attempt_expense(
+                None,
+                Some(Basis::Priced(f64::INFINITY)),
+                Some(500_000),
+                &all
+            ),
             None
         );
         // An unusable price with NO tokens is also unknown (and was already so

@@ -351,10 +351,7 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
             ));
         }
         if w.max_turns == Some(0) {
-            return Err(format!(
-                "worker \"{}\": max_turns must be >= 1",
-                w.name
-            ));
+            return Err(format!("worker \"{}\": max_turns must be >= 1", w.name));
         }
     }
 
@@ -398,7 +395,9 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
     for t in tasks {
         if !t.scope.is_empty()
             && !t.scope.iter().any(|s| s.starts_with("**"))
-            && t.accept.as_deref().is_some_and(|a| a.contains("--workspace"))
+            && t.accept
+                .as_deref()
+                .is_some_and(|a| a.contains("--workspace"))
         {
             warnings.push(format!(
                 "task '{}': accept runs a --workspace gate while scope is narrow ({}) — out-of-scope diagnostics can fail the gate forever; gate the touched crates instead or widen scope to **",
@@ -719,8 +718,7 @@ impl Config {
 /// Load a workers file from an in-memory JSON string. Test seam + programmatic
 /// use; same validation as the file path.
 pub fn load_workers_str(json: &str) -> Result<Config, String> {
-    let wf: WorkersFile =
-        serde_json::from_str(json).map_err(|e| format!("parse workers: {e}"))?;
+    let wf: WorkersFile = serde_json::from_str(json).map_err(|e| format!("parse workers: {e}"))?;
     let warnings = validate(&[], &wf.workers)?;
     Ok(Config {
         tasks: Vec::new(),
@@ -892,7 +890,9 @@ mod tests {
         );
         let c = load(&d.join("tasks.json"), &d.join("workers.json")).unwrap();
         assert!(
-            c.warnings.iter().any(|w| w.contains("task 'A'") && w.contains("--workspace gate")),
+            c.warnings
+                .iter()
+                .any(|w| w.contains("task 'A'") && w.contains("--workspace gate")),
             "narrow scope + workspace gate should warn: {:?}",
             c.warnings
         );

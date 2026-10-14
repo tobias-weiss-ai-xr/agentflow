@@ -143,10 +143,11 @@ fn tool_edit(wt: &Path, path: &str, old: &str, new: &str) -> Result<String, Stri
         return Err(format!("edit {path}: old string not found"));
     }
     if n > 1 {
-        return Err(format!("edit {path}: old string not unique ({n} occurrences)"));
+        return Err(format!(
+            "edit {path}: old string not unique ({n} occurrences)"
+        ));
     }
-    std::fs::write(&full, s.replacen(old, new, 1))
-        .map_err(|e| format!("write {path}: {e}"))?;
+    std::fs::write(&full, s.replacen(old, new, 1)).map_err(|e| format!("write {path}: {e}"))?;
     Ok(format!("edited {path}"))
 }
 
@@ -169,7 +170,9 @@ fn tool_bash(
     let body = truncate_chars(&out.combined(), TOOL_OUTPUT_MAX);
     Ok(format!(
         "exit {}\n{}",
-        out.code.map(|c| c.to_string()).unwrap_or_else(|| "?".into()),
+        out.code
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "?".into()),
         body
     ))
 }
@@ -221,7 +224,10 @@ fn scope_probe(wt: &Path, scope: &[String], log: &dyn Fn(&str)) -> Result<(), St
     let violations = crate::execute::scope_violations(&paths, scope);
     if !violations.is_empty() {
         let list = violations.join(", ");
-        log(&format!("scope-probe: bash created out-of-scope file(s): {}", list));
+        log(&format!(
+            "scope-probe: bash created out-of-scope file(s): {}",
+            list
+        ));
         return Err(format!(
             "bash created out-of-scope files: {} — revert/delete and retry (allowed: {})",
             list,
@@ -280,7 +286,8 @@ fn run_tool(
     };
     let result = match name {
         "bash" => {
-            let cmd = field("command").filter(|c| !c.is_empty())
+            let cmd = field("command")
+                .filter(|c| !c.is_empty())
                 .ok_or_else(|| "bash: missing command".to_string())?;
             let out = tool_bash(wt, &cmd, env, env_allow)?;
             if let Err(e) = scope_probe(wt, scope, log) {
@@ -309,13 +316,15 @@ fn run_tool(
         },
         other => Err(format!("unknown tool: {other}")),
     };
-    result.map(|s| {
-        log(&format!("  -> {s}"));
-        s
-    }).map_err(|e| {
-        log(&format!("  -> ERROR {e}"));
-        e
-    })
+    result
+        .map(|s| {
+            log(&format!("  -> {s}"));
+            s
+        })
+        .map_err(|e| {
+            log(&format!("  -> ERROR {e}"));
+            e
+        })
 }
 
 /// Tool schemas sent as `tools` on every request (static — build once).
@@ -370,7 +379,10 @@ fn chat_once(
                 .read_to_string(&mut text)
                 .map_err(|e| format!("provider read: {e}"))?;
             if !(200..300).contains(&code) {
-                return Err(format!("provider http {code}: {}", truncate_chars(&text, 512)));
+                return Err(format!(
+                    "provider http {code}: {}",
+                    truncate_chars(&text, 512)
+                ));
             }
             serde_json::from_str(&text)
                 .map_err(|e| format!("provider json: {e} (head: {})", truncate_chars(&text, 512)))
@@ -447,7 +459,11 @@ pub fn run(
     let deadline = Instant::now() + Duration::from_secs(st.agent_timeout_s);
     let url = format!(
         "{}/chat/completions",
-        worker.api_base.as_deref().unwrap_or("").trim_end_matches('/')
+        worker
+            .api_base
+            .as_deref()
+            .unwrap_or("")
+            .trim_end_matches('/')
     );
     let key = worker
         .api_key_env
@@ -467,13 +483,18 @@ pub fn run(
     let mut final_text = String::new();
 
     let (env_pairs, env_allow) = crate::execute::agent_env(worker, &|k| std::env::var(k).ok());
-    let env_pairs: Vec<(String, String)> =
-        env_pairs.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let env_pairs: Vec<(String, String)> = env_pairs
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
 
     // Loop yields (stop, error) on every exit; no dead sentinel init needed.
     let (stop, error) = loop {
         if turns >= max_turns {
-            break (Stop::TurnCap, Some(format!("harness: turn cap {max_turns} reached")));
+            break (
+                Stop::TurnCap,
+                Some(format!("harness: turn cap {max_turns} reached")),
+            );
         }
         // Deadline is enforced at turn boundaries; a single tool call may
         // overshoot by up to TOOL_TIMEOUT.
@@ -481,7 +502,10 @@ pub fn run(
         if left.is_zero() {
             break (
                 Stop::Timeout,
-                Some(format!("harness: exceeded agent_timeout_s ({}s)", st.agent_timeout_s)),
+                Some(format!(
+                    "harness: exceeded agent_timeout_s ({}s)",
+                    st.agent_timeout_s
+                )),
             );
         }
         let agent = ureq::Agent::config_builder()
@@ -508,10 +532,7 @@ pub fn run(
                 break (Stop::ProviderError, Some(format!("harness: {e}")));
             }
         };
-        if let Some(u) = resp
-            .pointer("/usage/total_tokens")
-            .and_then(|t| t.as_u64())
-        {
+        if let Some(u) = resp.pointer("/usage/total_tokens").and_then(|t| t.as_u64()) {
             total_tokens = total_tokens.saturating_add(u);
         }
         let (msg, calls) = match parse_message(&resp) {
@@ -533,14 +554,18 @@ pub fn run(
                     Some("harness: provider empty response (no text, no tool_calls)".to_string()),
                 );
             }
-            log(&format!("harness: done after {turns} turn(s), {total_tokens} tokens"));
+            log(&format!(
+                "harness: done after {turns} turn(s), {total_tokens} tokens"
+            ));
             break (Stop::Normal, None);
         }
         messages.push(msg);
         for call in &calls {
             let (id, name, args) = tool_call_fields(call);
             log(&format!("tool {name} {}", truncate_chars(&args, 512)));
-            let tool_result = run_tool(&name, &args, wt, &env_pairs, &env_allow, task_scope, readonly, log);
+            let tool_result = run_tool(
+                &name, &args, wt, &env_pairs, &env_allow, task_scope, readonly, log,
+            );
             let content = match tool_result {
                 Ok(s) => s,
                 Err(e) => format!("ERROR: {e}"),
@@ -553,7 +578,13 @@ pub fn run(
         }
     };
 
-    Output { final_text, total_tokens, turns, stop, error }
+    Output {
+        final_text,
+        total_tokens,
+        turns,
+        stop,
+        error,
+    }
 }
 
 #[cfg(test)]
@@ -600,10 +631,7 @@ mod tests {
             resolve_inside(&d, "src/a.txt").unwrap(),
             d.join("src").join("a.txt")
         );
-        assert_eq!(
-            resolve_inside(&d, "a/../b.txt").unwrap(),
-            d.join("b.txt")
-        );
+        assert_eq!(resolve_inside(&d, "a/../b.txt").unwrap(), d.join("b.txt"));
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -611,9 +639,15 @@ mod tests {
     fn write_creates_file_and_edit_replaces_first_unique() {
         let d = wt();
         tool_write(&d, "f.txt", "alpha beta alpha").unwrap();
-        assert_eq!(std::fs::read_to_string(d.join("f.txt")).unwrap(), "alpha beta alpha");
+        assert_eq!(
+            std::fs::read_to_string(d.join("f.txt")).unwrap(),
+            "alpha beta alpha"
+        );
         tool_edit(&d, "f.txt", "beta", "BETA").unwrap();
-        assert_eq!(std::fs::read_to_string(d.join("f.txt")).unwrap(), "alpha BETA alpha");
+        assert_eq!(
+            std::fs::read_to_string(d.join("f.txt")).unwrap(),
+            "alpha BETA alpha"
+        );
         // not unique now
         let err = tool_edit(&d, "f.txt", "alpha", "x").unwrap_err();
         assert!(err.contains("not unique"), "{err}");
@@ -633,7 +667,17 @@ mod tests {
         assert!(err.contains("unknown tool"), "{err}");
         let err = run_tool("edit", "not json", &d, &[], &[], &[], false, &log).unwrap_err();
         assert!(!err.is_empty(), "{err}");
-        let err = run_tool("write", r#"{"path":"x.txt","content":123}"#, &d, &[], &[], &[], false, &log).unwrap_err();
+        let err = run_tool(
+            "write",
+            r#"{"path":"x.txt","content":123}"#,
+            &d,
+            &[],
+            &[],
+            &[],
+            false,
+            &log,
+        )
+        .unwrap_err();
         assert!(!err.is_empty(), "{err}");
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -650,8 +694,14 @@ mod tests {
         let err = run_tool(
             "write",
             r#"{"path":"README.md","content":"x"}"#,
-            &d, &[], &[], &scope, false, &log,
-        ).unwrap_err();
+            &d,
+            &[],
+            &[],
+            &scope,
+            false,
+            &log,
+        )
+        .unwrap_err();
         assert!(err.contains("outside task scope"), "{err}");
         assert!(err.contains("src/**"), "{err}");
         assert!(!d.join("README.md").exists());
@@ -659,37 +709,67 @@ mod tests {
         let out = run_tool(
             "write",
             r#"{"path":"src/lib.rs","content":"fn x() {}"}"#,
-            &d, &[], &[], &scope, false, &log,
-        ).unwrap();
+            &d,
+            &[],
+            &[],
+            &scope,
+            false,
+            &log,
+        )
+        .unwrap();
         assert!(out.starts_with("wrote"), "{out}");
         // Edit out of scope: rejected.
         let err = run_tool(
             "edit",
             r#"{"path":"README.md","old":"a","new":"b"}"#,
-            &d, &[], &[], &scope, false, &log,
-        ).unwrap_err();
+            &d,
+            &[],
+            &[],
+            &scope,
+            false,
+            &log,
+        )
+        .unwrap_err();
         assert!(err.contains("outside task scope"), "{err}");
         // Readonly: every write/edit rejected regardless of scope.
         let scope_empty: Vec<String> = Vec::new();
         let err = run_tool(
             "write",
             r#"{"path":"any.txt","content":"x"}"#,
-            &d, &[], &[], &scope_empty, true, &log,
-        ).unwrap_err();
+            &d,
+            &[],
+            &[],
+            &scope_empty,
+            true,
+            &log,
+        )
+        .unwrap_err();
         assert!(err.contains("readonly"), "{err}");
         assert!(!d.join("any.txt").exists());
         let err = run_tool(
             "edit",
             r#"{"path":"src/lib.rs","old":"a","new":"b"}"#,
-            &d, &[], &[], &scope, true, &log,
-        ).unwrap_err();
+            &d,
+            &[],
+            &[],
+            &scope,
+            true,
+            &log,
+        )
+        .unwrap_err();
         assert!(err.contains("readonly"), "{err}");
         // Empty scope means any file is allowed.
         let out = run_tool(
             "write",
             r#"{"path":"notes.md","content":"x"}"#,
-            &d, &[], &[], &scope_empty, false, &log,
-        ).unwrap();
+            &d,
+            &[],
+            &[],
+            &scope_empty,
+            false,
+            &log,
+        )
+        .unwrap();
         assert!(out.starts_with("wrote"), "{out}");
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -701,7 +781,10 @@ mod tests {
         while s.chars().count() <= TOOL_OUTPUT_MAX {
             s.push('é');
         }
-        assert_eq!(truncate_chars(&s, TOOL_OUTPUT_MAX).chars().count(), TOOL_OUTPUT_MAX);
+        assert_eq!(
+            truncate_chars(&s, TOOL_OUTPUT_MAX).chars().count(),
+            TOOL_OUTPUT_MAX
+        );
     }
 
     #[test]
@@ -743,7 +826,8 @@ mod tests {
         assert!(args.contains("ls"));
         assert!(msg.get("tool_calls").is_some());
 
-        let empty = parse_message(&serde_json::json!({"choices":[{"message":{"content":"hi"}}]})).unwrap();
+        let empty =
+            parse_message(&serde_json::json!({"choices":[{"message":{"content":"hi"}}]})).unwrap();
         assert!(empty.1.is_empty());
     }
 
@@ -770,19 +854,22 @@ mod tests {
             .arg("init")
             .arg("-q")
             .current_dir(&d)
-            .status().ok();
+            .status()
+            .ok();
         std::process::Command::new("git")
             .arg("config")
             .arg("user.email")
             .arg("t@t.t")
             .current_dir(&d)
-            .status().ok();
+            .status()
+            .ok();
         std::process::Command::new("git")
             .arg("config")
             .arg("user.name")
             .arg("t")
             .current_dir(&d)
-            .status().ok();
+            .status()
+            .ok();
         std::fs::create_dir_all(d.join("src")).unwrap();
         std::fs::write(d.join("src/main.rs"), "fn main(){}").unwrap();
         std::fs::write(d.join("out.txt"), "bad").unwrap();
@@ -800,14 +887,22 @@ mod tests {
             .arg("init")
             .arg("-q")
             .current_dir(&d)
-            .status().ok();
+            .status()
+            .ok();
         std::process::Command::new("git")
             .arg("config")
             .arg("user.email")
             .arg("t@t.t")
             .current_dir(&d)
-            .status().ok();
-        std::process::Command::new("git").current_dir(&d).arg("config").arg("user.name").arg("t").status().ok();
+            .status()
+            .ok();
+        std::process::Command::new("git")
+            .current_dir(&d)
+            .arg("config")
+            .arg("user.name")
+            .arg("t")
+            .status()
+            .ok();
         std::fs::create_dir_all(d.join("src")).unwrap();
         std::fs::write(d.join("src/main.rs"), "fn main(){}").unwrap();
         scope_probe(&d, &["src/**".to_string()], &|_| {}).expect("src/main.rs should be in scope");
@@ -821,7 +916,8 @@ mod tests {
             .arg("init")
             .arg("-q")
             .current_dir(&d)
-            .status().ok();
+            .status()
+            .ok();
         std::fs::write(d.join("anywhere.txt"), "ok").unwrap();
         scope_probe(&d, &[], &|_| {}).expect("empty scope allows all");
         std::fs::remove_dir_all(&d).ok();

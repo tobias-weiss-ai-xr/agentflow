@@ -177,7 +177,9 @@ fn escalate_turns(
         .filter_map(|rest| rest.split_whitespace().next())
         .filter_map(|n| n.parse::<u32>().ok())
         .max();
-    reached.map(|cap| cap.saturating_mul(2).min(TURN_CAP_CEILING)).or(base)
+    reached
+        .map(|cap| cap.saturating_mul(2).min(TURN_CAP_CEILING))
+        .or(base)
 }
 
 /// Effect-sandwich journal (pi-durable): persist one attempt-phase boundary

@@ -76,8 +76,7 @@ impl StubLlm {
     fn spawn(responses: Vec<(u16, String)>) -> StubLlm {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
-        let queue: Arc<Mutex<VecDeque<(u16, String)>>> =
-            Arc::new(Mutex::new(responses.into()));
+        let queue: Arc<Mutex<VecDeque<(u16, String)>>> = Arc::new(Mutex::new(responses.into()));
         let bodies: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = bodies.clone();
         std::thread::spawn(move || {
@@ -87,7 +86,11 @@ impl StubLlm {
                 let (code, body) = next.unwrap_or((200, "{}".to_string()));
                 let req_body = drain_request(&mut s);
                 sink.lock().unwrap().push(req_body);
-                let reason = if code == 200 { "OK" } else { "Internal Server Error" };
+                let reason = if code == 200 {
+                    "OK"
+                } else {
+                    "Internal Server Error"
+                };
                 let resp = format!(
                     "HTTP/1.1 {code} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
@@ -96,7 +99,10 @@ impl StubLlm {
                 let _ = s.flush();
             }
         });
-        StubLlm { url: format!("http://{addr}/v1"), bodies }
+        StubLlm {
+            url: format!("http://{addr}/v1"),
+            bodies,
+        }
     }
 }
 
@@ -223,7 +229,10 @@ fn native_harness_happy_path_merges() {
         bash_turn("echo work > A.txt && git add A.txt && git commit -m w"),
         final_turn("done"),
     ]);
-    let f = fixture(&task_json(&gate_cmd("A.txt")), &native_worker_json(&stub.url, 1, 8));
+    let f = fixture(
+        &task_json(&gate_cmd("A.txt")),
+        &native_worker_json(&stub.url, 1, 8),
+    );
     let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
     assert_eq!(code, 0, "run should exit 0 (all done)");
     // Regression net (found in production): turn 1's request MUST be
@@ -234,10 +243,23 @@ fn native_harness_happy_path_merges() {
     let msgs = req["messages"].as_array().expect("messages array");
     assert_eq!(msgs.len(), 2, "turn 1 = system + user");
     assert_eq!(msgs[0]["role"], "system");
-    assert!(!msgs[0]["content"].as_str().unwrap_or("").is_empty(), "system prompt non-empty");
+    assert!(
+        !msgs[0]["content"].as_str().unwrap_or("").is_empty(),
+        "system prompt non-empty"
+    );
     assert_eq!(msgs[1]["role"], "user");
-    assert!(msgs[1]["content"].as_str().unwrap_or("").contains("touch a file"), "task prompt is the user message");
-    assert_eq!(req["max_tokens"].as_u64(), Some(32768), "max_tokens must be sent — strict gateways reject requests without it");
+    assert!(
+        msgs[1]["content"]
+            .as_str()
+            .unwrap_or("")
+            .contains("touch a file"),
+        "task prompt is the user message"
+    );
+    assert_eq!(
+        req["max_tokens"].as_u64(),
+        Some(32768),
+        "max_tokens must be sent — strict gateways reject requests without it"
+    );
     let st = Store::new(f.st.state_dir.clone()).load();
     assert_eq!(st["A"].state, TaskState::Done);
     assert!(f.repo.join("A.txt").exists(), "merged to main");
@@ -256,14 +278,21 @@ fn native_harness_turn_cap_fails_and_archives() {
     // the run loop reports the deadlock exit code 2 (same as e2e.rs's
     // agent_failure_fails_task), NOT 0.
     let stub = StubLlm::spawn((0..8).map(|_| bash_turn("echo hi")).collect());
-    let f = fixture(&task_json(&gate_cmd("A.txt")), &native_worker_json(&stub.url, 1, 2));
+    let f = fixture(
+        &task_json(&gate_cmd("A.txt")),
+        &native_worker_json(&stub.url, 1, 2),
+    );
     let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
     assert_eq!(code, 2, "task terminal (failed) → deadlock exit 2");
     let st = Store::new(f.st.state_dir.clone()).load();
     assert_eq!(st["A"].state, TaskState::Failed);
     let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
     let r = receipts.iter().find(|r| r.task == "A").expect("receipt");
-    assert!(r.error.as_deref().unwrap_or("").contains("turn cap 2"), "{:?}", r.error);
+    assert!(
+        r.error.as_deref().unwrap_or("").contains("turn cap 2"),
+        "{:?}",
+        r.error
+    );
     assert_eq!(r.tokens, Some(30), "turns 1+2 paid 15 each before the cap");
 }
 
@@ -273,7 +302,10 @@ fn native_harness_provider_error_fails_with_reason() {
     // Outcome::Failed with the precise reason on the receipt; no tokens.
     // max_attempts=1 → task terminal-Failed → deadlock exit 2.
     let stub = StubLlm::spawn(vec![(500, r#"{"error":"boom"}"#.to_string())]);
-    let f = fixture(&task_json(&gate_cmd("A.txt")), &native_worker_json(&stub.url, 1, 8));
+    let f = fixture(
+        &task_json(&gate_cmd("A.txt")),
+        &native_worker_json(&stub.url, 1, 8),
+    );
     let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
     assert_eq!(code, 2, "task terminal (failed) → deadlock exit 2");
     let st = Store::new(f.st.state_dir.clone()).load();

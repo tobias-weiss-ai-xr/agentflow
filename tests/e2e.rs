@@ -341,13 +341,19 @@ fn committed_work_survives_agent_transport_crash() {
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_EXIT_AFTER_COMMIT",
     );
     let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
-    assert_eq!(code, 0, "committed work judged + merged despite non-zero exit");
+    assert_eq!(
+        code, 0,
+        "committed work judged + merged despite non-zero exit"
+    );
     let st = Store::new(f.st.state_dir.clone()).load();
     assert_eq!(st["A"].state, TaskState::Done);
     // The agent's committed file reached main: merged, not archived.
     assert!(f.repo.join("DONE.txt").exists(), "work merged to main");
     // ...and stays there after the merge commit, with no rejected branch left.
-    assert!(archived_refs(&f.repo).is_empty(), "no rejected branch: work merged");
+    assert!(
+        archived_refs(&f.repo).is_empty(),
+        "no rejected branch: work merged"
+    );
     let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
     assert!(receipts.iter().any(|r| r.outcome == "merged"));
 }
@@ -1905,7 +1911,10 @@ fn a_stalled_attempt_merges_its_committed_work_when_gate_passes() {
     // that work: the non-zero exit is transport noise, the gate is the
     // contract, so the campaign MERGES it instead of archiving it as failed.
     let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
-    assert_eq!(code, 0, "committed work + green gate ⇒ merged, campaign done");
+    assert_eq!(
+        code, 0,
+        "committed work + green gate ⇒ merged, campaign done"
+    );
     let st = Store::new(f.st.state_dir.clone()).load();
     assert_eq!(st["A"].state, TaskState::Done);
     assert!(f.repo.join("DONE.txt").exists(), "work merged to main");
