@@ -1227,6 +1227,7 @@ mod tests {
     }
 
     #[test]
+    // spec: lifecycle/turn-cap-escalation-on-retry#non-cap-retries-keep-the-configured-cap
     fn escalate_turns_no_prior_cap_failure_passes_base_through() {
         let rs = vec![
             receipt_of("A", 1, "failed", Some("agent exited NonZero (code 7)")),
@@ -1237,6 +1238,9 @@ mod tests {
     }
 
     #[test]
+    // spec: lifecycle/turn-cap-escalation-on-retry
+    // spec: lifecycle/turn-cap-escalation-on-retry#retry-after-turn-cap-death-doubles-the-budget
+    // spec: lifecycle/turn-cap-escalation-on-retry#escalation-survives-resume
     fn escalate_turns_doubles_after_cap_death() {
         let rs = vec![receipt_of(
             "A",
@@ -1250,6 +1254,7 @@ mod tests {
     }
 
     #[test]
+    // spec: lifecycle/turn-cap-escalation-on-retry#escalation-is-bounded
     fn escalate_turns_takes_the_max_and_clamps_at_ceiling() {
         let rs = vec![
             receipt_of("A", 1, "failed", Some("harness: turn cap 12 reached")),

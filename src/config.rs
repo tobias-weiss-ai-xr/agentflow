@@ -821,6 +821,7 @@ mod tests {
     }
 
     #[test]
+    // spec: config/per-task-turn-cap-and-readonly-task-fields#readonly-parses-and-validates
     fn readonly_with_accept_rejected() {
         let d = tmpdir("cfg-readonly");
         wt(
@@ -838,6 +839,8 @@ mod tests {
     }
 
     #[test]
+    // spec: config/per-task-turn-cap-and-readonly-task-fields
+    // spec: config/per-task-turn-cap-and-readonly-task-fields#per-task-max-turns-parses-and-validates
     fn task_max_turns_zero_rejected() {
         let d = tmpdir("cfg-maxturns");
         wt(
@@ -874,6 +877,9 @@ mod tests {
     }
 
     #[test]
+    // spec: config/gate-scope-mismatch-warning-at-validate-time
+    // spec: config/gate-scope-mismatch-warning-at-validate-time#narrow-scope-with-workspace-gate-warns
+    // spec: config/gate-scope-mismatch-warning-at-validate-time#unscoped-tasks-never-warn
     fn gate_scope_mismatch_warns_on_workspace_gate_with_narrow_scope() {
         let d = tmpdir("cfg-mismatch");
         wt(

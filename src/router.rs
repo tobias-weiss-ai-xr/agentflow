@@ -221,6 +221,7 @@ mod tests {
     }
 
     #[test]
+    // spec: scheduling/ucb1-worker-selection#a-single-loss-is-not-scored-zero
     fn laplace_prior_changes_small_n_ordering() {
         // Pins the Laplace-smoothed mean (wins+1)/(n+2), not the raw rate.
         // a: 3/5 (above the midpoint → prior pulls it DOWN: 4/7 ≈ 0.571 raw 0.6)

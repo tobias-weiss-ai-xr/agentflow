@@ -683,6 +683,10 @@ mod tests {
     }
 
     #[test]
+    // spec: lifecycle/write-time-scope-guard-for-builtin-workers
+    // spec: lifecycle/write-time-scope-guard-for-builtin-workers#out-of-scope-write-rejected-at-call-time
+    // spec: lifecycle/write-time-scope-guard-for-builtin-workers#in-scope-write-allowed
+    // spec: lifecycle/readonly-attempt-completion#readonly-write-rejected-by-the-harness
     fn write_guard_flags_out_of_scope_and_readonly() {
         let d = wt();
         std::fs::create_dir_all(d.join("src")).unwrap();

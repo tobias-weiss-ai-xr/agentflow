@@ -121,6 +121,21 @@ fn bash_turn(command: &str) -> (u16, String) {
     )
 }
 
+/// One canned assistant turn that calls the `write` tool.
+fn write_turn(path: &str, content: &str) -> (u16, String) {
+    let args = serde_json::json!({ "path": path, "content": content }).to_string();
+    (
+        200,
+        serde_json::json!({
+            "choices": [{"message": {"role": "assistant", "content": null,
+                "tool_calls": [{"id": "c1", "type": "function",
+                    "function": {"name": "write", "arguments": args}}]}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        })
+        .to_string(),
+    )
+}
+
 /// One canned final assistant turn (text, no tool calls).
 fn final_turn(text: &str) -> (u16, String) {
     (
@@ -315,4 +330,45 @@ fn native_harness_provider_error_fails_with_reason() {
     let err = r.error.as_deref().unwrap_or("");
     assert!(err.contains("harness: provider http 500"), "{err}");
     assert_eq!(r.tokens, Some(0), "no paid round-trip succeeded");
+}
+
+#[test]
+// spec: lifecycle/readonly-attempt-completion
+// spec: lifecycle/readonly-attempt-completion#readonly-attempt-completes-without-gate-or-merge
+fn readonly_attempt_completes_without_gate_or_merge() {
+    // Readonly: the agent's normal stop IS the deliverable. Turn 1 uses the
+    // write TOOL against a path outside any meaningful scope (rejected by the
+    // harness guard, model sees the error), turn 2 stops normally. The task
+    // completes WITHOUT a gate (none declared — readonly forbids one) and
+    // WITHOUT a merge: nothing the agent produced reaches main.
+    let stub = StubLlm::spawn(vec![
+        write_turn("A.txt", "work"),
+        final_turn("investigation done"),
+    ]);
+    let tasks = r#"{ "tasks": [ { "id": "A", "title": "look around", "readonly": true } ] }"#;
+    let f = fixture(tasks, &native_worker_json(&stub.url, 1, 8));
+    let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
+    assert_eq!(code, 0, "readonly task with a normal stop → done");
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Done);
+    assert!(!f.repo.join("A.txt").exists(), "no merge: main untouched");
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    let r = receipts.iter().find(|r| r.task == "A").expect("receipt");
+    assert_eq!(
+        r.outcome, "merged",
+        "readonly done is recorded as the merged outcome"
+    );
+    // The harness fed the write rejection back to the model as the tool
+    // result: turn 2's request contains the readonly error text.
+    let bodies = stub.bodies.lock().unwrap();
+    assert!(
+        bodies.len() >= 2,
+        "model saw the rejection and continued: {:?}",
+        bodies.len()
+    );
+    assert!(
+        bodies[1].contains("readonly"),
+        "rejection text fed back: {}",
+        bodies[1]
+    );
 }

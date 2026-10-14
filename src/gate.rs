@@ -74,6 +74,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    // spec: lifecycle/gate-and-agent-tool-shell-selection
     fn gate_passes_on_exit_zero() {
         let out = run_accept("exit 0", Path::new("."), &[], Duration::from_secs(5), true);
         assert!(out.passed());
@@ -81,6 +82,8 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    // spec: lifecycle/gate-and-agent-tool-shell-selection
+    // spec: lifecycle/gate-and-agent-tool-shell-selection#bash-idiom-gate-passes-on-windows-with-git-bash
     fn windows_gate_runs_posix_shell_when_gitbash_present() {
         // git-bash is on the dev host's PATH: shell() must report sh so that
         // POSIX-authored gates work (the same gate died under cmd /C with

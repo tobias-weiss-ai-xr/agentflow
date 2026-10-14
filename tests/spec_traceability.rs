@@ -52,8 +52,13 @@ const UNMAPPED: &[(&str, &str)] = &[
 /// allowlist capped at 3 entries — never a way to paper over a scenario
 /// that has an obvious test.
 const UNMAPPED_SCENARIOS: &[(&str, &str)] = &[
-    // (currently empty: every scenario in openspec/specs has at least
-    //  one referencing test)
+    // Windows-only code path: `shell()` reads PATH at runtime and falls back
+    // to `cmd /C` only when no POSIX sh is found — a state that cannot be
+    // reproduced on the Unix dev/CI hosts (sh is always present there).
+    (
+        "lifecycle/gate-and-agent-tool-shell-selection#no-posix-sh-falls-back-to-cmd",
+        "Windows-only fallback; no POSIX-host repro",
+    ),
 ];
 
 /// One `### Requirement:` heading parsed from a spec file.
