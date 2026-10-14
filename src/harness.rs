@@ -269,6 +269,7 @@ fn guard_path(wt: &Path, path: &str, scope: &[String], readonly: bool) -> Result
 }
 
 /// Dispatch one tool call to a fully resolved, scope-guarded path.
+#[allow(clippy::too_many_arguments)]
 fn run_tool(
     name: &str,
     args: &str,
@@ -445,6 +446,9 @@ fn tool_call_fields(call: &Value) -> (String, String, String) {
 /// Run the full agent loop for one attempt. Logs every round-trip and tool
 /// call through `log` (the attempt log). Tool errors feed back to the model
 /// as content; only turn-cap / deadline / provider errors stop the loop.
+// ponytail: 8 args are the resolved task context; a params struct would
+// only move the call site. Revisit if a 9th ever lands.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     worker: &Worker,
     prompt: &str,
@@ -793,8 +797,10 @@ mod tests {
 
     #[test]
     fn turn_cap_resolution_prefers_task_then_worker_then_env_then_default() {
-        let mut w = Worker::default();
-        w.max_turns = Some(7);
+        let mut w = Worker {
+            max_turns: Some(7),
+            ..Worker::default()
+        };
         let mut st = Settings::from_env();
         st.agent_max_turns = 9;
         assert_eq!(effective_max_turns(&w, &st, Some(3)), 3);
