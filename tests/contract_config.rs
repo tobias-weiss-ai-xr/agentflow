@@ -1118,3 +1118,68 @@ fn cli_worker_max_turns_is_optional_and_parsed() {
     .unwrap();
     assert_eq!(cfg.workers[0].max_turns, Some(7));
 }
+
+/// Per-task `max_turns` (spec: config/per-task-turn-cap-and-readonly-task-fields):
+/// the field sits on the TASK, not the worker; `max_turns: 12` loads as
+/// `Some(12)` and an invalid `max_turns: 0` is a hard load error naming the
+/// task. Absent defaults to `None` (no per-task override).
+// spec: config/per-task-turn-cap-and-readonly-task-fields#per-task-max-turns-parses-and-validates
+#[test]
+fn per_task_max_turns_parses_and_validates() {
+    let d = fresh_dir("task-maxturns-ok");
+    let (tasks, workers) = write_config(
+        &d,
+        r#"{ "tasks": [{"id":"A","title":"x","max_turns":12}] }"#,
+        ONE_WORKER,
+    );
+    let cfg = load(&tasks, &workers).expect("task max_turns:12 loads");
+    assert_eq!(cfg.by_id["A"].max_turns, Some(12));
+
+    let d2 = fresh_dir("task-maxturns-zero");
+    let (t2, w2) = write_config(
+        &d2,
+        r#"{ "tasks": [{"id":"A","title":"x","max_turns":0}] }"#,
+        ONE_WORKER,
+    );
+    let err = load(&t2, &w2).unwrap_err();
+    assert!(err.contains("A") && err.contains("max_turns"), "naming the task: {err}");
+
+    let d3 = fresh_dir("task-maxturns-absent");
+    let (t3, w3) = write_config(&d3, ONE_TASK, ONE_WORKER);
+    let cfg3 = load(&t3, &w3).expect("no per-task max_turns loads");
+    assert_eq!(cfg3.by_id["A"].max_turns, None);
+}
+
+/// Per-task `readonly` (spec: config/per-task-turn-cap-and-readonly-task-fields):
+/// `readonly: true` with no `accept` loads without the usual no-gate warning;
+/// `readonly: true` combined with an `accept` gate is contradictory and is a
+/// hard load error naming the task.
+// spec: config/per-task-turn-cap-and-readonly-task-fields#readonly-parses-and-validates
+#[test]
+fn task_readonly_parses_and_validates() {
+    let d = fresh_dir("task-readonly-ok");
+    let (tasks, workers) = write_config(
+        &d,
+        r#"{ "tasks": [{"id":"R","title":"investigate","readonly":true}] }"#,
+        ONE_WORKER,
+    );
+    let cfg = load(&tasks, &workers).expect("readonly task loads");
+    assert!(cfg.by_id["R"].readonly, "readonly flag parses to true");
+    assert!(
+        !cfg.warnings.iter().any(|w| w.contains("no acceptance gate")),
+        "a readonly task must not warn about a missing gate: {:?}",
+        cfg.warnings
+    );
+
+    let d2 = fresh_dir("task-readonly-gate");
+    let (t2, w2) = write_config(
+        &d2,
+        r#"{ "tasks": [{"id":"R","title":"investigate","readonly":true,"accept":"true"}] }"#,
+        ONE_WORKER,
+    );
+    let err = load(&t2, &w2).unwrap_err();
+    assert!(
+        err.contains("R") && err.contains("readonly"),
+        "readonly+accept is contradictory, naming the task: {err}"
+    );
+}

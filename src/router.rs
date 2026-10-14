@@ -21,6 +21,18 @@ use std::collections::HashMap;
 /// exactly what this tie-break must never do.
 const SCORE_TIE_EPSILON: f64 = 1e-9;
 
+/// Laplace-smoothed trust mean used as the UCB1 prior term: `(wins+1)/(n+2)`.
+/// A worker with a SINGLE loss scores 1/3, not 0 — a single disaster does
+/// not disqualify a worker outright (spec: scheduling/ucb1-worker-selection
+/// #a-single-loss-is-not-scored-zero); a single win scores 2/3, not 1, so an
+/// N=1 result is never treated as 0-or-1 noise. Converges to the empirical
+/// rate as `n` grows. `Router::trust` deliberately keeps returning the RAW
+/// rate (`wins/n`) for the cost report; this smoothed value is the routing
+/// TERM only.
+fn laplace_mean(wins: u64, n: u64) -> f64 {
+    (wins as f64 + 1.0) / (n as f64 + 2.0)
+}
+
 #[derive(Debug, Default)]
 pub struct Router {
     /// worker name -> (wins, total attempts)
@@ -113,7 +125,7 @@ impl Router {
             // rate as n grows (n=100, 50 wins: 51/102 ≈ 0.5). `trust()` keeps
             // returning the RAW rate for the cost report; this smoothed mean
             // is the routing term only.
-            let mean = (wins as f64 + 1.0) / (n as f64 + 2.0);
+            let mean = laplace_mean(wins, n);
             let explore = (2.0 * (n_total as f64 + 1.0).ln() / (n as f64 + 1.0)).sqrt();
             let score = mean + explore;
             // Declared cost basis and mean duration, consulted ONLY on a tie.
@@ -195,6 +207,35 @@ mod tests {
         assert_eq!(r.pick(pool.iter()).unwrap().name, "a");
     }
 
+    // spec: scheduling/ucb1-worker-selection#a-single-loss-is-not-scored-zero
+    #[test]
+    fn a_single_loss_is_not_scored_zero() {
+        // The Laplace-smoothed prior gives a worker with ONE recorded loss a
+        // routing mean of (0+1)/(1+2) = 1/3, NOT the raw 0. A raw-rate router
+        // would treat a single disaster as "trust 0" and, in a tie with an
+        // equally-new competitor, could starve it; the prior keeps it alive.
+        assert_eq!(laplace_mean(0, 1), 1.0 / 3.0);
+        // A single win scores 2/3, not 1: an N=1 result is never 0-or-1 noise.
+        assert_eq!(laplace_mean(1, 1), 2.0 / 3.0);
+        // Converges to the empirical rate as history grows.
+        assert!((laplace_mean(50, 100) - 0.5).abs() < 1e-9);
+
+        // And the router actually USES that mean: of two all-failing workers,
+        // the one with the FEWER losses has the higher smoothed mean, so it is
+        // never treated as equal to "zero trust, more wipes".
+        let mut r = Router::default();
+        r.record("one-loss", false, Some(1.0)); // 0/1 -> mean 1/3
+        r.record("many-losses", false, Some(1.0));
+        r.record("many-losses", false, Some(1.0));
+        r.record("many-losses", false, Some(1.0)); // 0/3 -> mean 1/5
+        let pool = [worker("one-loss"), worker("many-losses")];
+        assert_eq!(
+            r.pick(pool.iter()).unwrap().name,
+            "one-loss",
+            "a single loss must not score zero and lose to a worse streak"
+        );
+    }
+
     #[test]
     fn unexplored_worker_beats_failing_one() {
         let mut r = Router::default();
@@ -221,7 +262,6 @@ mod tests {
     }
 
     #[test]
-    // spec: scheduling/ucb1-worker-selection#a-single-loss-is-not-scored-zero
     fn laplace_prior_changes_small_n_ordering() {
         // Pins the Laplace-smoothed mean (wins+1)/(n+2), not the raw rate.
         // a: 3/5 (above the midpoint → prior pulls it DOWN: 4/7 ≈ 0.571 raw 0.6)

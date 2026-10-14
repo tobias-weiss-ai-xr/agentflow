@@ -3,6 +3,8 @@
 
 use crate::subprocess::{self, CmdOut};
 use std::path::Path;
+#[cfg(windows)]
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Preferred shell: `/bin/sh -c` on unix. On Windows, prefer a POSIX `sh`
