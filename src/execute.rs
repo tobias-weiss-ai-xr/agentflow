@@ -152,6 +152,34 @@ fn failure_context(receipts: &[Receipt], task_id: &str, attempt: u32) -> Option<
     Some(out)
 }
 
+/// Hard ceiling for turn-cap escalation. The point is that a turn-cap death
+/// must never repeat at the SAME cap; a config knob for higher ceilings is
+/// speculative. ponytail: env knob only if long-horizon tasks ever need >128.
+const TURN_CAP_CEILING: u32 = 128;
+
+/// Turn-cap escalation (World-Office lesson, 2026-10-14): a turn-cap failure
+/// is a BUDGET signal, not a quality signal. If any earlier failed attempt of
+/// this task died at `harness: turn cap N reached`, the retry runs with
+/// `2 × max(N)`, clamped to [`TURN_CAP_CEILING`]; otherwise the configured
+/// base passes through unchanged. Evidence comes from persisted receipts, so
+/// it survives crash/resume/state-dir reuse. Pure for testing.
+fn escalate_turns(
+    receipts: &[Receipt],
+    task_id: &str,
+    attempt: u32,
+    base: Option<u32>,
+) -> Option<u32> {
+    let reached = receipts
+        .iter()
+        .filter(|r| r.task == task_id && r.attempt < attempt && r.outcome == "failed")
+        .filter_map(|r| r.error.as_deref())
+        .filter_map(|e| e.strip_prefix("harness: turn cap "))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .filter_map(|n| n.parse::<u32>().ok())
+        .max();
+    reached.map(|cap| cap.saturating_mul(2).min(TURN_CAP_CEILING)).or(base)
+}
+
 /// Effect-sandwich journal (pi-durable): persist one attempt-phase boundary
 /// for `id` so a crashed run can resume without re-running the expensive,
 /// non-replayable agent step.
@@ -316,7 +344,7 @@ fn execute_attempt(
                 &prompt,
                 &wt_path,
                 &ctx.st,
-                task.max_turns,
+                escalate_turns(&ctx.store.load_receipts(), id, attempt, task.max_turns),
                 &task.scope,
                 task.readonly,
                 &append,
@@ -1194,6 +1222,47 @@ mod tests {
         assert!(ctx.contains("attempt 2: gate failed (exit 1)"));
         assert!(!ctx.contains("other task"), "other tasks excluded");
         assert!(!ctx.contains("merged"), "merged attempts excluded");
+    }
+
+    #[test]
+    fn escalate_turns_no_prior_cap_failure_passes_base_through() {
+        let rs = vec![
+            receipt_of("A", 1, "failed", Some("agent exited NonZero (code 7)")),
+            receipt_of("A", 2, "failed", Some("gate failed (exit 1)")),
+        ];
+        assert_eq!(escalate_turns(&rs, "A", 3, Some(12)), Some(12));
+        assert_eq!(escalate_turns(&rs, "A", 3, None), None);
+    }
+
+    #[test]
+    fn escalate_turns_doubles_after_cap_death() {
+        let rs = vec![receipt_of(
+            "A",
+            1,
+            "failed",
+            Some("harness: turn cap 12 reached"),
+        )];
+        assert_eq!(escalate_turns(&rs, "A", 2, Some(12)), Some(24));
+        // even when the config said None, the evidence drives the budget
+        assert_eq!(escalate_turns(&rs, "A", 2, None), Some(24));
+    }
+
+    #[test]
+    fn escalate_turns_takes_the_max_and_clamps_at_ceiling() {
+        let rs = vec![
+            receipt_of("A", 1, "failed", Some("harness: turn cap 12 reached")),
+            receipt_of("A", 2, "failed", Some("harness: turn cap 128 reached")),
+        ];
+        assert_eq!(escalate_turns(&rs, "A", 3, Some(12)), Some(128));
+    }
+
+    #[test]
+    fn escalate_turns_ignores_other_tasks_and_other_errors() {
+        let rs = vec![
+            receipt_of("B", 1, "failed", Some("harness: turn cap 64 reached")),
+            receipt_of("A", 1, "merged", Some("harness: turn cap 64 reached")),
+        ];
+        assert_eq!(escalate_turns(&rs, "A", 2, Some(12)), Some(12));
     }
 
     #[test]

@@ -527,7 +527,7 @@ pub fn run(
             // Spec §8: no text and no tool_calls is a provider error, not a
             // normal answer.
             if is_empty_response(&msg) {
-                log(&format!("harness: provider empty response (no text, no tool_calls)"));
+                log("harness: provider empty response (no text, no tool_calls)");
                 break (
                     Stop::ProviderError,
                     Some("harness: provider empty response (no text, no tool_calls)".to_string()),

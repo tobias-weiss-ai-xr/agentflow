@@ -344,7 +344,7 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
                 w.name
             ));
         }
-        if w.api_base.as_deref().map_or(true, |b| b.trim().is_empty()) {
+        if w.api_base.as_deref().is_none_or(|b| b.trim().is_empty()) {
             return Err(format!(
                 "worker \"{}\": cli \"builtin\" requires api_base",
                 w.name
@@ -386,6 +386,24 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
             warnings.push(format!(
                 "worker '{}': max_attempts {} lives on the worker, but the retry budget is read from the top-level 'defaults' block — af ignored it (running at defaults.max_attempts). Move it: {{ \"defaults\": {{ \"max_attempts\": {} }} }}",
                 w.name, ma, ma
+            ));
+        }
+    }
+    // Gate/scope mismatch (World-Office lesson, 2026-10-14): a task scoped to
+    // a few crates whose accept runs a whole-workspace gate (the one
+    // unambiguous cargo marker is `--workspace`) fails forever on
+    // out-of-scope diagnostics, no matter how good the agent is. Non-fatal:
+    // some setups legitimately pair a workspace gate with a narrow write
+    // scope (the workspace is already warning-clean), so this stays advice.
+    for t in tasks {
+        if !t.scope.is_empty()
+            && !t.scope.iter().any(|s| s.starts_with("**"))
+            && t.accept.as_deref().is_some_and(|a| a.contains("--workspace"))
+        {
+            warnings.push(format!(
+                "task '{}': accept runs a --workspace gate while scope is narrow ({}) — out-of-scope diagnostics can fail the gate forever; gate the touched crates instead or widen scope to **",
+                t.id,
+                t.scope.join(", ")
             ));
         }
     }
@@ -853,6 +871,39 @@ mod tests {
         assert!(
             c.warnings.iter().any(|w| w.contains("NOPE")),
             "dangling dep should warn, not fail: {:?}",
+            c.warnings
+        );
+    }
+
+    #[test]
+    fn gate_scope_mismatch_warns_on_workspace_gate_with_narrow_scope() {
+        let d = tmpdir("cfg-mismatch");
+        wt(
+            &d.join("tasks.json"),
+            r#"{ "tasks": [
+                {"id":"A","title":"x","scope":["core/crates/wo-wopi/**"],"accept":"cargo clippy --workspace --all-targets"},
+                {"id":"B","title":"y","scope":[],"accept":"cargo clippy --workspace --all-targets"},
+                {"id":"C","title":"z","scope":["**"],"accept":"cargo clippy --workspace --all-targets"}
+            ]}"#,
+        );
+        wt(
+            &d.join("workers.json"),
+            r#"{ "workers": [{"name":"w1","provider":"p","model":"m"}]}"#,
+        );
+        let c = load(&d.join("tasks.json"), &d.join("workers.json")).unwrap();
+        assert!(
+            c.warnings.iter().any(|w| w.contains("task 'A'") && w.contains("--workspace gate")),
+            "narrow scope + workspace gate should warn: {:?}",
+            c.warnings
+        );
+        assert!(
+            !c.warnings.iter().any(|w| w.contains("task 'B'")),
+            "empty scope = any file, no mismatch: {:?}",
+            c.warnings
+        );
+        assert!(
+            !c.warnings.iter().any(|w| w.contains("task 'C'")),
+            "** scope = whole repo, no mismatch: {:?}",
             c.warnings
         );
     }
