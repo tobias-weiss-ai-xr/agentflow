@@ -215,3 +215,9 @@ sagen, dass `priority` nur Tore, nicht ordnet.
 - Coole Mechanismen: rejected-Arbeit bleibt auf `tf/<task>-rejected-<ts>`
   erhalten (kein Datenverlust); pacing-retry (15s) sauber geloggt; „no
   archived branch to reuse" transparent.
+6.6        und 6.7 (bestätigt & gelöst): Nach Scope-Korrektur + Neustart übernahm
+`af run` die zuvor abgelehnte Arbeit automatisch — „cfix-dify-redeployable reused
+archived branch tf/…-rejected-1-… (scope allows it; gate re-run, agent not
+re-run)" — d.h. die Scope-Fix+vom-Neustart-Kombination IST der Adoption-Pfad für
+6.2b; versatzweise `af recover` mit korrigierter Config sollte dasselbe leisten
+(Achtung: nur mit *korrigierter* Config aufrufen, sonst erneute Ablehnung).
