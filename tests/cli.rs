@@ -1434,6 +1434,12 @@ fn scratch_repo(repo: &std::path::Path) -> impl Fn(&[&str]) {
         );
     };
     run_git(&["init", "-b", "main"]);
+    // Repo-local identity: af-internal git calls (merge commits during
+    // `af recover`, worktree ops) must inherit an identity even on CI
+    // runners without a global git config. The per-invocation `-c` above
+    // only covers THESE helper calls, not the ones af spawns.
+    run_git(&["config", "user.name", "t"]);
+    run_git(&["config", "user.email", "t@t"]);
     run_git(&["commit", "--allow-empty", "-m", "init"]);
     run_git
 }
