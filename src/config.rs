@@ -637,6 +637,27 @@ impl Settings {
 /// Parse `repos.json`: `{"repos": {"<name>": "<path>"}}`. Missing file →
 /// empty map (single-repo mode). Relative paths resolve against the
 /// repos.json file's directory.
+/// Full campaign config: tasks + workers + multi-repo map (ADR-11).
+/// `--repos`/`TF_REPOS_JSON` resolve in the caller; the fallback here is the
+/// tasks-dir sibling `repos.json` (missing = single-repo mode). Used by the
+/// CLI entry AND the run-loop hot reload so a reload sees exactly the same
+/// repos map the initial load built.
+pub fn load_full(
+    tasks_path: &Path,
+    workers_path: &Path,
+    repos_override: Option<PathBuf>,
+) -> Result<Config, String> {
+    let mut cfg = load(tasks_path, workers_path)?;
+    let repos_path = repos_override.unwrap_or_else(|| {
+        tasks_path
+            .parent()
+            .map(|p| p.join("repos.json"))
+            .unwrap_or_else(|| PathBuf::from("repos.json"))
+    });
+    cfg.repos = load_repos(&repos_path)?;
+    Ok(cfg)
+}
+
 pub fn load_repos(repos_path: &Path) -> Result<BTreeMap<String, PathBuf>, String> {
     let json = match std::fs::read_to_string(repos_path) {
         Ok(s) => s,

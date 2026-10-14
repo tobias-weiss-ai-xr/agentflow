@@ -372,3 +372,60 @@ fn readonly_attempt_completes_without_gate_or_merge() {
         bodies[1]
     );
 }
+
+#[test]
+// spec: lifecycle/cooperative-stop-drains-in-flight-attempts
+// spec: lifecycle/cooperative-stop-drains-in-flight-attempts#stop-flag-halts-new-dispatches-and-drains
+fn stop_flag_drains_without_new_dispatches() {
+    // A runs long (in flight when the flag lands), B is ready. The flag must
+    // stop B's dispatch, let A finish through the normal reap path, and exit
+    // non-zero with A done and B untouched.
+    let stub = StubLlm::spawn(vec![
+        bash_turn("sleep 3 && echo work > A.txt && git add A.txt && git commit -m w"),
+        final_turn("done"),
+    ]);
+    let tasks = r#"{ "tasks": [
+        { "id": "A", "title": "slow", "scope": ["A.txt"], "accept": "test -f A.txt" },
+        { "id": "B", "title": "quick", "scope": ["B.txt"], "accept": "test -f B.txt" } ] }"#;
+    let f = fixture(tasks, &native_worker_json(&stub.url, 1, 8));
+    // The flag lands while A is in flight (agent turn 1 sleeps 3 s); poll is
+    // 1 s so the next round enters drain mode before B could dispatch. B also
+    // shares no scope with A — it stays undispatched purely by the flag.
+    let flag = f.st.state_dir.join("stop");
+    let t = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        std::fs::write(&flag, "stop\n").unwrap();
+    });
+    let code = run::run_loop(
+        &f.cfg,
+        &f.st,
+        &RunOptions {
+            poll_secs: Some(1),
+            ..RunOptions::default()
+        },
+    );
+    t.join().unwrap();
+    assert_eq!(code, 3, "drained run exits non-zero");
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(
+        st["A"].state,
+        TaskState::Done,
+        "in-flight attempt reaped normally"
+    );
+    assert_eq!(
+        st.get("B")
+            .map(|s| s.state.clone())
+            .unwrap_or(TaskState::Ready),
+        TaskState::Ready,
+        "no dispatch after the flag (untouched task may be absent from the ledger)"
+    );
+    assert!(
+        !f.st.state_dir.join("stop").exists(),
+        "flag consumed by the drain"
+    );
+    assert!(
+        !f.st.state_dir.join("af.pid").exists(),
+        "pid file removed on exit"
+    );
+    assert!(!f.repo.join("B.txt").exists(), "B never ran");
+}

@@ -377,10 +377,70 @@ fn reuse_before_dispatch(
 /// - `0`: all in-scope tasks done
 /// - `2`: deadlock detected
 /// - `3`: wall-clock budget exhausted
+// PidFile: removes the pid file on any exit path of `run_loop` (drop runs on
+// normal returns AND on unwinding panics). A `kill -9` leaves it behind;
+// `af stop` reports a stale pid file as a warning, never fatal.
+struct PidFile(PathBuf);
+
+impl PidFile {
+    fn write(st: &Settings) -> Option<PidFile> {
+        let p = st.state_dir.join("af.pid");
+        std::fs::write(&p, format!("{}\n", std::process::id())).ok()?;
+        Some(PidFile(p))
+    }
+}
+
+impl Drop for PidFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// The `(tasks, workers)` mtimes as of the last reload attempt. `None` until
+/// the first attempt; files that vanished keep the last good config.
+fn cfg_files_mtime(st: &Settings) -> Option<(std::time::SystemTime, std::time::SystemTime)> {
+    Some((
+        std::fs::metadata(&st.tasks_file).ok()?.modified().ok()?,
+        std::fs::metadata(&st.workers_file).ok()?.modified().ok()?,
+    ))
+}
+
+/// Hot-reload the task/worker config (feedback §6.2). Returns a fresh config
+/// only when the files changed since the last ATTEMPT and parse cleanly; a
+/// parse/validation failure warns ONCE per generation and yields `None` (the
+/// caller keeps the last good config). Mtime-gated so a 15 s poll does not
+/// re-parse untouched files.
+fn hot_reload(
+    st: &Settings,
+    seen: &mut Option<(std::time::SystemTime, std::time::SystemTime)>,
+) -> Option<crate::config::Config> {
+    let mt = cfg_files_mtime(st)?;
+    if Some(mt) == *seen {
+        return None;
+    }
+    *seen = Some(mt);
+    match crate::config::load_full(
+        &st.tasks_file,
+        &st.workers_file,
+        std::env::var("TF_REPOS_JSON").ok().map(PathBuf::from),
+    ) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            eprintln!("warning: config reload failed, keeping last good config: {e}");
+            None
+        }
+    }
+}
+
 pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     if opts.dry_run {
         return dry_run(cfg, st);
     }
+
+    // Owned copy: the loop hot-reloads the task/worker config between rounds
+    // (feedback §6.2) so an operator's scope fix reaches the next retry
+    // without a process restart.
+    let mut cfg = cfg.clone();
 
     let store = Store::new(st.state_dir.clone());
     // Single writer per TF_STATE_DIR: a second `af run` must not clobber
@@ -431,7 +491,7 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     // finish only the effects its dead attempt had not yet committed — a
     // crash must never re-run the expensive, non-replayable agent step.
     for id in &stale_running {
-        heal_stale_attempt(cfg, st, &mut status, id, max_attempts);
+        heal_stale_attempt(&cfg, st, &mut status, id, max_attempts);
     }
     let _ = store.save(&status);
 
@@ -452,12 +512,22 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     }
     .max(1);
 
-    let ctx = ExecCtx {
+    let mut ctx = ExecCtx {
         cfg: cfg.clone(),
         st: st.clone(),
         store: store.clone(),
         merge_locks: merge_locks.clone(),
     };
+
+    // Cooperative stop + identity (feedback §6.3/§6.4): the pid file names
+    // the orchestrator (af stop signals it); the stop flag file switches the
+    // loop into drain mode. Both live in the state dir; the pid file is
+    // removed on any exit path (drop guard — a hard kill leaves it behind,
+    // and `af stop` reports it as stale, never fatal).
+    let _pid = PidFile::write(st);
+    let stop_flag = st.state_dir.join("stop");
+    let mut draining = false;
+    let mut last_cfg_mt = cfg_files_mtime(st);
 
     println!(
         "agentflow run: {} tasks, {enabled} enabled worker(s), max_parallel={max_parallel}",
@@ -476,14 +546,19 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
 
     // In-scope tasks: all tasks, or only the --task filter target. Completion
     // and deadlock are judged on this scope so out-of-scope work never blocks.
-    let in_scope: Vec<&crate::config::Task> = cfg
-        .tasks
-        .iter()
-        .filter(|t| match &opts.task_filter {
-            Some(f) => &t.id == f,
-            None => true,
-        })
-        .collect();
+    // Rebuilt after every hot-reload (the task set may change mid-run).
+    macro_rules! in_scope_of {
+        ($cfg:expr) => {
+            $cfg.tasks
+                .iter()
+                .filter(|t| match &opts.task_filter {
+                    Some(f) => &t.id == f,
+                    None => true,
+                })
+                .collect::<Vec<&crate::config::Task>>()
+        };
+    }
+    let mut in_scope: Vec<&crate::config::Task> = in_scope_of!(cfg);
     if let Some(f) = &opts.task_filter {
         if in_scope.is_empty() {
             eprintln!("config error: --task '{f}' matches no task");
@@ -552,13 +627,40 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
             measured_cache = consumed_wall_clock_s(&all_receipts_cache, &in_scope);
         }
 
+        // Hot-reload (feedback §6.2): plan this round against the CURRENT
+        // tasks/workers files. A reload failure keeps the last good config
+        // (warn once per broken generation) — a typo must not kill a campaign.
+        if let Some(fresh) = hot_reload(st, &mut last_cfg_mt) {
+            println!(
+                "config reloaded: {} task(s), {} worker(s)",
+                fresh.tasks.len(),
+                fresh.workers.len()
+            );
+            cfg = fresh;
+            ctx.cfg = cfg.clone();
+            in_scope = in_scope_of!(cfg);
+        }
+
+        // Cooperative stop (feedback §6.4): no NEW dispatches while draining;
+        // in-flight attempts finish through their normal reap path.
+        if !draining && stop_flag.exists() {
+            let _ = std::fs::remove_file(&stop_flag);
+            draining = true;
+            println!("-- stop requested: draining in-flight attempts (no new dispatches) --");
+        }
+        if draining && running.lock().unwrap().is_empty() {
+            println!("\nStopped (drained; in-flight attempts finished).");
+            println!("{}", board_of(&cfg, &status));
+            return 3;
+        }
+
         // Terminal conditions (judged on the in-scope tasks only).
         let all_done = in_scope
             .iter()
             .all(|t| matches!(status.get(&t.id).map(|s| &s.state), Some(TaskState::Done)));
         if all_done {
             println!("\nAll tasks done.");
-            println!("{}", board_of(cfg, &status));
+            println!("{}", board_of(&cfg, &status));
             return 0;
         }
         // Cost ceiling (r8-budget-cap): use cached receipts for performance.
@@ -576,7 +678,7 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
             // Nothing in flight: progress is possible only if something is
             // ready. Otherwise this is a deadlock (failed/absent deps, or a
             // --task target waiting on out-of-scope work).
-            let ready_in_scope = scheduler::ready_tasks(cfg, &status, &[], max_attempts)
+            let ready_in_scope = scheduler::ready_tasks(&cfg, &status, &[], max_attempts)
                 .into_iter()
                 .filter(|t| in_scope.iter().any(|s| s.id == t.id))
                 .count();
@@ -601,22 +703,22 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                 return 3;
             }
             if ready_in_scope == 0 {
-                let blocked = scheduler::find_deadlock_in(cfg, &status, &[], &in_scope)
+                let blocked = scheduler::find_deadlock_in(&cfg, &status, &[], &in_scope)
                     .unwrap_or_else(|| in_scope.iter().map(|t| t.id.clone()).collect());
                 eprintln!(
                     "DEADLOCK: no task can make progress. Blocked: {}",
                     blocked.join(", ")
                 );
-                eprintln!("{}", board_of(cfg, &status));
+                eprintln!("{}", board_of(&cfg, &status));
                 return 2;
             }
         }
 
         // Dispatch a round — never while the ceiling is exhausted: attempts
         // already in flight are allowed to finish, only NEW ones are blocked.
-        if !over_budget && running.lock().unwrap().len() < max_parallel {
+        if !over_budget && !draining && running.lock().unwrap().len() < max_parallel {
             let running_now = running.lock().unwrap().keys().cloned().collect::<Vec<_>>();
-            let ready = scheduler::ready_tasks(cfg, &status, &running_now, max_attempts);
+            let ready = scheduler::ready_tasks(&cfg, &status, &running_now, max_attempts);
             for t in ready {
                 if let Some(f) = &opts.task_filter {
                     if &t.id != f {
@@ -635,7 +737,7 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                 // (reuse consumes no worker slot); the gate still decides.
                 if reuse_enabled
                     && reuse_before_dispatch(
-                        cfg,
+                        &cfg,
                         st,
                         &merge_locks,
                         &t,
@@ -646,7 +748,7 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                     continue;
                 }
                 let worker =
-                    match pick_worker(cfg, &worker_busy, &router, opts.worker_filter.as_deref()) {
+                    match pick_worker(&cfg, &worker_busy, &router, opts.worker_filter.as_deref()) {
                         Some(w) => w.clone(),
                         None => break, // no free worker this round
                     };
@@ -751,7 +853,7 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
                     );
                     std::thread::sleep(Duration::from_millis(200));
                 }
-                println!("{}", board_of(cfg, &status));
+                println!("{}", board_of(&cfg, &status));
                 return 0;
             }
         }
@@ -1437,11 +1539,51 @@ pub fn status_board(cfg: &Config, st: &Settings) -> String {
     let status = store.load();
     let (_, problems) = store.load_receipts_checked();
     let mut out = String::new();
+    // Name the consulted state dir first (feedback §6.1): a board without it
+    // invites "which campaign am I even looking at" — the §6.1 report itself
+    // was born from exactly that confusion.
+    out.push_str(&format!("state dir: {}\n", st.state_dir.display()));
     for p in &problems {
         out.push_str(&format!("warning: {p}\n"));
     }
     out.push_str(&board_of(cfg, &status));
     out
+}
+
+/// `af stop` (feedback §6.4): create the stop flag (the running orchestrator
+/// drains on its next poll) and signal the recorded pid as a best-effort
+/// early termination. Liveness is a `/proc/<pid>` existence check (Linux
+/// dev/CI hosts); a stale or missing pid file is a warning, never fatal.
+/// Exit code: 0 — the stop wish is always recorded.
+pub fn stop_cmd(st: &Settings) -> i32 {
+    let flag = st.state_dir.join("stop");
+    std::fs::create_dir_all(&st.state_dir).ok();
+    match std::fs::write(&flag, format!("{}\n", crate::state::now_ts())) {
+        Ok(_) => println!(
+            "stop flag written to {}; a running af will drain on its next poll",
+            flag.display()
+        ),
+        Err(e) => eprintln!("warning: could not write stop flag: {e}"),
+    }
+    let pid_path = st.state_dir.join("af.pid");
+    let pid = std::fs::read_to_string(&pid_path)
+        .ok()
+        .and_then(|s| s.trim().parse::<i32>().ok());
+    match pid {
+        Some(p) if std::path::Path::new(&format!("/proc/{p}")).exists() => {
+            let _ = std::process::Command::new("kill")
+                .arg("-TERM")
+                .arg(p.to_string())
+                .status();
+            println!("signaled af pid {p}");
+        }
+        Some(p) => println!("warning: pid file names dead process {p} (stale from a kill -9?)"),
+        None => println!(
+            "warning: no readable pid file at {} — nothing to signal",
+            pid_path.display()
+        ),
+    }
+    0
 }
 
 /// `af api status --json`.
@@ -3404,6 +3546,138 @@ mod tests {
         assert_eq!(
             measured_worker_cell(&[&sized], basis_of("sw", &bases), None, &all),
             "2.00x"
+        );
+    }
+    // --- feedback-6-hardening: hot reload, stop, pid file, status header ---
+
+    fn write_min_config(dir: &Path, tasks: &[&str]) -> (PathBuf, PathBuf) {
+        let tasks_json = format!(
+            r#"{{ "tasks": [{}] }}"#,
+            tasks
+                .iter()
+                .map(|id| format!(r#"{{ "id": "{id}", "title": "{id}" }}"#))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let t = dir.join("tasks.json");
+        std::fs::write(&t, tasks_json).unwrap();
+        let w = dir.join("workers.json");
+        std::fs::write(
+            &w,
+            r#"{ "workers": [ { "name": "w", "provider": "p", "model": "m" } ] }"#,
+        )
+        .unwrap();
+        (t, w)
+    }
+
+    #[test]
+    // spec: config/task-config-hot-reload-between-dispatch-rounds
+    // spec: config/task-config-hot-reload-between-dispatch-rounds#scope-fix-reaches-the-next-retry-without-restart
+    // spec: lifecycle/dispatch-rounds-read-the-current-task-config#hot-reload-refreshes-execctx-for-dispatch
+    fn hot_reload_picks_up_a_changed_tasks_file() {
+        let base = unique_base("hotreload");
+        let dir = base.clone();
+        std::fs::create_dir_all(&dir).unwrap();
+        let (t, w) = write_min_config(&dir, &["A"]);
+        let st = Settings {
+            tasks_file: t.clone(),
+            workers_file: w.clone(),
+            ..settings(base)
+        };
+        let mut seen = None;
+        let first = hot_reload(&st, &mut seen).expect("first reload loads the config");
+        assert_eq!(first.tasks.len(), 1);
+
+        // No change → no reload.
+        assert!(hot_reload(&st, &mut seen).is_none());
+
+        // Edit the task set (new mtime) → reload sees the fix.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let (_, w2) = write_min_config(&dir, &["A", "B"]);
+        assert_eq!(w2, st.workers_file);
+        std::fs::write(
+            &t,
+            r#"{ "tasks": [ { "id": "A", "title": "A", "scope": ["src/**"] }, { "id": "B", "title": "B" } ] }"#,
+        )
+        .unwrap();
+        let second = hot_reload(&st, &mut seen).expect("changed file reloads");
+        assert_eq!(second.tasks.len(), 2);
+        assert_eq!(second.tasks[0].scope, vec!["src/**".to_string()]);
+    }
+
+    #[test]
+    // spec: config/task-config-hot-reload-between-dispatch-rounds#broken-config-file-keeps-the-last-good-config
+    fn hot_reload_broken_file_keeps_last_good_and_warns_once() {
+        let base = unique_base("hotreload-bad");
+        let dir = base.clone();
+        std::fs::create_dir_all(&dir).unwrap();
+        let (t, w) = write_min_config(&dir, &["A"]);
+        let st = Settings {
+            tasks_file: t.clone(),
+            workers_file: w,
+            ..settings(base)
+        };
+        let mut seen = None;
+        assert!(hot_reload(&st, &mut seen).is_some(), "initial load ok");
+
+        // Break the file → mtime changes, parse fails, None (caller keeps old).
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&t, "{ not json").unwrap();
+        assert!(
+            hot_reload(&st, &mut seen).is_none(),
+            "broken file yields no config"
+        );
+        // Same mtime again → silent, no re-warn, no re-parse.
+        assert!(hot_reload(&st, &mut seen).is_none());
+    }
+
+    #[test]
+    // spec: config/status-output-names-its-state-directory
+    // spec: config/status-output-names-its-state-directory#human-board-names-the-consulted-state-dir
+    fn status_board_names_the_state_dir() {
+        let base = unique_base("board-header");
+        let st = settings(base);
+        let cfg = cfg_with(vec![task("A")]);
+        let out = status_board(&cfg, &st);
+        let first = out.lines().next().unwrap_or("");
+        assert!(
+            first.starts_with("state dir: "),
+            "first line names the state dir, got: {first}"
+        );
+        // --json stays a machine contract: no header line there.
+        let j = status_json(&cfg, &st);
+        assert!(!j.contains("state dir:"), "json output unchanged");
+    }
+
+    #[test]
+    fn pid_file_is_written_and_removed() {
+        let base = unique_base("pidfile");
+        let st = settings(base);
+        {
+            let _p = PidFile::write(&st).expect("pid file written");
+            let content = std::fs::read_to_string(st.state_dir.join("af.pid")).unwrap();
+            assert_eq!(content.trim(), std::process::id().to_string());
+        }
+        assert!(
+            !st.state_dir.join("af.pid").exists(),
+            "drop removes the pid file"
+        );
+    }
+
+    #[test]
+    // spec: lifecycle/cooperative-stop-drains-in-flight-attempts#stop-flag-halts-new-dispatches-and-drains
+    // spec: lifecycle/cooperative-stop-drains-in-flight-attempts#af-stop-signals-the-pid-file-owner
+    fn stop_cmd_records_flag_and_reports_stale_pid() {
+        let base = unique_base("stop-stale");
+        let st = settings(base);
+        std::fs::create_dir_all(&st.state_dir).unwrap();
+        // A pid that never exists on any host: not ours, not 1.
+        std::fs::write(st.state_dir.join("af.pid"), "2147483000\n").unwrap();
+        let code = stop_cmd(&st);
+        assert_eq!(code, 0);
+        assert!(
+            st.state_dir.join("stop").exists(),
+            "stop wish is recorded even without a live orchestrator"
         );
     }
 }

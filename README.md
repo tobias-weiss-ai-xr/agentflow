@@ -106,6 +106,16 @@ With the entrypoint set, everything after the image name is af arguments
 
 ## CLI
 
+`af stop` — cooperative stop: writes the stop flag into the state dir and
+SIGTERMs the orchestrator recorded in `af.pid`. A running `af run` stops
+NEW dispatches on its next poll, lets in-flight attempts finish through the
+normal reap path, then exits 3. Hard kills remain safe (the startup heal
+records interrupted attempts and resumes cleanly); `af stop` just spares the
+in-flight agent turns. Hot-reload: `af run` re-reads tasks/workers files each
+poll round when their mtimes change — a scope/accept fix reaches the next
+retry without a restart (a broken file keeps the last good config and warns
+once).
+
 ```
 af run [--once] [--dry-run] [--worker NAME] [--task ID] [--poll SECS]
 af status [--json]
@@ -282,7 +292,7 @@ to block the command: the readable history is still accounted for.
 | `accept` | Shell command run in the task's worktree; exit 0 = pass |
 | `acceptance_prose` | Natural-language success criteria (injected into the prompt) |
 | `manual` | Skip the acceptance gate (manual sign-off) |
-| `priority` | Tie-breaker when multiple tasks are ready |
+| `priority` | Tie-breaker when multiple tasks are ready. **Higher sorts first** (`CRITICAL`=20 > `HIGH`=10 > `MEDIUM`=0 > `LOW`=-10; numbers keep their value). The "P1 = highest priority" convention is the OPPOSITE of af's scale — declare p1-tasks as `"priority": 10` (or `"HIGH"`), not `1`. |
 | `gate_replay` | Whether the gate is replay-safe (default `true`); `false` = side effects |
 | `max_turns` | Per-task turn cap for builtin workers (overrides the worker's `max_turns`, then `TF_AGENT_MAX_TURNS`, then 32). Suggest 12-16 for write+commit+gate tasks; 6 Often too tight. After a `turn cap N reached` failure, the retry automatically runs with `2 × N` (ceiling 128) — evidence from receipts, so it survives `--resume`. Gate-heavy tasks (e.g. a whole-workspace `cargo clippy` in `accept`) need 32-48+; keep the gate as narrow as the scope. |
 | `readonly` | `true` = investigation-only: the builtin harness rejects `write`/`edit`, the attempt counts done on a normal agent stop (no gate, no merge) |

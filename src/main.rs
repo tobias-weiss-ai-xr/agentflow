@@ -15,6 +15,7 @@ USAGE:
   af attach    ID
   af cost      [--task ID] [--last] [--since DATE|UNIX_TS]
   af clean     [--dry-run]
+  af stop      signal the running orchestrator and request a drain
   af recover   --task ID [--attempt N] [--dry-run]
   af validate  [--worker NAME] [--tasks FILE] [--workers FILE]
   af --help | --version
@@ -130,6 +131,45 @@ fn parse(argv: &[String]) -> Result<Args, String> {
     Ok(a)
 }
 
+/// Crash log (feedback §6.3): a panic in the run loop appends one line to
+/// `<state dir>/crash.log` — timestamp, thread, message, location — so an
+/// unattended death is diagnosable afterwards. Chains to the default hook:
+/// the panic's stderr output is preserved verbatim. Installed only for
+/// commands that operate on a state dir (`af run`).
+fn install_crash_log(state_dir: &std::path::Path) {
+    use std::sync::OnceLock;
+    static CRASH_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+    if CRASH_DIR.set(state_dir.to_path_buf()).is_err() {
+        return; // already installed for this process
+    }
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default_hook(info);
+        if let Some(dir) = CRASH_DIR.get() {
+            let location = info
+                .location()
+                .map(|l| l.to_string())
+                .unwrap_or_else(|| "?".into());
+            let msg = info
+                .payload()
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "non-string panic payload".into());
+            let line = format!(
+                "{} panic thread={:?} at {location}: {msg}\n",
+                agentflow::state::now_ts(),
+                std::thread::current().name().unwrap_or("<unnamed>"),
+            );
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("crash.log"))
+                .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+        }
+    }));
+}
+
 fn load_cfg(args: &Args) -> Result<(config::Config, Settings), String> {
     let st = Settings::from_env();
     let tasks = args
@@ -140,21 +180,13 @@ fn load_cfg(args: &Args) -> Result<(config::Config, Settings), String> {
         .workers_file
         .clone()
         .unwrap_or_else(|| st.workers_file.clone());
-    let cfg = config::load(&tasks, &workers)?;
     // Multi-repo (ADR-11): --repos > TF_REPOS_JSON > <tasks dir>/repos.json;
     // missing file = single-repo mode.
-    let repos_path = args
+    let repos_override = args
         .repos_file
         .clone()
-        .or_else(|| std::env::var("TF_REPOS_JSON").ok().map(PathBuf::from))
-        .unwrap_or_else(|| {
-            tasks
-                .parent()
-                .map(|p| p.join("repos.json"))
-                .unwrap_or_else(|| PathBuf::from("repos.json"))
-        });
-    let mut cfg = cfg;
-    cfg.repos = config::load_repos(&repos_path)?;
+        .or_else(|| std::env::var("TF_REPOS_JSON").ok().map(PathBuf::from));
+    let mut cfg = config::load_full(&tasks, &workers, repos_override)?;
     let repo_warns = cfg.repo_warnings(&st.repo_dir);
     cfg.warnings.extend(repo_warns); // printed by the common loop below
     for w in &cfg.warnings {
@@ -191,6 +223,7 @@ fn main() -> ExitCode {
 
     let code = match args.cmd.as_str() {
         "run" => {
+            install_crash_log(&st.state_dir);
             let opts = RunOptions {
                 once: args.once,
                 dry_run: args.dry_run,
@@ -247,6 +280,7 @@ fn main() -> ExitCode {
             0
         }
         "clean" => run::clean(&cfg, &st, args.dry_run),
+        "stop" => run::stop_cmd(&st),
         "recover" => match &args.task {
             Some(id) => run::recover(&cfg, &st, id, args.attempt, args.dry_run),
             None => {
@@ -400,5 +434,28 @@ mod tests {
         .unwrap_err();
         assert!(err.starts_with("--since:"), "{err}");
         assert!(err.contains("not-a-date"), "{err}");
+    }
+    #[test]
+    // spec: lifecycle/cooperative-stop-drains-in-flight-attempts#crash-log-captures-an-unexpected-panic
+    fn crash_log_captures_a_panic() {
+        let dir = std::env::temp_dir().join(format!(
+            "af-crash-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        install_crash_log(&dir);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            panic!("boom-crash-log-probe");
+        }));
+        let log = std::fs::read_to_string(dir.join("crash.log")).expect("crash.log written");
+        assert!(
+            log.contains("boom-crash-log-probe"),
+            "message captured: {log}"
+        );
+        assert!(log.contains("panic thread="), "structured line: {log}");
     }
 }

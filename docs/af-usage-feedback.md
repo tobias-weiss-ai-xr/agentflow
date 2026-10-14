@@ -221,3 +221,32 @@ archived branch tf/…-rejected-1-… (scope allows it; gate re-run, agent not
 re-run)" — d.h. die Scope-Fix+vom-Neustart-Kombination IST der Adoption-Pfad für
 6.2b; versatzweise `af recover` mit korrigierter Config sollte dasselbe leisten
 (Achtung: nur mit *korrigierter* Config aufrufen, sonst erneute Ablehnung).
+
+---
+
+## 7. af-Antwort auf §6 (2026-10-14, change feedback-6-hardening)
+
+- **6.1 (status ignoriert TF_STATE_DIR)**: NICHT reproduzierbar auf dem
+  Rust-af (lokal verifiziert: `TF_STATE_DIR=… af status` zeigt die Kampagne
+  korrekt). Der Report fiel auf den STILLGELEGTEN Go-Port `/usr/local/bin/af`
+  — nicht benutzen, nur `~/git/agentflow/target/release/af` bzw. den Pfad aus
+  `cargo build --release`. Ergonomie-Fix dennoch: die Board-Ausgabe nennt
+  jetzt zuerst `state dir: <pfad>` (`--json` unverändert).
+- **6.2 (Scope/Config bei Retries nicht neu geladen)**: gefixt — `af run`
+  liest tasks.json/workers.json bei mtime-Änderung jede Runde neu; eine
+  Scope-Korrektur greift beim nächsten Retry OHNE Neustart. Kaputtes File:
+  letzte gute Config bleibt, Warnung einmal pro Generation.
+- **6.3 (Orphans, kein Crash-Log)**: Panic-Hook schreibt jetzt
+  `<state dir>/crash.log` (Zeit, Thread, Message, Location; Default-Output
+  bleibt). `running/spawned`-Tasks nach einem Kill werden vom bestehenden
+  Startup-Heal als interrupted gebucht und sauber neu gestartet.
+- **6.4 (kein stop/resume)**: `af stop` neu — Stop-Flag + SIGTERM an `af.pid`;
+  der Loop drainiert (keine neuen Dispatches, in-flight läuft fertig), Exit
+  3. Resume = normaler `af run` (Heal übernimmt). Kill bleibt sicher, ist nur
+  unschöner für die laufenden Agent-Turns.
+- **6.5 (priority ordnet nicht)**: af sortiert bereits `(depth, priority
+  desc, insertion)` — die Beobachtung war die Semantik: af's Skala ist
+  HÖHER=ERSTER (CRITICAL=20 … LOW=-10), die "P1=höchste"-Konvention dreht das
+  um. README dokumentiert es jetzt explizit: p1-Tasks als `"priority": 10`
+  deklarieren.
+- **6.6**: bestätigt — der Archived-Branch-Reuse IST der Adoption-Pfad.
