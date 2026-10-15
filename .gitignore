@@ -7,3 +7,21 @@
 *.log
 result*
 /state-lw
+
+# Local campaign runtime artifacts (per-campaign configs, state dirs, launch
+# scripts). These are generated/consumed by `af run` campaigns and are not
+# meant to be committed; workers.json files may embed API keys. Deliberately-
+# tracked examples (config/dogfood*.json, config/lw*.json, …) stay committed
+# and are unaffected (gitignore never untracks already-tracked files).
+/config/*-repos.json
+/config/*-tasks.json
+/config/*-workers.json
+/config/tasks.json
+/config/workers-*.json
+/config/hessenbox-fix/
+/config/opensme-backlog/
+/config/opensme-round1/
+/config/opensme-round2/
+/config/sso-logout-fix/
+/state-*/
+/state-*.sh
