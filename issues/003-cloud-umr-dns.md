@@ -1,6 +1,13 @@
 # Issue 003 — cloud.umr.uni-marburg.de nicht mehr auflösbar
 
-**Status:** OPEN (extern) · **Schwere:** mittel · **Fund:** Layer-6 `vhost-https://cloud.umr.uni-marburg.de/` (Suite-FAIL)
+**Status:** OPEN — extern (HRZ); lokal nichts fixbar
+
+## Befund (2026-10-15)
+DNS löst cloud.umr.uni-marburg.de weder von der Workstation noch in-cluster
+auf (NXDOMAIN/timeout in blackbox-Probe, code=000). Kein lokaler Resolver-
+Fehler: mehrere Quellen bestätigen. Das Vhost ist Teil der Legacy-HRZ-Domain-
+Ära. Eskalation: HRZ-Service-Desk ticketen (DNS-Eintrag prüfen). Bleibt als
+einziger FAIL in der Layer-6-Suite, bis HRZ es fixt.
 
 ## Symptom
 - `getent hosts cloud.umr.uni-marburg.de` → leer (Workstation, 2026-10-15)

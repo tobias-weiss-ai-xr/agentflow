@@ -1,6 +1,17 @@
 # Issue 001 — s3.home.openedusuite.org antwortet 503 (Ingress ↔ SeaweedFS-S3 blockiert)
 
-**Status:** OPEN · **Schwere:** hoch (k8up-Backup-Backend!) · **Fund:** Layer-6 `vhost-https://s3.home.openedusuite.org/` (Suite-FAIL, XFAIL-entry aktiv)
+**Status:** FIXED 2026-10-15
+
+## Auflösung
+Root Cause: Label-Mismatch in der NetworkPolicy `seaweedfs` (ns backup) — die
+Regel erlaubte kube-system-Pods mit `app.kubernetes.io/name: haproxy-ingress`,
+die Pods tragen aber `app.kubernetes.io/name: kubernetes-ingress`. Die Regel
+matchte NIE; der k3s-NetPol-REJECT antwortet mit RST → haproxy sah
+"connection refused" (deshalb 503 statt Timeout). Fix im GitOps-Repo
+ansible-baremetal-k3s, Commit 76bdb65; ArgoCD selfHeal übernommen.
+
+**Verifikation:** curl auf s3.home.openedusuite.org → 403 (reachable) via
+HTTP und HTTPS; Layer-6-Suite ohne s3-XFAIL: XFAIL=0.
 
 ## Symptom
 - Blackbox-Probe + Workstation-Curl: `https://s3.home.openedusuite.org/` → 503 (haproxy)
