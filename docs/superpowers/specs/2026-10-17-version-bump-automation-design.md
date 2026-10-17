@@ -49,13 +49,19 @@ the tag `v<new>` and the regex guard assume plain `X.Y.Z`.
 
 ## Failure behavior
 
-`set -euo pipefail` aborts on the first failing command. Because the commit is
-near the end, a failure leaves `Cargo.toml`, `Cargo.lock`, and `README.md`
-modified in the working tree; the script prints a rollback hint:
+`set -euo pipefail` aborts on the first failing command. Once the version
+bump begins, an `ERR` trap rolls back `Cargo.toml`, `Cargo.lock`, and
+`README.md` on any error (e.g. a failed `cargo build`, a failed `--version`
+capture, or a smoke-version mismatch):
 
 ```
 git checkout -- Cargo.toml Cargo.lock README.md
 ```
+
+The trap is installed after the clean-tree guard and before the version read,
+so errors after the bump starts leave the working tree consistent. The explicit
+smoke-mismatch rollback block is kept; an explicit `exit 1` does not trigger the
+`ERR` trap, so there is no double rollback.
 
 ## Exclusions / deferred ideas (captured for later, out of scope)
 

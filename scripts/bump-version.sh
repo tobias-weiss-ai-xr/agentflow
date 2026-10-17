@@ -27,6 +27,9 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
+# Roll back the three bumped files on any error after this point.
+trap 'git checkout -- Cargo.toml Cargo.lock README.md 2>/dev/null || true' ERR
+
 OLD=$(sed -n 's/^version = "\([0-9.]*\)"$/\1/p' Cargo.toml)
 if [ -z "$OLD" ]; then
   echo "error: could not read version from Cargo.toml" >&2
