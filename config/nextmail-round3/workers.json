@@ -8,21 +8,23 @@
   "workers": [
     {
       "name": "af-nm-r3a",
-      "provider": "local",
-      "model": "deepseek-v4-flash/local",
-      "api_base": "http://localhost:5103/v1",
-      "api_key_env": "DEEPSEEK_API_KEY",
+      "provider": "litellm",
+      "model": "local/deepseek-v4-flash/local",
+      "api_base": "http://192.168.42.20:4000/v1",
+      "api_key_env": "LITELLM_API_KEY",
       "enabled": true,
-      "cli": "pi"
+      "cli": "builtin",
+      "max_turns": 48
     },
     {
       "name": "af-nm-r3b",
-      "provider": "local",
-      "model": "deepseek-v4-flash/local",
-      "api_base": "http://localhost:5103/v1",
-      "api_key_env": "DEEPSEEK_API_KEY",
+      "provider": "litellm",
+      "model": "local/deepseek-v4-flash/local",
+      "api_base": "http://192.168.42.20:4000/v1",
+      "api_key_env": "LITELLM_API_KEY",
       "enabled": true,
-      "cli": "pi"
+      "cli": "builtin",
+      "max_turns": 48
     }
   ]
 }
