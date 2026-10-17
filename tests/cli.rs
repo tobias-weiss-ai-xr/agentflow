@@ -12,6 +12,8 @@ use agentflow::config::{Config, Settings};
 use agentflow::state::{Receipt, Store, TaskStatus};
 use agentflow::worktree::branch_exists;
 use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -1902,6 +1904,193 @@ fn run_with_tf_no_reuse_never_reuses_an_archived_branch() {
     );
     assert!(!repo.join("WORK.txt").exists(), "nothing merged");
     assert_eq!(agent_spawns(&cli, "N"), 1, "the agent WAS dispatched");
+}
+
+// ---------------------------------------------------------------------------
+// T-AF-REUSE regression: an archive produced by a failed attempt in the SAME
+// run must be re-validated by pre-dispatch reuse. Uses the builtin native
+// harness (`cli: "builtin"`) against a local stub OpenAI server: attempt 1
+// COMMITS in-scope work and then dies at the turn cap (a native failure,
+// which archives the work via `preserve_and_note`), and the same `af run`
+// must reuse that archive on the retry instead of paying a second agent.
+// ---------------------------------------------------------------------------
+
+/// Serve each queued (status, body) pair on one incoming connection, in
+/// order. Excess connections get a 200 `{}` (the native harness fails that
+/// as an empty provider response, keeping a buggy test loud, not hung).
+struct StubLlm {
+    url: String,
+}
+
+impl StubLlm {
+    fn spawn(responses: Vec<(u16, String)>) -> StubLlm {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let responses = std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::VecDeque::from(responses),
+        ));
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { break };
+                let next = responses.lock().unwrap().pop_front();
+                let (code, body) = next.unwrap_or((200, "{}".to_string()));
+                // Drain ONE full request (headers + Content-Length body) so
+                // the socket has no unread data when we close — closing with
+                // unread data makes Windows RST the connection.
+                drain_http_request(&mut s);
+                let reason = if code == 200 {
+                    "OK"
+                } else {
+                    "Internal Server Error"
+                };
+                let resp = format!(
+                    "HTTP/1.1 {code} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = s.write_all(resp.as_bytes());
+                let _ = s.flush();
+            }
+        });
+        StubLlm {
+            url: format!("http://{addr}/v1"),
+        }
+    }
+}
+
+/// Read one complete HTTP request (headers + Content-Length body) from `s`.
+fn drain_http_request(s: &mut std::net::TcpStream) -> String {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match s.read(&mut chunk) {
+            Ok(0) | Err(_) => return String::new(),
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+        if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            let len = String::from_utf8_lossy(&buf[..end])
+                .lines()
+                .find_map(|l| {
+                    let (k, v) = l.split_once(':')?;
+                    k.eq_ignore_ascii_case("content-length")
+                        .then(|| v.trim().parse::<usize>().ok())?
+                })
+                .unwrap_or(0);
+            let mut left = len.saturating_sub(buf.len() - (end + 4));
+            while left > 0 {
+                match s.read(&mut chunk) {
+                    Ok(0) | Err(_) => return String::new(),
+                    Ok(n) => {
+                        buf.extend_from_slice(&chunk[..n]);
+                        left = left.saturating_sub(n);
+                    }
+                }
+            }
+            return String::from_utf8_lossy(&buf[end + 4..end + 4 + len]).into_owned();
+        }
+    }
+}
+
+/// One canned assistant turn that calls the `bash` tool (OpenAI shape).
+fn stub_bash_turn(command: &str) -> (u16, String) {
+    let args = serde_json::json!({ "command": command }).to_string();
+    (
+        200,
+        serde_json::json!({
+            "choices": [{"message": {"role": "assistant", "content": null,
+                "tool_calls": [{"id": "c1", "type": "function",
+                    "function": {"name": "bash", "arguments": args}}]}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        })
+        .to_string(),
+    )
+}
+
+fn native_worker_json(url: &str, max_attempts: u32, max_turns: u32) -> String {
+    format!(
+        r#"{{ "defaults": {{ "max_attempts": {max_attempts}, "accept_timeout_s": 10, "agent_timeout_s": 60 }},
+            "workers": [ {{ "name": "nat", "provider": "stub", "model": "stub-1",
+                            "api_base": "{url}", "cli": "builtin", "max_turns": {max_turns},
+                            "enabled": true }} ] }}"#
+    )
+}
+
+// spec: lifecycle/pre-dispatch-reuse-of-an-archived-branch#a-same-run-failed-attempts-archive-is-revalidated
+#[test]
+fn run_reuses_an_archive_from_a_failed_attempt_in_the_same_run() {
+    // Turn 1 commits the in-scope deliverable; turn 2 just proves the agent
+    // kept going. With max_turns=2 the harness hits the cap after turn 2, a
+    // native failure that archives the committed work (`preserve_and_note`).
+    // The stub serves exactly those two turns: the retry after the cap must
+    // REUSE the archive, never dispatch a second agent (and so never issue a
+    // third LLM turn).
+    let stub = StubLlm::spawn(vec![
+        stub_bash_turn("echo work > A.txt && git add A.txt && git commit -m 'agent work'"),
+        stub_bash_turn("echo more"),
+    ]);
+    let tasks = r#"{ "tasks": [
+        { "id": "A", "title": "t", "scope": ["A.txt"], "accept": "test -f A.txt" }
+    ] }"#;
+    let cli = Cli::new_with(tasks, &native_worker_json(&stub.url, 2, 2));
+    let repo = cli.dir.join("repo");
+    // `scratch_repo` initialises + commits the empty base; the returned git
+    // helper is not needed for this scenario.
+    let _git = scratch_repo(&repo);
+
+    let (code, out) = cli.af(&["run"]);
+    assert_eq!(code, 0, "reused archive completes the run: {out}");
+    assert!(
+        out.contains("reused archived branch"),
+        "the same-run archive IS reused on the retry: {out}"
+    );
+    // The archived branch was consumed by the merge (deleted), and the
+    // agent's committed work reached main.
+    assert!(repo.join("A.txt").exists(), "reused work merged to main");
+    assert!(
+        !branch_exists(&repo, "tf/A"),
+        "the attempt branch was cleaned up after the native failure"
+    );
+    // Exactly one agent run happened (attempt 1). Attempt 2 was reuse: the
+    // ledger shows one failed receipt + one recovered marker, and the attempt
+    // log records a single agent spawn.
+    let receipts = Store::new(cli.dir.join("state")).load_receipts();
+    let failed: Vec<_> = receipts
+        .iter()
+        .filter(|r| r.task == "A" && r.outcome == "failed")
+        .collect();
+    assert_eq!(failed.len(), 1, "exactly one failed attempt: {receipts:?}");
+    assert_eq!(
+        failed[0].attempt, 1,
+        "the failed attempt is attempt 1 (the turn-cap death)"
+    );
+    assert!(
+        failed[0]
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("turn cap"),
+        "native failure archived before the cap message: {:?}",
+        failed[0].error
+    );
+    let recovered: Vec<_> = receipts
+        .iter()
+        .filter(|r| r.task == "A" && r.outcome == "recovered")
+        .collect();
+    assert_eq!(
+        recovered.len(),
+        1,
+        "reuse recorded a recovered marker: {receipts:?}"
+    );
+    assert!(
+        !receipts
+            .iter()
+            .any(|r| r.task == "A" && r.outcome == "failed" && r.attempt == 2),
+        "NO second agent attempt — reuse replaced it: {receipts:?}"
+    );
+    assert_eq!(
+        agent_spawns(&cli, "A"),
+        1,
+        "the agent ran exactly once; the retry reused the archive"
+    );
 }
 
 // ---------------------------------------------------------------------------

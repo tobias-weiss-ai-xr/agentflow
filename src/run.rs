@@ -290,10 +290,18 @@ fn reuse_archived_branch(
 
 /// Pre-dispatch reuse decision for one ready task: `true` means the task's
 /// work was recovered from an archived branch and the caller must skip the
-/// agent dispatch. At most ONE decision is made per task per run: an archive
-/// created BY a failed attempt in this same run is the gate-only retry
-/// machinery's business (scheduling spec), and this also keeps the WHY line
-/// to one per attempt so a long campaign log stays readable.
+/// agent dispatch. A SPECIFIC archive is judged at most once per run (an
+/// out-of-scope or gate-failing candidate is never re-judged in a loop, and
+/// its WHY line is logged once), but the TASK stays reconsiderable whenever
+/// a NEWER archive appears in the same run — in particular an archive
+/// produced by a failed attempt in this very run (a native failure archives
+/// its work before cleanup, and the retry re-dispatch must re-validate it
+/// instead of re-buying the work from a fresh agent). The one exception is
+/// a task whose LAST attempt died at the acceptance gate: that work was
+/// already judged by the gate this run, so revalidating its archive would
+/// loop the same rejected work through the gate and starve the fresh-attempt
+/// fallback (scheduling spec) — the task's same-run consideration is burned
+/// and a fresh agent spawns instead (see the gate check below).
 fn reuse_before_dispatch(
     cfg: &Config,
     st: &Settings,
@@ -309,21 +317,48 @@ fn reuse_before_dispatch(
         // Defensive: a done task is never re-dispatched or reused.
         return false;
     }
-    if !considered.insert(task.id.clone()) {
-        // Already judged this task this run: never retry an archive, and
-        // never re-log the reason.
+    // GATE-FAILURE FALLBACK (scheduling spec — regression canary): align the
+    // reason the LAST attempt failed with the reuse decision. A task whose
+    // last_error names the acceptance gate died at the GATE; its work was
+    // already judged (and rejected) by the gate this run, so revalidating
+    // the same-run archive it left behind would re-judge the same rejected
+    // work in a loop and starve the fresh-attempt fallback that follows a
+    // SECOND gate failure. Burn the task's same-run consideration (the OLD,
+    // task-id-keyed behaviour) and decline reuse so the next attempt is a
+    // FRESH agent run. Native failures ('turn cap', 'agent exited', timeout,
+    // provider error) carry NO such message — their work was never
+    // gate-verified, so archive-branch-name reuse is exactly what saves
+    // money. No last_error (first dispatch) keeps today's semantics: a
+    // pre-seeded archive may be reused without a failing attempt.
+    if status
+        .get(&task.id)
+        .and_then(|s| s.last_error.as_deref())
+        .map_or(false, |e| e.contains("acceptance gate failed"))
+    {
+        considered.insert(task.id.clone());
         return false;
     }
     let repo = cfg.repo_dir_for(task, &st.repo_dir);
     let branches = worktree::archived_branches(&repo, &st.branch_prefix);
     let Some(branch) = worktree::newest_archived_branch(&branches, &st.branch_prefix, &task.id)
     else {
+        // No archive exists (YET). This is NOT a judgment against the task:
+        // a failed attempt later in this same run may archive its work, and
+        // that archive must be reconsidered. Nothing is recorded, so the
+        // task stays reconsiderable.
         println!(
             "  \u{21ba} {} no archived branch to reuse (searched {}/{}-rejected-<ts>); dispatching agent",
             task.id, st.branch_prefix, task.id
         );
         return false;
     };
+    // The consideration is keyed on the ARCHIVE BRANCH NAME, not the task:
+    // re-judging the SAME archive in a loop is forbidden, but arriving at a
+    // NEWER archive (fresh branch name) re-opens the decision for the task.
+    if !considered.insert(branch.clone()) {
+        // Already judged this exact archive this run: never re-judge it.
+        return false;
+    }
     match reuse_archived_branch(cfg, st, merge_locks, task, &branch, status) {
         ReuseOutcome::Reused => {
             println!(
@@ -568,10 +603,14 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
 
     // --- dispatch loop ---
     // Pre-dispatch archived-branch reuse (r13-auto-recover): ON by default,
-    // switchable off with AF_NO_REUSE=1. `reuse_considered` holds the task
-    // ids already judged this run, so a task's archive is considered at most
-    // once, a rejected candidate is never retried, and its reason is logged
-    // at most once.
+    // switchable off with AF_NO_REUSE=1. `reuse_considered` holds the ARCHIVE
+    // BRANCH names already judged this run, so a specific archive is
+    // re-validated at most once (a rejected candidate is never retried, and
+    // its reason is logged at most once) while the TASK stays reconsiderable
+    // for a NEWER archive — including one a failed attempt in this same run
+    // just archived. The one task-id burn that remains is the gate-failure
+    // fallback: after a SECOND gate failure the next attempt MUST be a fresh
+    // agent run, never another re-validation of the same rejected archive.
     let reuse_enabled = !reuse_disabled();
     let mut reuse_considered: HashSet<String> = HashSet::new();
     // Measured routing (ADR-12): replay receipts into per-worker stats.

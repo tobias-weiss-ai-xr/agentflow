@@ -1169,6 +1169,7 @@ fn unset_sandbox_wrapper_leaves_the_agent_argv_unchanged() {
 /// spec sequence `failed, failed, merged` (state spec).
 // spec: scheduling/retry-reuses-verified-agent-work
 // spec: scheduling/retry-reuses-verified-agent-work#a-second-gate-failure-falls-back-to-a-fresh-attempt
+// spec: lifecycle/pre-dispatch-reuse-of-an-archived-branch#a-gate-failed-attempt-is-not-revalidated-fresh-attempt-fallback
 // spec: state/cost-receipts#failed-attempts-are-recorded
 // spec: worktree/rejected-work-is-preserved-on-an-archived-branch#a-second-gate-failure-archives-the-reused-work
 // spec: worktree/rejected-work-is-preserved-on-an-archived-branch#the-work-survives-every-failure-path

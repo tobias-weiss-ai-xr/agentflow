@@ -168,11 +168,21 @@ gate remains the SOLE arbiter, so reuse can only ever save money and never
 accept work a fresh attempt would have had to redo. When the newest archive
 is out of scope or fails the gate, `af run` SHALL leave the archived branch
 in place for `af clean`/a later `af recover` and fall through to the normal
-agent dispatch, without retrying that branch again in the same run, and SHALL
-log the reason at most once per candidate. A task SHALL be considered for
-pre-dispatch reuse at most once per run — the first time it becomes ready — so
-an archive produced by an attempt within the SAME run is left to the retry
-machinery (`scheduling`) instead of being re-validated in a loop. Reuse SHALL
+agent dispatch, without retrying THAT SAME branch again in the same run, and
+SHALL log the reason at most once per candidate archive. A SPECIFIC archive SHALL be
+judged (scope + gate) at most once per run, and the task SHALL be reconsidered
+for pre-dispatch reuse whenever a NEWER archive appears in the same run —
+including an archive produced by a failed attempt in that same run (a native
+failure archives its work before cleanup, and the retry dispatch must
+re-validate it instead of re-buying the work from a fresh agent). The one
+exception is a task whose LAST attempt died at the acceptance gate: that work
+was already judged by the gate this run, so its same-run archive SHALL NOT be
+re-validated in a loop — pre-dispatch reuse SHALL decline and burn the task's
+same-run consideration so the NEXT attempt is a FRESH agent run (the
+fresh-attempt fallback is the scheduling spec's business, and is what keeps a
+SECOND gate failure from starving). No `last_error` (first dispatch) keeps
+today's semantics: a pre-seeded archive may be reused without a failing
+attempt. Reuse SHALL
 NOT fire for a task with no archive, a task already `Done`, or when
 `AF_NO_REUSE=1` is set (the operator's explicit escape hatch for a clean
 re-run). Reuse SHALL NOT append
@@ -200,6 +210,18 @@ GIVEN a ready task with an archived branch that fails the task's CURRENT
 acceptance gate
 WHEN `af run` dispatches the task
 THEN the archived branch survives and the run dispatches the agent normally.
+
+#### Scenario: a same-run failed attempts archive is revalidated
+
+GIVEN a task whose first attempt commits in-scope work and then fails natively (turn cap, timeout, provider error) in the SAME run, archiving `tf/<id>-rejected-<attempt>-<ts>`, and the attempt count is below `max_attempts`
+WHEN the task next becomes ready in the same run
+THEN pre-dispatch reuse re-validates that archive (scope + gate) and merges it — the task reaches `done` with `failed, recovered` receipts and no second agent is dispatched.
+
+#### Scenario: a gate-failed attempt is NOT revalidated (fresh-attempt fallback)
+
+GIVEN a task whose LAST attempt failed at the acceptance gate, archiving `tf/<id>-rejected-<attempt>-<ts>` (a second gate failure on a gate-only retry)
+WHEN the task next becomes ready in the same run
+THEN pre-dispatch reuse declines (the task's same-run consideration is burned) and the run dispatches a FRESH agent — receipts `failed, failed, merged` with no reuse of the gate-rejected archive, exactly the scheduling spec's fallback.
 
 #### Scenario: AF_NO_REUSE opts out
 
