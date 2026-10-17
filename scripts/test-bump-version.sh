@@ -37,7 +37,7 @@ chmod +x bin/cargo
 # script expects the built binary (./target/debug/af).
 cat > "$SCRATCH/target/debug/af" <<'EOF'
 #!/usr/bin/env bash
-V=$(sed -n 's/^version = "\([0-9.]*\)"$/\1/p' "$(dirname "$0")/../../../Cargo.toml")
+V=$(sed -n 's/^version = "\([0-9.]*\)"$/\1/p' "$(dirname "$0")/../../Cargo.toml")
 echo "af $V"
 EOF
 chmod +x "$SCRATCH/target/debug/af"
