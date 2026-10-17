@@ -2043,11 +2043,14 @@ fn run_reuses_an_archive_from_a_failed_attempt_in_the_same_run() {
         "the same-run archive IS reused on the retry: {out}"
     );
     // The archived branch was consumed by the merge (deleted), and the
-    // agent's committed work reached main.
+    // agent's committed work reached main. The ATTEMPT branch `tf/A` is
+    // left durable by the native-failure cleanup (T-AF-PRESERVE: only the
+    // worktree dir is dropped, never the branch), so it still exists here;
+    // the retry's pre-dispatch reuse touched only the `-rejected-` archive.
     assert!(repo.join("A.txt").exists(), "reused work merged to main");
     assert!(
-        !branch_exists(&repo, "tf/A"),
-        "the attempt branch was cleaned up after the native failure"
+        branch_exists(&repo, "tf/A"),
+        "the attempt branch is KEPT durable after the native failure (T-AF-PRESERVE)"
     );
     // Exactly one agent run happened (attempt 1). Attempt 2 was reuse: the
     // ledger shows one failed receipt + one recovered marker, and the attempt
@@ -2091,6 +2094,89 @@ fn run_reuses_an_archive_from_a_failed_attempt_in_the_same_run() {
         1,
         "the agent ran exactly once; the retry reused the archive"
     );
+}
+
+// ---------------------------------------------------------------------------
+// T-AF-PRESERVE regression: a NATIVE failure (turn cap, timeout, provider
+// error) that already committed work must leave the ATTEMPT BRANCH durable
+// for the next attempt, not just an archived copy. `TF_NO_REUSE=1` blocks
+// the pre-dispatch archive-reuse twin so the retry has to attach to the
+// durable branch itself — a gate-only retry that never re-invokes the agent.
+// ---------------------------------------------------------------------------
+
+// spec: lifecycle/execute-pipeline#native-failure-keeps-the-attempt-branch-durable
+#[test]
+fn native_failure_keeps_branch_durable_for_gate_only_retry() {
+    // Turn 1 commits the in-scope deliverable; turn 2 just proves the agent
+    // kept going. With max_turns=2 the harness hits the turn cap after turn
+    // 2 — a native failure whose committed work must survive for the retry.
+    let stub = StubLlm::spawn(vec![
+        stub_bash_turn("echo work > A.txt && git add A.txt && git commit -m w"),
+        stub_bash_turn("echo more"),
+    ]);
+    let tasks = r#"{ "tasks": [
+        { "id": "A", "title": "t", "scope": ["A.txt"], "accept": "test -f A.txt" }
+    ] }"#;
+    let cli = Cli::new_with(tasks, &native_worker_json(&stub.url, 2, 2));
+    let repo = cli.dir.join("repo");
+    let _git = scratch_repo(&repo);
+
+    // TF_NO_REUSE=1: the durable attempt branch (not the archive) must carry
+    // the retry. Pre-dispatch reuse is off, so attempt 2 either attaches to
+    // the kept `tf/A` branch or starts a fresh agent — the log tells which.
+    let (code, out) = cli.af_env(&["run"], &[("TF_NO_REUSE", "1")]);
+    assert_eq!(
+        code, 0,
+        "gate-only retry on the durable branch completes: {out}"
+    );
+    assert!(repo.join("A.txt").exists(), "retried work merged to main");
+    // The work was NOT started from zero: attempt 2 is a gate-only retry on
+    // the committed agent work, and the agent itself never ran a second time.
+    let log = std::fs::read_to_string(cli.dir.join("state").join("logs").join("A.log"))
+        .expect("attempt log exists");
+    assert!(
+        log.contains("-- gate-only retry on committed agent work --"),
+        "attempt 2 must attach as a gate-only retry:\n{log}"
+    );
+    assert_eq!(
+        log.matches("-- agent --").count(),
+        1,
+        "the agent ran ONCE (attempt 1); the retry must not re-invoke it:\n{log}"
+    );
+    // Attempt 1's receipt names the archived copy (the archive is still made)
+    // AND both the archive and the durable branch existed to carry the retry.
+    let receipts = Store::new(cli.dir.join("state")).load_receipts();
+    let mut sorted: Vec<_> = receipts.into_iter().filter(|r| r.task == "A").collect();
+    sorted.sort_by_key(|r| r.attempt);
+    assert_eq!(sorted.len(), 2, "two attempts, one per receipt: {sorted:?}");
+    assert_eq!(sorted[0].attempt, 1, "attempt 1 failed (turn cap)");
+    assert_eq!(sorted[0].outcome, "failed");
+    assert!(
+        sorted[0]
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("work kept on branch tf/A-rejected-"),
+        "the native failure names the archived copy: {:?}",
+        sorted[0].error
+    );
+    assert_eq!(sorted[1].attempt, 2, "attempt 2 merged");
+    assert_eq!(sorted[1].outcome, "merged");
+    // The archived `-rejected-` copy still exists after the durable attach
+    // and merge (the success path cleans only the attempt branch): af recover
+    // and pre-dispatch reuse still find it.
+    let archives = std::process::Command::new("git")
+        .args(["branch", "--list", "tf/A-rejected-*"])
+        .current_dir(&repo)
+        .output()
+        .expect("git runs");
+    let names: Vec<String> = String::from_utf8_lossy(&archives.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(names.len(), 1, "the archived copy survives: {names:?}");
 }
 
 // ---------------------------------------------------------------------------

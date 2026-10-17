@@ -389,11 +389,14 @@ fn execute_attempt(
         // Native failures return early with the PRECISE reason (`harness: …`)
         // on the receipt, reusing the same preserve-and-note machinery: the
         // paid-for work lands on the archive branch exactly like a CLI
-        // failure. The legacy `agent exited …` message below stays
+        // failure. T-AF-PRESERVE: when that archive reported work kept, the
+        // attempt branch itself is left durable too (only the worktree dir
+        // goes), so the next attempt attaches as a gate-only retry and never
+        // re-pays the agent. The legacy `agent exited …` message below stays
         // byte-identical for CLI workers.
         if native && !agent_out.passed() {
             let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
-            cleanup(&repo, &wt);
+            cleanup_after_preserved(&repo, &wt, &kept);
             let reason = if agent_out.stderr.is_empty() {
                 format!("harness failed ({:?})", agent_out.kind)
             } else {
@@ -700,6 +703,25 @@ fn execute_attempt(
 
 fn cleanup(repo: &Path, wt: &worktree::Worktree) {
     worktree::remove(repo, wt);
+}
+
+/// T-AF-PRESERVE: cleanup for a NATIVE agent failure that has already run
+/// [`preserve_and_note`]. When the archive reported work kept (`kept` is
+/// non-empty — the agent really committed before dying at the turn cap /
+/// timeout / provider error), remove ONLY the worktree dir so the attempt
+/// branch and its commits stay durable for the next attempt: the retry
+/// attaches to it as a gate-only retry (`materialize_worktree` detects the
+/// durable branch) and never re-pays the agent. When preservation found
+/// nothing to keep, drop branch + worktree exactly as before. The
+/// at-most-one-cheap-gate-rerun bound is enforced upstream: a second gate
+/// failure on reused work (the `reused` flag) archives the branch and runs
+/// full `cleanup`, so genuinely wrong work still gets a fresh agent.
+fn cleanup_after_preserved(repo: &Path, wt: &worktree::Worktree, kept: &str) {
+    if kept.is_empty() {
+        cleanup(repo, wt);
+    } else {
+        worktree::remove_worktree_only(repo, wt);
+    }
 }
 
 /// Preserve an attempt's work before the cleanup that follows a failure:

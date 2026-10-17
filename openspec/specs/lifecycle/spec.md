@@ -7,7 +7,7 @@ TBD - created by archiving change rust-orchestrator. Update Purpose after archiv
 
 ### Requirement: Execute pipeline
 
-For each task attempt, `af` SHALL: create a git worktree on a fresh branch; render a prompt from the task template; spawn the agent CLI with `--provider <p> --model <m> -p @<prompt-file>`; if the agent succeeds, run the acceptance gate; if the gate passes, merge the branch to the base branch; otherwise record failure/retry. When an attempt fails after the agent has committed work — a non-zero exit, a stall-watchdog kill, the total agent timeout, a scope violation, an acceptance-gate failure, or a merge conflict — `af` SHALL preserve that committed work on an archived branch (`<branch>-rejected-<now>`) rather than destroying it with cleanup, and SHALL name that branch in the failure reason (so the receipt carries it). Archiving is best-effort and can never fail the attempt.
+For each task attempt, `af` SHALL: create a git worktree on a fresh branch; render a prompt from the task template; spawn the agent CLI with `--provider <p> --model <m> -p @<prompt-file>`; if the agent succeeds, run the acceptance gate; if the gate passes, merge the branch to the base branch; otherwise record failure/retry. When an attempt fails after the agent has committed work — a non-zero exit, a stall-watchdog kill, the total agent timeout, a scope violation, an acceptance-gate failure, or a merge conflict — `af` SHALL preserve that committed work on an archived branch (`<branch>-rejected-<now>`) rather than destroying it with cleanup, and SHALL name that branch in the failure reason (so the receipt carries it). Archiving is best-effort and can never fail the attempt. In addition to archiving a copy, when a NATIVE agent failure (turn cap, timeout, provider error) leaves committed work behind, `af` SHALL leave the attempt branch itself durable — dropping only the worktree, never the branch — so the next attempt attaches to that branch as a gate-only retry (`-- gate-only retry on committed agent work --`) and never re-pays the agent. The at-most-one-gate-rerun bound applies: if that gate-only retry fails the gate a second time, `af` SHALL archive the work and drop the branch so the following attempt is a full fresh agent run.
 
 #### Scenario: happy path
 
@@ -23,6 +23,16 @@ THEN the task is marked `failed` (or retried), never merged.
 
 WHEN the agent CLI exits non-zero
 THEN the attempt fails without running the gate and without merging.
+
+#### Scenario: native failure keeps the attempt branch durable
+
+WHEN a NATIVE agent attempt (turn cap, timeout, or provider error) fails after committing in-scope work, and `preserve_and_note` reports a kept archive, and the gate then passes on the retry
+THEN the attempt branch is left durable (only the worktree is dropped), the next attempt attaches as a gate-only retry (`-- gate-only retry on committed agent work --`), the agent is never re-invoked, the archived `-rejected-` copy is still made and survives, and the retried work merges. A second gate failure on that retry archives the work and drops the branch, so the following attempt is a fresh agent run (at most one cheap gate re-run).
+
+#### Scenario: native failure with no committed work cleans up
+
+WHEN a NATIVE agent attempt fails with nothing to keep (`preserve_and_note` reports no archive)
+THEN the attempt branch and its worktree are both removed exactly as before the durable-branch behaviour.
 
 ### Requirement: Subprocess execution contract
 

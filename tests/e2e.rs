@@ -7,6 +7,7 @@
 use agentflow::config::{self, Settings, TaskState};
 use agentflow::run::{self, RunOptions};
 use agentflow::state::{Receipt, Store};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -2213,4 +2214,270 @@ fn reuse_writes_a_recovered_receipt() {
     let log =
         std::fs::read_to_string(f.st.state_dir.join("logs").join("A.log")).unwrap_or_default();
     assert_eq!(log.matches("-- agent --").count(), 0, "no agent: {log}");
+}
+
+// ---------------------------------------------------------------------------
+// T-AF-PRESERVE regression (native harness): a native agent failure (turn
+// cap, timeout, provider error) that has already committed in-scope work must
+// leave the ATTEMPT BRANCH durable for the next attempt — a gate-only retry
+// — instead of `cleanup()` deleting the branch and re-paying the agent.
+// `TF_NO_REUSE=1` turns OFF the pre-dispatch archive-reuse twin so this test
+// exercises the durable-branch path itself (materialize → attach → gate).
+// ---------------------------------------------------------------------------
+
+/// Minimal stub OpenAI server: serves each queued (status, body) on one
+/// incoming connection in order; excess connections get a 200 `{}` (the
+/// native harness fails that, keeping a mis-sized fixture loud).
+struct NativeStub {
+    url: String,
+}
+
+impl NativeStub {
+    fn spawn(responses: Vec<(u16, String)>) -> NativeStub {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let responses = std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::VecDeque::from(responses),
+        ));
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { break };
+                let next = responses.lock().unwrap().pop_front();
+                let (code, body) = next.unwrap_or((200, "{}".to_string()));
+                // Drain ONE full request (headers + Content-Length body) so
+                // the socket has no unread data when we close (Windows RSTs
+                // otherwise and the client sees a transport error).
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match s.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                                let len = String::from_utf8_lossy(&buf[..end])
+                                    .lines()
+                                    .find_map(|l| {
+                                        let (k, v) = l.split_once(':')?;
+                                        k.eq_ignore_ascii_case("content-length")
+                                            .then(|| v.trim().parse::<usize>().ok())?
+                                    })
+                                    .unwrap_or(0);
+                                let mut left = len.saturating_sub(buf.len() - (end + 4));
+                                while left > 0 {
+                                    match s.read(&mut chunk) {
+                                        Ok(0) | Err(_) => break,
+                                        Ok(n) => {
+                                            buf.extend_from_slice(&chunk[..n]);
+                                            left = left.saturating_sub(n);
+                                        }
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                let reason = if code == 200 {
+                    "OK"
+                } else {
+                    "Internal Server Error"
+                };
+                let resp = format!(
+                    "HTTP/1.1 {code} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = s.write_all(resp.as_bytes());
+                let _ = s.flush();
+            }
+        });
+        NativeStub {
+            url: format!("http://{addr}/v1"),
+        }
+    }
+}
+
+/// One canned native-harness turn that runs `command` through the bash tool.
+fn native_bash_turn(command: &str) -> (u16, String) {
+    let args = serde_json::json!({ "command": command }).to_string();
+    (
+        200,
+        serde_json::json!({
+            "choices": [{"message": {"role": "assistant", "content": null,
+                "tool_calls": [{"id": "c1", "type": "function",
+                    "function": {"name": "bash", "arguments": args}}]}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        })
+        .to_string(),
+    )
+}
+
+fn native_worker_json(url: &str, max_attempts: u32, max_turns: u32) -> String {
+    format!(
+        r#"{{ "defaults": {{ "max_attempts": {max_attempts}, "accept_timeout_s": 10, "agent_timeout_s": 60 }},
+            "workers": [ {{ "name": "nat", "provider": "stub", "model": "stub-1",
+                            "api_base": "{url}", "cli": "builtin", "max_turns": {max_turns},
+                            "enabled": true }} ] }}"#
+    )
+}
+
+// spec: lifecycle/execute-pipeline#native-failure-keeps-the-attempt-branch-durable
+#[test]
+fn native_failure_keeps_durable_branch_for_gate_only_retry() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    // Turn 1 commits the in-scope deliverable; turn 2 just proves the agent
+    // kept going. With max_turns=2 the harness hits the TURN CAP after turn
+    // 2 — a native failure whose committed work must survive for the retry.
+    let stub = NativeStub::spawn(vec![
+        native_bash_turn("echo work > A.txt && git add A.txt && git commit -m w"),
+        native_bash_turn("echo more"),
+    ]);
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"touch a file","scope":["A.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("A.txt")
+        ),
+        &native_worker_json(&stub.url, 2, 2),
+    );
+    // TF_NO_REUSE=1: the pre-dispatch archive-reuse twin is off, so attempt 2
+    // either attaches to the durable `tf/A` branch (a gate-only retry) or
+    // starts a fresh agent — the log tells which. Set around run_loop only;
+    // e2e tests share the process-global env.
+    std::env::set_var("TF_NO_REUSE", "1");
+    let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
+    std::env::remove_var("TF_NO_REUSE");
+    assert_eq!(code, 0, "gate-only retry on the durable branch completes");
+
+    // The retried work merged; the work was NOT started from zero.
+    assert!(f.repo.join("A.txt").exists(), "retried work merged to main");
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Done);
+    assert_eq!(
+        st["A"].attempts, 2,
+        "attempt 1 native fail + attempt 2 retry"
+    );
+
+    // The attempt log proves the retry was gate-only: the marker is present
+    // and the agent ran exactly once (attempt 1), never again.
+    let log =
+        std::fs::read_to_string(f.st.state_dir.join("logs").join("A.log")).unwrap_or_default();
+    assert!(
+        log.contains("-- gate-only retry on committed agent work --"),
+        "attempt 2 must attach as a gate-only retry:\n{log}"
+    );
+    assert_eq!(
+        log.matches("-- agent --").count(),
+        1,
+        "the agent ran ONCE (attempt 1); the retry must not re-invoke it:\n{log}"
+    );
+
+    // Attempt 1's receipt names the archived copy (archiving still happens),
+    // and the archived `-rejected-` copy survives the durable attach + merge
+    // (the success path cleans only the attempt branch).
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    let mut sorted: Vec<_> = receipts.into_iter().filter(|r| r.task == "A").collect();
+    sorted.sort_by_key(|r| r.attempt);
+    assert_eq!(sorted.len(), 2, "one receipt per attempt: {sorted:?}");
+    assert_eq!(sorted[0].attempt, 1);
+    assert_eq!(sorted[0].outcome, "failed");
+    assert!(
+        sorted[0]
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("work kept on branch tf/A-rejected-"),
+        "native failure names the archived copy: {:?}",
+        sorted[0].error
+    );
+    assert_eq!(sorted[1].attempt, 2);
+    assert_eq!(sorted[1].outcome, "merged");
+    let list = std::process::Command::new("git")
+        .args(["branch", "--list", "tf/A-rejected-*"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    let archives: Vec<String> = String::from_utf8_lossy(&list.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        archives.len(),
+        1,
+        "the archived copy survives: {archives:?}"
+    );
+}
+
+/// T-AF-PRESERVE, the conditional side: a native failure with NOTHING to
+/// keep (the agent never committed anything) must still clean up exactly as
+/// before — branch and worktree both go — so a later attempt starts fresh.
+/// This is the `kept == ""` arm of `cleanup_after_preserved`: when
+/// `preserve_and_note` reports no archive, the durable-branch behaviour does
+/// NOT kick in (the next attempt would have asked a fresh agent for work the
+/// old attempt never produced, so the branch is dropped exactly as pre-fix).
+// spec: lifecycle/execute-pipeline#native-failure-with-no-committed-work-cleans-up
+#[test]
+fn native_failure_with_no_committed_work_cleans_the_branch() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    // Two no-op turns (echo only — no commits, no dirty files), then the
+    // turn cap fires: a native failure with NOTHING to keep.
+    let stub = NativeStub::spawn(vec![
+        native_bash_turn("echo more"),
+        native_bash_turn("echo more"),
+    ]);
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"no work","scope":["A.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("A.txt")
+        ),
+        &native_worker_json(&stub.url, 1, 2), // max_attempts=1, turn cap at 2
+    );
+
+    let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
+    assert_eq!(code, 2, "native turn cap with no work fails the task");
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Failed);
+    assert!(
+        st["A"]
+            .last_error
+            .as_deref()
+            .unwrap_or("")
+            .contains("turn cap"),
+        "failure names the turn cap: {:?}",
+        st["A"].last_error
+    );
+
+    // Nothing was kept: NO `-rejected-` archive, and the attempt branch
+    // itself is gone (the `kept == ""` arm ran the full cleanup).
+    let list = std::process::Command::new("git")
+        .args(["branch", "--list", "tf/A-rejected-*"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    let archives: Vec<String> = String::from_utf8_lossy(&list.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert!(
+        archives.is_empty(),
+        "nothing kept, nothing archived: {archives:?}"
+    );
+    let verify = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", "refs/heads/tf/A"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    assert!(
+        !verify.status.success(),
+        "attempt branch must be cleaned up (nothing to keep)"
+    );
+    // And the worktree dir is gone too (full cleanup, not remove_worktree_only).
+    assert!(!f.st.worktree_root.join("A").exists());
 }
