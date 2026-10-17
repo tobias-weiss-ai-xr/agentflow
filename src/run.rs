@@ -144,14 +144,14 @@ pub fn pick_worker<'a>(
     router.pick(eligible)
 }
 
-/// Operator escape hatch for pre-dispatch reuse: `TF_NO_REUSE=1` (also
+/// Operator escape hatch for pre-dispatch reuse: `AF_NO_REUSE=1` (also
 /// accepts `true`/`yes`) makes `af run` buy fresh agent work even when a
 /// scope-compatible archived branch exists, for an operator who wants a
 /// clean re-run. Anything else (including unset) leaves reuse ON — that is
 /// the point of the optimisation.
 fn reuse_disabled() -> bool {
     matches!(
-        std::env::var("TF_NO_REUSE").ok().as_deref(),
+        crate::config::af_var("AF_NO_REUSE").as_deref(),
         Some("1") | Some("true") | Some("yes")
     )
 }
@@ -361,12 +361,12 @@ fn reuse_before_dispatch(
 /// This is the main orchestrator loop. It:
 ///
 /// 1. **Reaps** completed attempts from the channel
-/// 2. **Checks budget** against `TF_MAX_WALL_CLOCK_S`
+/// 2. **Checks budget** against `AF_MAX_WALL_CLOCK_S`
 /// 3. **Detects deadlocks** (no ready tasks but work remains)
 /// 4. **Dispatches** ready tasks to free workers (UCB1 routing)
 /// 5. **Auto-reuses** archived work when scope allows (pre-dispatch)
 ///
-/// The loop uses a **poll-wake** strategy: it polls every `TF_POLL` seconds
+/// The loop uses a **poll-wake** strategy: it polls every `AF_POLL` seconds
 /// (default 15s), but wakes immediately when an attempt completes, reducing
 /// average dispatch latency to near-zero for busy campaigns.
 ///
@@ -443,7 +443,7 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
     let mut cfg = cfg.clone();
 
     let store = Store::new(st.state_dir.clone());
-    // Single writer per TF_STATE_DIR: a second `af run` must not clobber
+    // Single writer per AF_STATE_DIR: a second `af run` must not clobber
     // run-state.json. Held (and released on drop) for the whole run.
     let _lock = match store.acquire_lock() {
         Ok(g) => g,
@@ -568,7 +568,7 @@ pub fn run_loop(cfg: &Config, st: &Settings, opts: &RunOptions) -> i32 {
 
     // --- dispatch loop ---
     // Pre-dispatch archived-branch reuse (r13-auto-recover): ON by default,
-    // switchable off with TF_NO_REUSE=1. `reuse_considered` holds the task
+    // switchable off with AF_NO_REUSE=1. `reuse_considered` holds the task
     // ids already judged this run, so a task's archive is considered at most
     // once, a rejected candidate is never retried, and its reason is logged
     // at most once.
@@ -1498,7 +1498,7 @@ pub fn dry_run(cfg: &Config, st: &Settings) -> i32 {
         let measured = consumed_wall_clock_s(&store.load_receipts(), &in_scope);
         if wall_clock_budget_exhausted(st, measured) {
             println!(
-                "  BUDGET: spent {measured:.1}s of {}s cap (TF_MAX_WALL_CLOCK_S) — a run would stop before dispatching new attempts",
+                "  BUDGET: spent {measured:.1}s of {}s cap (AF_MAX_WALL_CLOCK_S) — a run would stop before dispatching new attempts",
                 st.max_wall_clock_s
             );
         }

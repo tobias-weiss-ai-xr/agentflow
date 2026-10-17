@@ -66,7 +66,7 @@ pub fn agent_env(
     if let Some(k) = &worker.api_key_env {
         allow.push(k.clone());
     }
-    if let Some(p) = lookup("TF_AGENT_ENV_PASSTHROUGH") {
+    if let Some(p) = crate::config::env_fallback("AF_AGENT_ENV_PASSTHROUGH", lookup) {
         for k in p.split(',').map(str::trim).filter(|s| !s.is_empty()) {
             allow.push(k.to_string());
         }
@@ -448,7 +448,7 @@ fn execute_attempt(
                 // historical "agent exited …" shape that callers match on.
                 let reason = if agent_out.kind == crate::subprocess::CmdKind::Stalled {
                     format!(
-                        "agent stalled: produced no output for {}s (stall window, TF_AGENT_STALL_S={}); killed before agent_timeout_s={}",
+                        "agent stalled: produced no output for {}s (stall window, AF_AGENT_STALL_S={}); killed before agent_timeout_s={}",
                         ctx.st.agent_stall_s,
                         ctx.st.agent_stall_s,
                         ctx.st.agent_timeout_s
@@ -1044,7 +1044,7 @@ mod tests {
     fn agent_env_exposes_only_worker_key_plus_git_hygiene() {
         let w = worker(Some("AF_TEST_KEY"));
         let lookup = |k: &str| match k {
-            "TF_AGENT_ENV_PASSTHROUGH" => Some("A,B".into()),
+            "AF_AGENT_ENV_PASSTHROUGH" => Some("A,B".into()),
             _ => None,
         };
         let (pairs, allow) = agent_env(&w, &lookup);
@@ -1065,6 +1065,20 @@ mod tests {
         assert!(allow.contains(&"PATH".to_string()));
         assert!(allow.contains(&"A".to_string()) && allow.contains(&"B".to_string()));
         assert!(!allow.contains(&"AF_OTHER_SECRET".to_string()));
+    }
+
+    #[test]
+    fn agent_env_reads_legacy_tf_passthrough_as_fallback() {
+        // The legacy name still works when the AF_* twin is unset.
+        let lookup = |k: &str| match k {
+            "TF_AGENT_ENV_PASSTHROUGH" => Some("C".to_string()),
+            _ => None,
+        };
+        let (_pairs, allow) = agent_env(&worker(None), &lookup);
+        assert!(
+            allow.contains(&"C".to_string()),
+            "legacy TF_AGENT_ENV_PASSTHROUGH passthrough applies"
+        );
     }
 
     #[test]

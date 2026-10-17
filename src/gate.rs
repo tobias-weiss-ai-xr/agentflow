@@ -51,11 +51,12 @@ pub fn run_accept(
     let (shell, flag) = shell();
     let args = vec![flag, accept.to_string()];
     // Forward the replay-safety decision so gate scripts can assert it.
+    // `AF_GATE_REPLAY` is canonical; the legacy `TF_GATE_REPLAY` twin is
+    // kept so existing gate scripts keep working during the transition.
     let mut env: Vec<(String, String)> = env.to_vec();
-    env.push((
-        "TF_GATE_REPLAY".to_string(),
-        if replay { "1" } else { "0" }.to_string(),
-    ));
+    let replay_value = if replay { "1" } else { "0" }.to_string();
+    env.push(("AF_GATE_REPLAY".to_string(), replay_value.clone()));
+    env.push(("TF_GATE_REPLAY".to_string(), replay_value));
     // Gates are user-authored (trusted): full inherited environment.
     subprocess::run(
         shell,
@@ -114,7 +115,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn gate_env_is_scoped_to_declared_pairs() {
-        // Var injected via TF_GATE_ENV is visible; a random inherited var is not touched.
+        // Var injected via AF_GATE_ENV is visible; a random inherited var is not touched.
         let out = run_accept(
             "test \"$MY_GATE_VAR\" = hello",
             Path::new("."),

@@ -35,8 +35,9 @@ COST REPORT WINDOWS (af cost):
   always computed over the selected receipts only. Plain `af cost`
   totals every attempt of every task.
 
-ENV: TF_REPO_DIR, TF_STATE_DIR, TF_MAX_PARALLEL, TF_BRANCH_PREFIX, TF_POLL,
-     TF_GATE_ENV, TF_TASKS_JSON, TF_WORKERS_JSON, TF_AGENT_TIMEOUT_S";
+ENV: AF_REPO_DIR, AF_STATE_DIR, AF_MAX_PARALLEL, AF_BRANCH_PREFIX, AF_POLL,
+     AF_GATE_ENV, AF_TASKS_JSON, AF_WORKERS_JSON, AF_AGENT_TIMEOUT_S
+     (legacy TF_* names still work but are deprecated; use AF_*)";
 
 #[derive(Debug)]
 struct Args {
@@ -180,12 +181,12 @@ fn load_cfg(args: &Args) -> Result<(config::Config, Settings), String> {
         .workers_file
         .clone()
         .unwrap_or_else(|| st.workers_file.clone());
-    // Multi-repo (ADR-11): --repos > TF_REPOS_JSON > <tasks dir>/repos.json;
+    // Multi-repo (ADR-11): --repos > AF_REPOS_JSON > <tasks dir>/repos.json;
     // missing file = single-repo mode.
     let repos_override = args
         .repos_file
         .clone()
-        .or_else(|| std::env::var("TF_REPOS_JSON").ok().map(PathBuf::from));
+        .or_else(|| config::af_var("AF_REPOS_JSON").map(PathBuf::from));
     let mut cfg = config::load_full(&tasks, &workers, repos_override)?;
     let repo_warns = cfg.repo_warnings(&st.repo_dir);
     cfg.warnings.extend(repo_warns); // printed by the common loop below

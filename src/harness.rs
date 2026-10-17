@@ -76,7 +76,7 @@ pub struct Output {
 }
 
 /// Effective turn cap: per-task override wins, then worker field, then
-/// TF_AGENT_MAX_TURNS (>0), then 32.
+/// AF_AGENT_MAX_TURNS (>0), then 32.
 fn effective_max_turns(worker: &Worker, st: &Settings, task: Option<u32>) -> u32 {
     task.or(worker
         .max_turns
