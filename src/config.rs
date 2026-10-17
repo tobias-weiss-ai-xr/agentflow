@@ -1,4 +1,5 @@
-//! Config: task/worker schemas + validation + `TF_*` environment overrides.
+//! Config: task/worker schemas + validation + `AF_*` environment overrides
+//! (legacy `TF_*` names are still read; see [`af_var`]).
 //!
 //! Schema shapes are compatible with taskfleet's shipped config examples so
 //! existing campaign configs work as the integration corpus (ADR-4).
@@ -6,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 // ---------------------------------------------------------------------------
 // Data models
@@ -100,7 +102,7 @@ pub struct Task {
     /// Per-task turn cap for the builtin harness (`cli: "builtin"`) — the
     /// loop stops (and the attempt fails, archive-preserving) after this many
     /// LLM round-trips on THIS task. Overrides the worker's `max_turns`, then
-    /// `TF_AGENT_MAX_TURNS`, then the harness default of 32. Ignored for CLI
+    /// `AF_AGENT_MAX_TURNS`, then the harness default of 32. Ignored for CLI
     /// workers. Absent = no per-task override.
     #[serde(default)]
     pub max_turns: Option<u32>,
@@ -169,7 +171,7 @@ pub struct Worker {
     pub price_per_mtok_usd: Option<f64>,
     /// Turn cap for the native harness (`cli: "builtin"`): the loop stops
     /// (and the attempt fails, archive-preserving) after this many LLM
-    /// round-trips. Absent = `TF_AGENT_MAX_TURNS` if set (>0), else 32.
+    /// round-trips. Absent = `AF_AGENT_MAX_TURNS` if set (>0), else 32.
     /// Ignored for CLI workers (their flags live in `args`).
     #[serde(default)]
     pub max_turns: Option<u32>,
@@ -248,7 +250,7 @@ pub struct Config {
     pub defaults: WorkerDefaults,
     pub by_id: HashMap<String, Task>,
     /// Named repositories (multi-repo mode, optional). Missing/empty map =
-    /// single-repo mode: every task targets `TF_REPO_DIR`.
+    /// single-repo mode: every task targets `AF_REPO_DIR`.
     pub repos: BTreeMap<String, PathBuf>,
     /// Non-fatal compatibility notes (dangling deps, gate-less tasks) —
     /// taskfleet's corpus relies on these, so they warn instead of fail.
@@ -556,7 +558,9 @@ pub fn detect_cycle(tasks: &[Task]) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 /// Resolved runtime settings. Defaults mirror taskfleet's `TF_*` variables;
-/// each can be overridden via the environment.
+/// each can be overridden via the environment under its canonical `AF_*`
+/// name (the legacy `TF_*` name still works as a fallback, with a one-time
+/// deprecation notice — see [`af_var`]).
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub repo_dir: PathBuf,
@@ -570,7 +574,7 @@ pub struct Settings {
     pub workers_file: PathBuf,
     pub prompt_file: PathBuf,
     pub agent_timeout_s: u64,
-    /// Stall watchdog window for the agent CLI (`TF_AGENT_STALL_S`), in
+    /// Stall watchdog window for the agent CLI (`AF_AGENT_STALL_S`), in
     /// seconds. **0 = DISABLED** (the default): the agent is bounded only
     /// by `agent_timeout_s`, exactly the legacy behaviour. Any non-zero
     /// value kills an agent that has produced no output (stdout or
@@ -578,10 +582,10 @@ pub struct Settings {
     /// so a hung agent stops burning the clock (and paid tokens) instead
     /// of sitting out the whole total timeout.
     pub agent_stall_s: u64,
-    /// Global native-harness turn cap (`TF_AGENT_MAX_TURNS`). 0 = no global
+    /// Global native-harness turn cap (`AF_AGENT_MAX_TURNS`). 0 = no global
     /// opinion; the worker's `max_turns` wins, else 32.
     pub agent_max_turns: u32,
-    /// Campaign wall-clock spend ceiling (`TF_MAX_WALL_CLOCK_S`), in
+    /// Campaign wall-clock spend ceiling (`AF_MAX_WALL_CLOCK_S`), in
     /// seconds. **0 = unlimited** (the default): exactly the legacy
     /// behaviour. Any non-zero value stops NEW dispatches once the receipts
     /// for the in-scope tasks already total at least this many wall-clock
@@ -590,43 +594,75 @@ pub struct Settings {
     /// ledger, so the ceiling survives restarts and composes across runs.
     pub max_wall_clock_s: u64,
     /// Whitespace-split command prefix wrapped around the agent argv
-    /// (`TF_SANDBOX_CMD`, e.g. "firejail --net=none"). Empty = no wrapper.
+    /// (`AF_SANDBOX_CMD`, e.g. "firejail --net=none"). Empty = no wrapper.
     pub sandbox_cmd: Vec<String>,
 }
 
+/// Resolve an env name with the `AF_*` → legacy `TF_*` fallback rule.
+///
+/// `AF_<suffix>` wins when set; only when it is ABSENT is `TF_<suffix>`
+/// consulted, and then a deprecation notice is printed to stderr **at most
+/// once per legacy name per process** (a run that reads `TF_STATE_DIR`
+/// repeatedly warns a single time). A `name` without the `AF_` prefix has no
+/// legacy twin and is looked up literally. `lookup` is the env accessor,
+/// injected so `agent_env` can be exercised with a fake environment.
+pub(crate) fn env_fallback(name: &str, lookup: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    if let Some(v) = lookup(name) {
+        return Some(v);
+    }
+    let legacy = format!("TF_{}", name.strip_prefix("AF_")?);
+    let v = lookup(&legacy)?;
+    warn_legacy_env(&legacy, name);
+    Some(v)
+}
+
+/// Read an `AF_*` variable from the process environment, falling back to its
+/// legacy `TF_*` twin with a one-time deprecation notice — see
+/// [`env_fallback`] for the exact rule.
+pub fn af_var(name: &str) -> Option<String> {
+    env_fallback(name, &|k| std::env::var(k).ok())
+}
+
+/// Emit the deprecation notice for a legacy `TF_*` variable, once per name.
+fn warn_legacy_env(legacy: &str, af: &str) {
+    static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let warned = WARNED.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut warned = warned.lock().unwrap_or_else(|p| p.into_inner());
+    if warned.insert(legacy.to_string()) {
+        eprintln!("warning: {legacy} is deprecated; use {af} instead");
+    }
+}
+
 fn env_or(key: &str, default: &str) -> String {
-    std::env::var(key).unwrap_or_else(|_| default.to_string())
+    af_var(key).unwrap_or_else(|| default.to_string())
 }
 
 fn env_or_int(key: &str, default: u64) -> u64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+    af_var(key).and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
 impl Settings {
     pub fn from_env() -> Settings {
-        let state_dir = PathBuf::from(env_or("TF_STATE_DIR", "state"));
+        let state_dir = PathBuf::from(env_or("AF_STATE_DIR", "state"));
         Settings {
-            repo_dir: PathBuf::from(env_or("TF_REPO_DIR", ".")),
+            repo_dir: PathBuf::from(env_or("AF_REPO_DIR", ".")),
             worktree_root: PathBuf::from(env_or(
-                "TF_WORKTREE_ROOT",
+                "AF_WORKTREE_ROOT",
                 &state_dir.join("worktrees").to_string_lossy(),
             )),
             state_dir,
-            max_parallel: env_or_int("TF_MAX_PARALLEL", 0) as usize,
-            branch_prefix: env_or("TF_BRANCH_PREFIX", "tf"),
-            poll_secs: env_or_int("TF_POLL", 15),
-            gate_env: parse_gate_env(&env_or("TF_GATE_ENV", "")),
-            tasks_file: PathBuf::from(env_or("TF_TASKS_JSON", "config/tasks.json")),
-            workers_file: PathBuf::from(env_or("TF_WORKERS_JSON", "config/workers.json")),
+            max_parallel: env_or_int("AF_MAX_PARALLEL", 0) as usize,
+            branch_prefix: env_or("AF_BRANCH_PREFIX", "tf"),
+            poll_secs: env_or_int("AF_POLL", 15),
+            gate_env: parse_gate_env(&env_or("AF_GATE_ENV", "")),
+            tasks_file: PathBuf::from(env_or("AF_TASKS_JSON", "config/tasks.json")),
+            workers_file: PathBuf::from(env_or("AF_WORKERS_JSON", "config/workers.json")),
             prompt_file: PathBuf::from("prompts/worker.md"),
-            agent_timeout_s: env_or_int("TF_AGENT_TIMEOUT_S", 3600),
-            agent_stall_s: env_or_int("TF_AGENT_STALL_S", 0),
-            agent_max_turns: env_or_int("TF_AGENT_MAX_TURNS", 0) as u32,
-            max_wall_clock_s: env_or_int("TF_MAX_WALL_CLOCK_S", 0),
-            sandbox_cmd: env_or("TF_SANDBOX_CMD", "")
+            agent_timeout_s: env_or_int("AF_AGENT_TIMEOUT_S", 3600),
+            agent_stall_s: env_or_int("AF_AGENT_STALL_S", 0),
+            agent_max_turns: env_or_int("AF_AGENT_MAX_TURNS", 0) as u32,
+            max_wall_clock_s: env_or_int("AF_MAX_WALL_CLOCK_S", 0),
+            sandbox_cmd: env_or("AF_SANDBOX_CMD", "")
                 .split_whitespace()
                 .map(str::to_string)
                 .collect(),
@@ -751,7 +787,7 @@ pub fn load_workers_str(json: &str) -> Result<Config, String> {
     })
 }
 
-/// Parse `TF_GATE_ENV` ("K=V K2=V2 ...") into (key, value) pairs.
+/// Parse `AF_GATE_ENV` ("K=V K2=V2 ...") into (key, value) pairs.
 pub fn parse_gate_env(s: &str) -> Vec<(String, String)> {
     s.split_whitespace()
         .filter_map(|tok| {
@@ -802,6 +838,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn env_fallback_prefers_af_then_legacy() {
+        // Injected lookup: no process-global mutation, so this is race-free.
+        let env = |name: &str| -> Option<String> {
+            match name {
+                "AF_CONTRACT_UNIT_X" => Some("af".into()),
+                "TF_CONTRACT_UNIT_X" => Some("tf".into()),
+                "TF_CONTRACT_UNIT_ONLY_LEGACY" => Some("legacy".into()),
+                _ => None,
+            }
+        };
+        assert_eq!(
+            env_fallback("AF_CONTRACT_UNIT_X", &env).as_deref(),
+            Some("af"),
+            "AF_* wins when both are set"
+        );
+        assert_eq!(
+            env_fallback("AF_CONTRACT_UNIT_ONLY_LEGACY", &env).as_deref(),
+            Some("legacy"),
+            "legacy TF_* answers when AF_* is absent"
+        );
+        assert_eq!(env_fallback("AF_CONTRACT_UNIT_ABSENT", &env), None);
+        assert_eq!(
+            env_fallback("SOMETHING_ELSE", &env),
+            None,
+            "a name without the AF_ prefix has no legacy twin"
+        );
+    }
+
+    #[test]
+    fn env_fallback_warn_is_deduped_per_legacy_name() {
+        // Cover warn_legacy_env directly: the second call for the same legacy
+        // name must not warn again (the WARNED set dedupes it).
+        warn_legacy_env("TF_CONTRACT_UNIT_WARN", "AF_CONTRACT_UNIT_WARN");
+        warn_legacy_env("TF_CONTRACT_UNIT_WARN", "AF_CONTRACT_UNIT_WARN");
+    }
+
+    #[test]
+    fn af_var_reads_process_env_with_af_precedence() {
+        std::env::set_var("AF_CONTRACT_UNIT_PROC", "af-proc");
+        std::env::set_var("TF_CONTRACT_UNIT_PROC", "tf-proc");
+        std::env::remove_var("AF_CONTRACT_UNIT_PROC_LEGACY");
+        std::env::set_var("TF_CONTRACT_UNIT_PROC_LEGACY", "legacy-proc");
+        assert_eq!(af_var("AF_CONTRACT_UNIT_PROC").as_deref(), Some("af-proc"));
+        assert_eq!(
+            af_var("AF_CONTRACT_UNIT_PROC_LEGACY").as_deref(),
+            Some("legacy-proc")
+        );
+        std::env::remove_var("AF_CONTRACT_UNIT_PROC");
+        std::env::remove_var("TF_CONTRACT_UNIT_PROC");
+        std::env::remove_var("TF_CONTRACT_UNIT_PROC_LEGACY");
     }
 
     #[test]
