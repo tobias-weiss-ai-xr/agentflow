@@ -116,6 +116,14 @@ docker run --rm -v "$AF_REPO_DIR":/repo -v "$PWD/config":/config \
 With the entrypoint set, everything after the image name is af arguments
 (`docker run agentflow:0.1.0 --version`).
 
+### Cutting a release
+
+```sh
+bash scripts/bump-version.sh 0.2.0   # bumps Cargo.toml, syncs README docker tags,
+                                     # builds, verifies `af --version`, commits + tags v0.2.0
+git push && git push --tags
+```
+
 ## CLI
 
 `af stop` — cooperative stop: writes the stop flag into the state dir and
