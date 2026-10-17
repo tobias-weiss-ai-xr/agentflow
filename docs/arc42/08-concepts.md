@@ -217,11 +217,11 @@ The agent child is **untrusted**. Three layers:
 
 1. **Env allowlist**: empty environment + system basics + `api_key_env`
    for the dispatched worker only + whitelisted vars from
-   `TF_AGENT_ENV_PASSTHROUGH`. Other workers' keys and orchestrator secrets
+   `AF_AGENT_ENV_PASSTHROUGH`. Other workers' keys and orchestrator secrets
    are withheld.
 2. **Git hygiene**: `GIT_TERMINAL_PROMPT=0`; `credential.helper=""` to
    prevent auth hangs/theft.
-3. **Wrapper seam**: `TF_SANDBOX_CMD` prepends a user-provided wrapper
+3. **Wrapper seam**: `AF_SANDBOX_CMD` prepends a user-provided wrapper
    command (e.g. `firejail`, `bubblewrap`) to the agent argv. Real
    filesystem/network containment is delegated to this layer.
 
@@ -231,7 +231,7 @@ The agent child is **untrusted**. Three layers:
 
 `repos.json` maps task ids or patterns to repository roots. Per-task resolution:
 - If `task.repo` is set, use that repo
-- Else fall back to `TF_REPO_DIR` (or `repo_dir` in settings)
+- Else fall back to `AF_REPO_DIR` (or `repo_dir` in settings)
 
 Deps stay a **global DAG** across all repos. Worktree/branch/merge target the
 resolved repo. Merges are globally serialized (one `MergeLocks` map per
@@ -266,7 +266,7 @@ until tasks have types.
 
 ## 8.12 Polling with wake-on-completion
 
-`af run` polls every `TF_POLL` seconds (default 15). After each attempt
+`af run` polls every `AF_POLL` seconds (default 15). After each attempt
 finishes, the orchestrator **wakes the poller** immediately via in-process
 state, so the loop never waits the full interval when actual work is queued.
 This reduces average dispatch latency from O(poll) to O(1) for most of a
@@ -274,9 +274,9 @@ campaign (round 8: reduced 60s → 4.5s on the E2E corpus).
 
 ## 8.13 Stall watchdog and wall-clock budget
 
-- **Stall watchdog** (`TF_AGENT_STALL_S`): kills an agent that produces no
+- **Stall watchdog** (`AF_AGENT_STALL_S`): kills an agent that produces no
   output for the configured window; distinct from total timeout
-- **Wall-clock budget** (`TF_MAX_WALL_CLOCK_S`): stops the entire campaign
+- **Wall-clock budget** (`AF_MAX_WALL_CLOCK_S`): stops the entire campaign
   early when the wall-clock exceeds the budget; exit code 3
 - Both are independent. A zero value disables each feature.
 
@@ -285,6 +285,6 @@ campaign (round 8: reduced 60s → 4.5s on the E2E corpus).
 Before dispatching an agent for a task, `af run` looks for the newest archived
 branch of that task whose changed paths satisfy the task's CURRENT scope.
 When one qualifies, it re-runs the gate and merges it without invoking an
-agent. Default ON; `TF_NO_REUSE=1` disables it. Use case: operator widens the
+agent. Default ON; `AF_NO_REUSE=1` disables it. Use case: operator widens the
 scope after a scope-failure; the archived work passes the widened scope and
 can be merged for zero agent spend.

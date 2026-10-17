@@ -77,10 +77,10 @@ tf_cache_tasks() {
      (.model_tier // "standard"),
      (.title // "")
     ] | @tsv
-  ' "$TASKS_JSON" > "$TF_STATE_DIR/task-cache.tsv"
+  ' "$TASKS_JSON" > "$AF_STATE_DIR/task-cache.tsv"
   # One jq call → status cache: id\tstatus\tnext_retry_at
   jq -r 'to_entries[] | [.key, .value.status, (.value.next_retry_at // "")] | @tsv' \
-    "$STATUS_JSON" > "$TF_STATE_DIR/status-cache.tsv"
+    "$STATUS_JSON" > "$AF_STATE_DIR/status-cache.tsv"
 }
 ```
 
@@ -95,7 +95,7 @@ tf_cache_tasks() {
 
 tf_affinity_cache() {
   # One jq -s call → TSV: worker\tengine\twins\ttotal
-  tf_affinity_table > "$TF_STATE_DIR/affinity-cache.tsv"
+  tf_affinity_table > "$AF_STATE_DIR/affinity-cache.tsv"
 }
 # Then tf_affinity_score reads from the TSV with awk (15ms, not 251ms)
 ```
@@ -114,13 +114,13 @@ tf_scope_cache() {
     [[ "$status" == "running" ]] || continue
     # Read scope from task-cache.tsv (grep, not jq)
     local scope
-    scope="$(awk -F'\t' -v id="$id" '$1==id {print $3}' "$TF_STATE_DIR/task-cache.tsv")"
+    scope="$(awk -F'\t' -v id="$id" '$1==id {print $3}' "$AF_STATE_DIR/task-cache.tsv")"
     local f
     IFS=',' read -ra files <<< "$scope"
     for f in "${files[@]}"; do
       echo -e "$f\t$id"
     done
-  done < "$TF_STATE_DIR/status-cache.tsv" > "$TF_STATE_DIR/scope-cache.tsv"
+  done < "$AF_STATE_DIR/status-cache.tsv" > "$AF_STATE_DIR/scope-cache.tsv"
 }
 # Then tf_scope_conflicts is a single grep (15ms), not N×jq
 ```

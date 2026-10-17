@@ -11,7 +11,7 @@ acceptance gates before being merged to the base branch.
  tasks.json (N tasks, declarative)  ─┐
  workers.json (M providers)          ├──► af ──► per-task:
                                       │         worktree → agent CLI → gate → merge
- env (TF_*)                          ─┘
+ env (AF_*)                          ─┘
 ```
 
 The orchestrator stays thin (ADR-1): it drives `git` and an OpenAI-compatible
@@ -75,8 +75,8 @@ a litellm proxy, a local vLLM…); `api_key_env` names the env var af reads the
 key from.
 
 ```sh
-export TF_REPO_DIR=/path/to/repo/being/modified
-export TF_STATE_DIR=state
+export AF_REPO_DIR=/path/to/repo/being/modified
+export AF_STATE_DIR=state
 export ZAI_API_KEY=...            # whatever api_key_env names
 
 ./target/release/af validate --tasks config/tasks.json --workers config/workers.json
@@ -84,6 +84,18 @@ export ZAI_API_KEY=...            # whatever api_key_env names
 ./target/release/af run           --tasks config/tasks.json --workers config/workers.json
 ./target/release/af status && ./target/release/af cost
 ```
+
+### Environment variables (`AF_*`)
+
+af reads its configuration from `AF_*` environment variables (`AF_REPO_DIR`,
+`AF_STATE_DIR`, `AF_MAX_PARALLEL`, `AF_BRANCH_PREFIX`, `AF_POLL`, `AF_GATE_ENV`,
+`AF_TASKS_JSON`, `AF_WORKERS_JSON`, `AF_REPOS_JSON`, `AF_AGENT_TIMEOUT_S`,
+`AF_AGENT_STALL_S`, `AF_AGENT_MAX_TURNS`, `AF_MAX_WALL_CLOCK_S`,
+`AF_SANDBOX_CMD`, `AF_AGENT_ENV_PASSTHROUGH`, `AF_NO_REUSE`, `AF_WORKTREE_ROOT`).
+The legacy `TF_*` names are still read as a fallback when the `AF_*` twin is
+unset, but are deprecated: using one prints a one-time
+`warning: TF_X is deprecated; use AF_X instead` notice on stderr. When both are
+set, `AF_*` wins.
 
 ### Docker / Nix
 
@@ -96,8 +108,8 @@ nix build .#static -o result-af-static    # fully static musl    → result-af-s
 nix build .#image -o result-image         # docker image         → result-image
 
 docker load < result-image
-docker run --rm -v "$TF_REPO_DIR":/repo -v "$PWD/config":/config \
-    -e TF_REPO_DIR=/repo -e TF_STATE_DIR=/state \
+docker run --rm -v "$AF_REPO_DIR":/repo -v "$PWD/config":/config \
+    -e AF_REPO_DIR=/repo -e AF_STATE_DIR=/state \
     agentflow:0.1.0 run --dry-run --tasks /config/tasks.json --workers /config/workers.json
 ```
 
@@ -135,9 +147,9 @@ af validate [--worker NAME]
 | `2` | Configuration error, unknown flag/command, or **deadlock** (no task can make progress) |
 | `3` | Stopped early — the wall-clock budget was exhausted before every in-scope task could be started |
 
-### Campaign budget (`TF_MAX_WALL_CLOCK_S`)
+### Campaign budget (`AF_MAX_WALL_CLOCK_S`)
 
-A campaign can be given a spend ceiling in seconds. `TF_MAX_WALL_CLOCK_S`
+A campaign can be given a spend ceiling in seconds. `AF_MAX_WALL_CLOCK_S`
 (default `0`) is compared against the sum of `wall_clock_s` over the
 receipts for the in-scope tasks — the exact TOTAL `af cost` reports, so the
 ceiling is enforced against the same ledger the report shows (receipts are
@@ -273,7 +285,7 @@ archived branch <name>` — without invoking an agent at all (a reuse is not an
 attempt and leaves no receipt). A candidate that is out of scope or fails its
 gate is left in place and the campaign dispatches an agent as usual, so this
 can only ever save money: the gate stays the sole arbiter of what merges.
-`TF_NO_REUSE=1` turns it off for an operator who wants a clean re-run.
+`AF_NO_REUSE=1` turns it off for an operator who wants a clean re-run.
 
 A receipt file that cannot be parsed (a torn write from an interrupted
 campaign) is reported by name with one `warning:` line — `af cost` and
@@ -294,13 +306,13 @@ to block the command: the readable history is still accounted for.
 | `manual` | Skip the acceptance gate (manual sign-off) |
 | `priority` | Tie-breaker when multiple tasks are ready. **Higher sorts first** (`CRITICAL`=20 > `HIGH`=10 > `MEDIUM`=0 > `LOW`=-10; numbers keep their value). The "P1 = highest priority" convention is the OPPOSITE of af's scale — declare p1-tasks as `"priority": 10` (or `"HIGH"`), not `1`. |
 | `gate_replay` | Whether the gate is replay-safe (default `true`); `false` = side effects |
-| `max_turns` | Per-task turn cap for builtin workers (overrides the worker's `max_turns`, then `TF_AGENT_MAX_TURNS`, then 32). Suggest 12-16 for write+commit+gate tasks; 6 Often too tight. After a `turn cap N reached` failure, the retry automatically runs with `2 × N` (ceiling 128) — evidence from receipts, so it survives `--resume`. Gate-heavy tasks (e.g. a whole-workspace `cargo clippy` in `accept`) need 32-48+; keep the gate as narrow as the scope. |
+| `max_turns` | Per-task turn cap for builtin workers (overrides the worker's `max_turns`, then `AF_AGENT_MAX_TURNS`, then 32). Suggest 12-16 for write+commit+gate tasks; 6 Often too tight. After a `turn cap N reached` failure, the retry automatically runs with `2 × N` (ceiling 128) — evidence from receipts, so it survives `--resume`. Gate-heavy tasks (e.g. a whole-workspace `cargo clippy` in `accept`) need 32-48+; keep the gate as narrow as the scope. |
 | `readonly` | `true` = investigation-only: the builtin harness rejects `write`/`edit`, the attempt counts done on a normal agent stop (no gate, no merge) |
 
 Replay contract: the `accept` command MUST be idempotent; declare
 `gate_replay: false` for a gate with side effects — an interrupted such gate
 is settled as failed instead of re-run. The gate process receives the
-decision in `TF_GATE_REPLAY` (`1`/`0`).
+decision in `AF_GATE_REPLAY` (`1`/`0`).
 
 Gates (and the builtin agent's `bash` tool) run via `/bin/sh -c` on unix;
 on Windows `af` prefers a POSIX `sh` on PATH (git-bash) and falls back to
@@ -316,7 +328,7 @@ worker runs at most one task at a time.
 
 The special `cli` value `"builtin"` needs no external agent binary:
 
-- `cli`: agent CLI binary (default `pi`). **`"builtin"`** runs af's native in-process harness instead — no external agent CLI needed; the worker then requires `api_base` (OpenAI-compatible `/chat/completions`) and optional `api_key_env`, supports `max_turns` (default 32, `TF_AGENT_MAX_TURNS`), and reports measured token usage on every receipt. Tools: `bash`, `write`, `edit` in the worktree.
+- `cli`: agent CLI binary (default `pi`). **`"builtin"`** runs af's native in-process harness instead — no external agent CLI needed; the worker then requires `api_base` (OpenAI-compatible `/chat/completions`) and optional `api_key_env`, supports `max_turns` (default 32, `AF_AGENT_MAX_TURNS`), and reports measured token usage on every receipt. Tools: `bash`, `write`, `edit` in the worktree.
 
 `retry_delay_s` (default `0`, strictly opt-in) is the backoff between
 attempts of the SAME task: after a failed attempt that will be retried,
@@ -329,8 +341,8 @@ pause per retry is otherwise pure added wall-clock, so `0` (no delay) is
 the default and a campaign that wants backoff sets it explicitly.
 
 Tasks accept an optional `repo` field: `""` (default) or `"main"` target the
-main repo (`TF_REPO_DIR`); other names must appear in `repos.json` (next to
-tasks.json or via `--repos`/`TF_REPOS_JSON`) — e.g.
+main repo (`AF_REPO_DIR`); other names must appear in `repos.json` (next to
+tasks.json or via `--repos`/`AF_REPOS_JSON`) — e.g.
 `{"repos": {"docs": "../docs-site"}}`. Unknown names warn and fall back.
 
 Two optional fields let a campaign DECLARE how expensive each worker is —
@@ -353,11 +365,11 @@ The agent CLI executes LLM-directed tool calls, so `af` treats it as untrusted
 (ADR-10):
 
 - **Env allowlist** — the agent child sees only system basics, the dispatched
-  worker's `api_key_env`, and `TF_AGENT_ENV_PASSTHROUGH` (comma-separated
+  worker's `api_key_env`, and `AF_AGENT_ENV_PASSTHROUGH` (comma-separated
   extras). Other workers' API keys and your shell secrets are withheld.
 - **Git hygiene** — `GIT_TERMINAL_PROMPT=0`, credential helpers disabled:
   no credential popups, no hangs.
-- **Wrapper seam** — `TF_SANDBOX_CMD="firejail --net=none"` (or bwrap /
+- **Wrapper seam** — `AF_SANDBOX_CMD="firejail --net=none"` (or bwrap /
   sandbox-exec / a container) is prepended to the agent argv for real
   filesystem/network containment. Env hygiene alone is not a sandbox —
   see `docs/arc42/08-concepts.md` §8.8 for threat model and recipes.
@@ -440,8 +452,8 @@ to two or more workers. Here is a full two-repo / two-worker campaign.
 ### Invocation
 
 ```sh
-export TF_REPO_DIR=/abs/path/to/agentflow
-export TF_STATE_DIR=state
+export AF_REPO_DIR=/abs/path/to/agentflow
+export AF_STATE_DIR=state
 
 ./target/release/af run --dry-run \
     --tasks config/tasks.json --workers config/workers.json --repos config/repos.json

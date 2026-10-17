@@ -47,7 +47,7 @@ flowchart TB
 | `router` | 316 | UCB1 worker selection from receipts; cost tie-break (declared basis); duration tie-break (measured mean) | `state` | `run` |
 | `execute` | 1194 | Task lifecycle: worktree create → prompt render → spawn agent → gate → merge/archive; attempt/retry loop; dirty-commit; scope check; preserve_work on every failure path | `worktree`, `gate`, `state`, `subprocess`, `transcript`, `config`, `run` | `run` |
 | `worktree` | 1028 | `git worktree add/remove`, branch delete, merge (serialized per repo), conflict detection, archive (`<branch>-rejected-[<attempt>-]<ts>`), parse archived name, heal stale, clean, commits_ahead, is_dirty, commit_all | git subprocess | `execute`, `run` |
-| `gate` | 81 | Run `accept` shell with scoped env + timeout; exit-0 contract; replay contract (`TF_GATE_REPLAY`) | `subprocess` | `execute` |
+| `gate` | 81 | Run `accept` shell with scoped env + timeout; exit-0 contract; replay contract (`AF_GATE_REPLAY`) | `subprocess` | `execute` |
 | `state` | 601 | Read/update/append `state/` JSON atomically (single writer, lock file); receipts (with `outcome`, `cost_micros`); `counts_as_verdict()`; `TaskStatus`, `AttemptPhase` | serde | `run`, `execute`, `router`, `cost` |
 | `subprocess` | 545 | Spawn → optional streaming tail → wait with timeout → stall watchdog → kill-tree; `CmdKind` (Success/NonZero/Timeout/Stalled/Missing); `EnvMode` (trusted/sandbox) | std | `execute`, `gate` |
 | `transcript` | 717 | Parse JSON Lines agent transcript → human-readable log; extract `totalTokens` + `cost.total` (micro-USD); `Usage` struct | serde_json | `execute` |

@@ -11,7 +11,7 @@ The agent CLI child process SHALL run with an empty environment plus: a fixed
 set of system keys (PATH, HOME, USERPROFILE, TEMP, TMP, SYSTEMROOT, WINDIR,
 COMSPEC, APPDATA, LOCALAPPDATA, PROGRAMFILES), the dispatched worker's
 `api_key_env` (if set in the parent environment), and any keys named in
-`TF_AGENT_ENV_PASSTHROUGH` (comma-separated). Git invocations and acceptance
+`AF_AGENT_ENV_PASSTHROUGH` (comma-separated). Git invocations and acceptance
 gates SHALL inherit the full parent environment (trusted code).
 
 #### Scenario: foreign secrets are not leaked
@@ -22,7 +22,7 @@ THEN the agent child sees `TEST_AF_KEY` but does NOT see `TEST_AF_LEAK`.
 
 #### Scenario: passthrough escape hatch
 
-GIVEN `TF_AGENT_ENV_PASSTHROUGH=TEST_AF_EXTRA`
+GIVEN `AF_AGENT_ENV_PASSTHROUGH=TEST_AF_EXTRA`
 WHEN an agent runs
 THEN the agent child sees `TEST_AF_EXTRA`.
 
@@ -41,19 +41,19 @@ THEN it contains `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_COUNT=1`,
 
 ### Requirement: Sandbox wrapper hook
 
-`af` SHALL support `TF_SANDBOX_CMD`: a whitespace-split command prefix
+`af` SHALL support `AF_SANDBOX_CMD`: a whitespace-split command prefix
 prepended to the agent argv (e.g. `firejail --net=none`). When unset, the
 agent argv is unchanged. `af` SHALL document that real filesystem/network
 containment requires such a wrapper and give per-OS recipes.
 
 #### Scenario: wrapper prepended
 
-GIVEN `TF_SANDBOX_CMD="echo wrapped"`
+GIVEN `AF_SANDBOX_CMD="echo wrapped"`
 WHEN an agent dispatches
 THEN the child argv starts with `echo wrapped <agent-cli> …`.
 
 #### Scenario: unset wrapper is a no-op
 
-GIVEN `TF_SANDBOX_CMD` is unset
+GIVEN `AF_SANDBOX_CMD` is unset
 WHEN an agent dispatches
 THEN the child argv starts with the agent CLI as before.

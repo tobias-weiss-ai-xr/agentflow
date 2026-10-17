@@ -17,7 +17,7 @@ the invoking subprocess tree and does not survive the shell exiting. I have to
 wrap every campaign manually:
 
 ```sh
-setsid env TF_REPO_DIR=… TF_TASKS_JSON=… TF_WORKERS_JSON=… TF_STATE_DIR=/tmp/af-x \
+setsid env AF_REPO_DIR=… AF_TASKS_JSON=… AF_WORKERS_JSON=… AF_STATE_DIR=/tmp/af-x \
   TF_BASE_BRANCH=main af run </dev/null >/tmp/af-run.log 2>&1 &
 ```
 then poll `af status` from another shell.
@@ -79,12 +79,12 @@ the retry prompt so the next attempt is seeded with the exact failing contract.
 **Implementation reality discovered while writing this (important — ask).**
 The binary installed on the host (`/usr/local/bin/af`) is **a Go port** whose CLI
 is `af run --once | status | attach ID` and whose env already includes
-`TF_MAX_PARALLEL` and `TF_POLL`. The repo this file lives in describes a
+`AF_MAX_PARALLEL` and `AF_POLL`. The repo this file lives in describes a
 **Rust** orchestrator. My day-to-day campaigns run the Go binary, so the gaps
 above were observed against Go; two are already partly answered there:
-`attach` (re: §1 detached-join) and `TF_MAX_PARALLEL` (re: §2 concurrency).
+`attach` (re: §1 detached-join) and `AF_MAX_PARALLEL` (re: §2 concurrency).
 **Ask upstream:** which implementation is canonical, and should the Rust repo
-track the Go features (`attach`, `TF_MAX_PARALLEL`, `TF_POLL`) so they are not
+track the Go features (`attach`, `AF_MAX_PARALLEL`, `AF_POLL`) so they are not
 re-implemented? If Go is canonical, move these items into the Go issue
 tracker and keep the Rust repo's docs honest about being a parallel port.
 
@@ -119,7 +119,7 @@ World-Office honing slices shipped 1 merged + 1 recovered. Grounded findings:
    first error line into the receipt `error` / `status --json`.
 5. **`af status` unexpectedly needs a tasks file.** Running `af status` from
    a CWD where `config/tasks.json` defaulted elsewhere reported an unrelated
-   stale campaign (`WO-APPLYOP-SMOKE`) until `TF_TASKS_JSON`+`TF_STATE_DIR`
+   stale campaign (`WO-APPLYOP-SMOKE`) until `AF_TASKS_JSON`+`AF_STATE_DIR`
    were supplied. **Improvement:** `status` should render from the state dir
    and default to it without requiring `--tasks` (a registry of the active
    run, cf. §1 `af wait`).

@@ -58,9 +58,10 @@ THEN no previous-attempts block appears.
 
 Every task SHALL carry a `gate_replay` flag that defaults to `true`, and `af`
 SHALL export the effective decision to the acceptance gate as the environment
-variable `TF_GATE_REPLAY` (`1` when replay is on, `0` when a task opts out).
-This lets a user-authored acceptance gate detect a resumed or replayed run and
-stay idempotent.
+variable `AF_GATE_REPLAY` (`1` when replay is on, `0` when a task opts out).
+The legacy name `TF_GATE_REPLAY` SHALL still be exported with the same value for
+existing gates. This lets a user-authored acceptance gate detect a resumed or
+replayed run and stay idempotent.
 
 #### Scenario: gate_replay defaults to true
 
@@ -75,7 +76,7 @@ THEN the loaded task has `gate_replay == false`.
 #### Scenario: replay decision reaches the gate
 
 WHEN the acceptance gate runs
-THEN `TF_GATE_REPLAY` is exported to the gate process as `1` when replay is on and `0` when it is off.
+THEN `AF_GATE_REPLAY` is exported to the gate process as `1` when replay is on and `0` when it is off, and the legacy `TF_GATE_REPLAY` carries the same value.
 
 ### Requirement: Prompt placeholder guarantee
 
@@ -173,7 +174,7 @@ pre-dispatch reuse at most once per run — the first time it becomes ready — 
 an archive produced by an attempt within the SAME run is left to the retry
 machinery (`scheduling`) instead of being re-validated in a loop. Reuse SHALL
 NOT fire for a task with no archive, a task already `Done`, or when
-`TF_NO_REUSE=1` is set (the operator's explicit escape hatch for a clean
+`AF_NO_REUSE=1` is set (the operator's explicit escape hatch for a clean
 re-run). Reuse SHALL NOT append
 a receipt: the attempt that produced the archive already has one, and reuse
 is not a new attempt. The temporary worktree SHALL be removed on every path.
@@ -200,9 +201,9 @@ acceptance gate
 WHEN `af run` dispatches the task
 THEN the archived branch survives and the run dispatches the agent normally.
 
-#### Scenario: TF_NO_REUSE opts out
+#### Scenario: AF_NO_REUSE opts out
 
-GIVEN `TF_NO_REUSE=1` and a ready task with a reusable archived branch
+GIVEN `AF_NO_REUSE=1` and a ready task with a reusable archived branch
 WHEN `af run` dispatches the task
 THEN the archive is not reused and the agent is dispatched normally.
 

@@ -110,7 +110,7 @@ THEN it exits 2 naming the `<prefix>/<id>-rejected-<ts>` pattern searched
 
 ### Requirement: Run commands
 
-`af run` SHALL run the dispatch loop until all tasks are done or deadlock, honoring `--once` (one dispatch round), `--dry-run` (show plan, change nothing), `--worker <name>`, `--task <id>`, and `--poll <secs>`. Before dispatching a worker for a ready task, `af run` SHALL look for an archived rejected branch for that task and, when the branch's change is covered by the task's CURRENT `scope` and the task's CURRENT acceptance gate passes on it, merge it and mark the task `Done` WITHOUT invoking the agent (the pre-dispatch reuse required by `lifecycle`), printing a line naming the reused branch. A successful reuse SHALL additionally append the same NON-VERDICT `recovered` receipt `af recover` writes, naming the archived attempt. This reuse is ON by default; setting `TF_NO_REUSE=1` disables it for a clean re-run. Reuse never fires for a task with no archive, an out-of-scope archive, a gate-failing archive, or a task already `Done`; those cases fall through to the normal agent dispatch.
+`af run` SHALL run the dispatch loop until all tasks are done or deadlock, honoring `--once` (one dispatch round), `--dry-run` (show plan, change nothing), `--worker <name>`, `--task <id>`, and `--poll <secs>`. Before dispatching a worker for a ready task, `af run` SHALL look for an archived rejected branch for that task and, when the branch's change is covered by the task's CURRENT `scope` and the task's CURRENT acceptance gate passes on it, merge it and mark the task `Done` WITHOUT invoking the agent (the pre-dispatch reuse required by `lifecycle`), printing a line naming the reused branch. A successful reuse SHALL additionally append the same NON-VERDICT `recovered` receipt `af recover` writes, naming the archived attempt. This reuse is ON by default; setting `AF_NO_REUSE=1` disables it for a clean re-run. Reuse never fires for a task with no archive, an out-of-scope archive, a gate-failing archive, or a task already `Done`; those cases fall through to the normal agent dispatch.
 
 #### Scenario: dry run changes nothing
 
@@ -128,7 +128,7 @@ GIVEN a ready task with an archived rejected branch whose change the task's
 CURRENT `scope` covers and whose CURRENT gate passes on it
 WHEN `af run` dispatches the task
 THEN it reuses the archive (merge, `done`, archived branch deleted) without
-invoking the agent, while `TF_NO_REUSE=1` disables that reuse.
+invoking the agent, while `AF_NO_REUSE=1` disables that reuse.
 
 ### Requirement: Status and inspection commands
 

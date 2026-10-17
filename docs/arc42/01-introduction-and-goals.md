@@ -30,8 +30,8 @@ semantics (scheduler, gates, worktrees) that agentflow re-implements cleanly.
 | G11 | Retry memory: failed attempts record their error; retry prompts list earlier failures | ✅ shipped (ADR-13) |
 | G12 | Sandbox: env allowlist + git hygiene + opt-in wrapper seam for the untrusted agent child | ✅ shipped (ADR-10) |
 | G13 | Token + cost capture: JSON-mode transcript parsing, provider-reported cost, declared-basis estimates | ✅ shipped |
-| G14 | Budget cap: `TF_MAX_WALL_CLOCK_S` stops new dispatches when the spend ceiling is reached | ✅ shipped |
-| G15 | Stall watchdog: `TF_AGENT_STALL_S` kills a silent agent before the total timeout burns tokens | ✅ shipped |
+| G14 | Budget cap: `AF_MAX_WALL_CLOCK_S` stops new dispatches when the spend ceiling is reached | ✅ shipped |
+| G15 | Stall watchdog: `AF_AGENT_STALL_S` kills a silent agent before the total timeout burns tokens | ✅ shipped |
 | G16 | Work preservation: every failure path archives the branch as `<branch>-rejected-[<attempt>-]<ts>` | ✅ shipped |
 | G17 | Recovery: `af recover --task ID [--attempt N]` and auto-reuse re-validate archived work without re-invoking the agent | ✅ shipped |
 | G18 | Honest success: `Merged` means the base really contains the work (dirty worktree committed, zero-commits-ahead = failure, merge verified) | ✅ shipped |

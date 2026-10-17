@@ -284,7 +284,7 @@ with ``gate_replay: false``; assert the gate counter is 1 and the task settles
 **Concept.** “One process owns a storage at a time; other clients attach to
 that process.” (README “Storage”). The invariant is stated, not enforced.
 
-**Today.** Two ``af run`` processes sharing ``TF_STATE_DIR`` both load
+**Today.** Two ``af run`` processes sharing ``AF_STATE_DIR`` both load
 ``run-state.json``, both dispatch, and both ``rename`` over each other — lost
 updates, duplicate merges. ``merge_locks`` only guards within one process.
 

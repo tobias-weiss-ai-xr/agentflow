@@ -8,9 +8,9 @@
 | **Archive** | A git branch created by `archive_branch` to preserve an attempt's committed work when the attempt fails. Name format: `<branch>-rejected-[<attempt>-]<unix-ts>[-<n>]`. Legacy format: `<branch>-rejected-<unix-ts>[-<n>]`. |
 | **Attempt** | One invocation of an agent on a task. Incremented on every retry. An attempt is NOT the same as an archived branch; one attempt produces exactly one `Receipt`. |
 | **AttemptPhase** | Journal checkpoint in the effect sandwich: `Spawned` (worktree created, agent about to run), `AgentDone` (agent work committed), `GatePassed` (gate passed). Persisted in `TaskStatus.phase`. |
-| **auto-reuse** | `af run` pre-dispatch feature: if an archived branch's changes satisfy the task's current scope, re-run only the gate and merge without re-invoking the agent. Default ON; disabled by `TF_NO_REUSE=1`. |
+| **auto-reuse** | `af run` pre-dispatch feature: if an archived branch's changes satisfy the task's current scope, re-run only the gate and merge without re-invoking the agent. Default ON; disabled by `AF_NO_REUSE=1`. |
 | **Basis** | How a worker's expense is measured: `Priced(f64)` = $/Mtok, `Sized(f64)` = parameter count in billions. See `src/cost.rs`. |
-| **Branch prefix** | `TF_BRANCH_PREFIX` — prefix for worktree branches (default `tf`). Example: task `foo` with prefix `af` → branch `af/foo`. |
+| **Branch prefix** | `AF_BRANCH_PREFIX` — prefix for worktree branches (default `tf`). Example: task `foo` with prefix `af` → branch `af/foo`. |
 | **Changed paths** | `git diff --name-only <base>...<branch>` — files changed on the attempt branch relative to the merge base. Always operates on committed state. |
 | **Clean** | `af clean [--dry-run]` — removes archived rejected branches and stale worktree directories. Never removes running worktrees or base branches. |
 | **Config** | JSON files: `tasks.json` (task definitions), `workers.json` (LLM provider+model slots), optional `repos.json` (multi-repo mapping). |
@@ -24,18 +24,18 @@
 | **EnvMode** | Sandbox layer for subprocess env: `Inherit` (trusted callers like gate) or `Sandbox` (agent child — empty env + allowlist). |
 | **Gate** | Acceptance gate — shell command that must exit 0 for the attempt to pass. Runs in the task's worktree with scoped env. Re-run on recovery. |
 | **GatePassed** | `AttemptPhase::GatePassed` — the gate passed. |
-| **Gate replay** | `task.gate_replay: bool` — when true, sets `TF_GATE_REPLAY=1` in the gate's env so gate scripts can assert replay-safety (e.g. idempotent checks). |
+| **Gate replay** | `task.gate_replay: bool` — when true, sets `AF_GATE_REPLAY=1` in the gate's env so gate scripts can assert replay-safety (e.g. idempotent checks). |
 | **Heal** | `worktree::heal` — at startup, removes stale worktrees from dead attempts and archives their branches to preserve work. |
 | **Honest success** | A `Merged` outcome **only** when the work is provably in the base branch: dirty worktree committed, commits_ahead > 0, merge verified via `branch_merged_into_head`. |
 | **INTERRUPTED** | `OUTCOME_INTERRUPTED` — receipt outcome for attempts lost when the orchestrator itself died. Wall-clock recorded as 0.0 (unknown). Non-verdict. |
 | **Ledger** | `af cost` report. Shows per-task receipts with WALL_S, TOKENS, COST; per-worker WINS/TOTAL, TRUST, MEAN_S, COST; WASTED/RECOVERED/INTERRUPTED lines; WASTED BY REASON grouping. |
 | **Lock file** | `<state_dir>/.lock` — records the pid of the single writer `af run` process. Second `af run` gets exit 2. Dead pid → lock reclaimed. |
 | **Manual task** | `task.manual: true` — a task with no gate; always reported as Done after its scope is verified. |
-| **Max parallel** | `TF_MAX_PARALLEL` — maximum concurrent dispatches. Effective cap = min(max_parallel, enabled_worker_count). Default 1. |
+| **Max parallel** | `AF_MAX_PARALLEL` — maximum concurrent dispatches. Effective cap = min(max_parallel, enabled_worker_count). Default 1. |
 | **Measured cost** | Provider-reported cost via `cost_micros` in the receipt. Outranks every declared basis. Reported as `$X.XXXX` in the ledger. |
 | **Merge** | `worktree::merge` — merges the attempt branch into the base branch with `git merge --no-ff`. Serialized per repository via `MergeLocks`. |
 | **Outcome** | Receipt field recording the final disposition: `"merged"`, `"failed"`, `"interrupted"`, `"recovered"`. Only `"merged"` and `"failed"` count as verdicts. |
-| **Poll** | `TF_POLL` — poll interval in seconds (default 15). Wake-on-completion reduces effective latency. |
+| **Poll** | `AF_POLL` — poll interval in seconds (default 15). Wake-on-completion reduces effective latency. |
 | **Prompt template** | `prompts/worker.md` — render template for the agent prompt. Injected placeholders: `{{TASK_ID}}`, `{{TASK_TITLE}}`, `{{SCOPE}}`, `{{ACCEPTANCE}}`, `{{ACCEPT_CMD}}`. |
 | **Ready** | A task whose deps are all Done, is not Running, has attempts < max_attempts, and does not contend on scope with a Running task. |
 | **Recovery** | `af recover --task ID [--attempt N] [--dry-run]` — re-validate and merge an archived rejected branch without re-invoking the agent. |
@@ -47,8 +47,8 @@
 | **Scope** | `task.scope: Vec<String>` — file globs that the task is allowed to modify. Empty = any file. |
 | **Spawned** | `AttemptPhase::Spawned` — worktree created, agent about to spawn. |
 | **Spec → Contract → Test Pyramid** | ADR-5 workflow: OpenSpec change first, contract tests at module boundaries, test pyramid underneath. |
-| **Stall watchdog** | `TF_AGENT_STALL_S` — kills an agent that produces no output for N seconds. Distinct from timeout. |
-| **State dir** | `TF_STATE_DIR` — directory containing `run-state.json`, `state.lock`, `receipts/`, `logs/`, `worktrees/`. |
+| **Stall watchdog** | `AF_AGENT_STALL_S` — kills an agent that produces no output for N seconds. Distinct from timeout. |
+| **State dir** | `AF_STATE_DIR` — directory containing `run-state.json`, `state.lock`, `receipts/`, `logs/`, `worktrees/`. |
 | **Status** | `TaskState` — per-task state: `Ready`, `Running`, `Done`, `Blocked` |
 | **Task** | Declarative unit: id, title, deps, scope, touch, accept, accept_timeout_s, manual, repo, priority, gate_replay, retry_delay_s. |
 | **TaskStatus** | Persisted per-task state: state, attempts, last_error, phase, attempt_started_ts, attempt_worker. |

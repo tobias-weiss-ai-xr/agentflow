@@ -29,19 +29,19 @@
 
 - Requires on `PATH`: `git`, an OpenAI-compatible agent CLI (e.g. `pi`).
 - Environment variables (see glossary for full list):
-  - `TF_REPO_DIR` — the git repo to operate on
-  - `TF_STATE_DIR` — state directory (status, receipts, logs, worktrees)
-  - `TF_MAX_PARALLEL` — max concurrent workers (capped by enabled-worker count)
-  - `TF_BRANCH_PREFIX` — branch prefix (default `tf`)
-  - `TF_POLL` — poll interval seconds (default 15; wake-on-completion makes this an upper bound)
-  - `TF_GATE_ENV` — comma-separated env vars to pass to the gate
-  - `TF_TASKS_JSON` / `TF_WORKERS_JSON` / `TF_REPOS_JSON` — config file paths
-  - `TF_AGENT_TIMEOUT_S` — total agent timeout (default 3600)
-  - `TF_AGENT_STALL_S` — stall watchdog window (default 0 = disabled)
-  - `TF_MAX_WALL_CLOCK_S` — campaign wall-clock budget (default 0 = unlimited)
-  - `TF_SANDBOX_CMD` — wrapper command prepended to the agent argv
-  - `TF_AGENT_ENV_PASSTHROUGH` — comma-separated extra env vars for the agent child
-  - `TF_NO_REUSE` — disable auto-recovery of archived branches (default unset)
+  - `AF_REPO_DIR` — the git repo to operate on
+  - `AF_STATE_DIR` — state directory (status, receipts, logs, worktrees)
+  - `AF_MAX_PARALLEL` — max concurrent workers (capped by enabled-worker count)
+  - `AF_BRANCH_PREFIX` — branch prefix (default `tf`)
+  - `AF_POLL` — poll interval seconds (default 15; wake-on-completion makes this an upper bound)
+  - `AF_GATE_ENV` — comma-separated env vars to pass to the gate
+  - `AF_TASKS_JSON` / `AF_WORKERS_JSON` / `AF_REPOS_JSON` — config file paths
+  - `AF_AGENT_TIMEOUT_S` — total agent timeout (default 3600)
+  - `AF_AGENT_STALL_S` — stall watchdog window (default 0 = disabled)
+  - `AF_MAX_WALL_CLOCK_S` — campaign wall-clock budget (default 0 = unlimited)
+  - `AF_SANDBOX_CMD` — wrapper command prepended to the agent argv
+  - `AF_AGENT_ENV_PASSTHROUGH` — comma-separated extra env vars for the agent child
+  - `AF_NO_REUSE` — disable auto-recovery of archived branches (default unset)
 - Runs on Linux, macOS, and Windows (WSL); CI uses GitHub Actions with Ubuntu. Prebuilt glibc binaries need glibc ≥ 2.32; the `.#static` nix output and the container image run on any Linux.
 
 ## Non-negotiable Boundaries

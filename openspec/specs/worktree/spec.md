@@ -7,11 +7,11 @@ TBD - created by archiving change rust-orchestrator. Update Purpose after archiv
 
 ### Requirement: Worktree lifecycle
 
-`af` SHALL create and remove git worktrees and delete task branches via the git CLI subprocess, with branch names prefixed by `TF_BRANCH_PREFIX`.
+`af` SHALL create and remove git worktrees and delete task branches via the git CLI subprocess, with branch names prefixed by `AF_BRANCH_PREFIX`.
 
 #### Scenario: create and remove
 
-WHEN a task attempt starts, a worktree exists at `TF_WORKTREE_ROOT/<id>` on a fresh branch; when it ends, the worktree and branch are removed.
+WHEN a task attempt starts, a worktree exists at `AF_WORKTREE_ROOT/<id>` on a fresh branch; when it ends, the worktree and branch are removed.
 
 ### Requirement: Merge serialization
 
@@ -30,8 +30,8 @@ THEN the task is marked `failed` (retry allowed), never force-pushed.
 ### Requirement: Worktrees target the task's repository
 
 Worktree creation, branch creation/deletion, and merging SHALL operate on the
-task's resolved repo (`repo_dir_for`), not always `TF_REPO_DIR`. The worktree
-directory remains `$TF_WORKTREE_ROOT/<task_id>/` and the branch remains
+task's resolved repo (`repo_dir_for`), not always `AF_REPO_DIR`. The worktree
+directory remains `$AF_WORKTREE_ROOT/<task_id>/` and the branch remains
 `<prefix>/<task_id>` in the target repo. Merges stay serialized (single
 in-process lock) — correct for any repo count.
 

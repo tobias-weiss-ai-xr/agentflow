@@ -36,7 +36,7 @@ Or (short names resolved relative to `$TF_DIR`):
 ```
 
 If no `repos.json` exists, single-repo mode is assumed with all tasks targeting
-`$TF_REPO_DIR`.
+`$AF_REPO_DIR`.
 
 ### Task Schema Extension
 
@@ -70,9 +70,9 @@ If no `repos.json` exists, single-repo mode is assumed with all tasks targeting
 
 ### Worktree Organization
 
-The `$TF_WORKTREE_ROOT` is shared across all repos. Worktree paths remain
-`$TF_WORKTREE_ROOT/<task_id>/`. A task’s branch lives in its designated repo:
-`$TF_BRANCH_PREFIX/<task_id>` in the repo specified by the task’s `repo` field.
+The `$AF_WORKTREE_ROOT` is shared across all repos. Worktree paths remain
+`$AF_WORKTREE_ROOT/<task_id>/`. A task’s branch lives in its designated repo:
+`$AF_BRANCH_PREFIX/<task_id>` in the repo specified by the task’s `repo` field.
 
 ### Cross-Repo Dependencies
 
@@ -88,7 +88,7 @@ Dependencies (`deps`) are task IDs — they work across repos seamlessly:
 
 ### Implemented in agentflow (Rust, ADR-11) — current truth
 
-- `config/repos.json` (optional, next to tasks.json; `TF_REPOS_JSON` or
+- `config/repos.json` (optional, next to tasks.json; `AF_REPOS_JSON` or
   `--repos FILE` override): `{"repos": {"<name>": "<path>"}}`; relative
   paths resolve against the repos.json file's directory. Missing file =
   single-repo mode.
@@ -97,7 +97,7 @@ Dependencies (`deps`) are task IDs — they work across repos seamlessly:
   and fall back** to the default repo (ADR-4: the taskfleet corpus
   composes across files — never hard-fail planning).
 - `execute_task` resolves the task's repo; worktree dir stays
-  `$TF_WORKTREE_ROOT/<task_id>/`, branch `prefix/<task_id>` lives in the
+  `$AF_WORKTREE_ROOT/<task_id>/`, branch `prefix/<task_id>` lives in the
   task's repo; merge lands in the task's repo.
 - Merge serialization: one global in-process lock for all repos (correct
   for any repo count; per-repo keys if throughput ever matters).

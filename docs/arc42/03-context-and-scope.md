@@ -48,7 +48,7 @@ and that an over-narrow scope costs one re-validation instead of a re-run
 - Recovery (`af recover --task ID [--attempt N]` + auto-reuse on `af run`)
 - Honest success (dirty worktree committed, zero-commits-ahead = failure, merge verified)
 - Interrupted-attempt tracking (killed orchestrator → `interrupted` receipt, not a verdict)
-- Stall watchdog (`TF_AGENT_STALL_S`) and wall-clock budget cap (`TF_MAX_WALL_CLOCK_S`)
+- Stall watchdog (`AF_AGENT_STALL_S`) and wall-clock budget cap (`AF_MAX_WALL_CLOCK_S`)
 - Token + cost capture (JSON-mode transcript, provider-reported `cost_micros`, declared-basis estimates)
 - Multi-repo (`repos.json`, per-task `repo`)
 - Sandbox (env allowlist + git hygiene + opt-in wrapper seam)

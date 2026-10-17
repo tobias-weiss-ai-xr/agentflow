@@ -18,9 +18,9 @@ sequenceDiagram
   M->>S: load config (tasks.json, workers.json, repos.json)
   S->>ST: read persisted state, resume
   S->>S: heal stale worktrees (archive + remove)
-  loop poll every TF_POLL s (wake-on-completion)
+  loop poll every AF_POLL s (wake-on-completion)
     S->>S: reap finished attempts (status, receipts)
-    S->>S: check budget cap (TF_MAX_WALL_CLOCK_S)
+    S->>S: check budget cap (AF_MAX_WALL_CLOCK_S)
     S->>S: build ready queue (deps met, ≤ max parallel, no contention)
     S->>S: deadlock check → exit 2 if blocked
     S->>R: pick free worker by UCB1 (trust + exploration + cost/duration tie-break)
@@ -53,7 +53,7 @@ Before dispatching an agent for a task, `af run` looks for an archived branch
 of that task whose changed paths already satisfy the task's CURRENT `scope`.
 When one qualifies, it re-runs the gate on that branch and merges it — printing
 `↺ <id> reused archived branch <name>` — without invoking an agent at all. A
-reuse is NOT an attempt (no receipt, no worker, no cost). `TF_NO_REUSE=1`
+reuse is NOT an attempt (no receipt, no worker, no cost). `AF_NO_REUSE=1`
 disables it. The gate stays the sole arbiter of what merges, so reuse can only
 ever save money.
 

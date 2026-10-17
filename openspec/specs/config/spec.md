@@ -113,31 +113,43 @@ THEN loading succeeds with exactly one warning naming that worker, and a worker 
 
 ### Requirement: Environment overrides
 
-`af` SHALL honor the environment variables `TF_REPO_DIR`, `TF_STATE_DIR`, `TF_MAX_PARALLEL`, `TF_BRANCH_PREFIX`, `TF_POLL`, `TF_GATE_ENV` with documented defaults, matching taskfleet semantics for drop-in compatibility.
+`af` SHALL honor the environment variables `AF_REPO_DIR`, `AF_STATE_DIR`, `AF_MAX_PARALLEL`, `AF_BRANCH_PREFIX`, `AF_POLL`, `AF_GATE_ENV` with documented defaults, matching taskfleet semantics for drop-in compatibility. For every such variable af SHALL read the `AF_*` name first and, only when it is unset, fall back to the legacy `TF_*` name; when a legacy `TF_*` name is consulted af SHALL print a deprecation notice to stderr (`warning: TF_X is deprecated; use AF_X instead`) at most once per legacy name per process.
 
 #### Scenario: overrides applied
 
-WHEN `TF_MAX_PARALLEL=2` and `TF_POLL=5` are set in the environment
+WHEN `AF_MAX_PARALLEL=2` and `AF_POLL=5` are set in the environment
 THEN the scheduler uses max 2 parallel tasks and a 5s poll interval.
+
+#### Scenario: legacy TF_* names still apply with a warning
+
+GIVEN only `TF_MAX_PARALLEL=2` is set (no `AF_MAX_PARALLEL`)
+WHEN settings are loaded
+THEN the scheduler uses max 2 parallel tasks and stderr carries exactly one `TF_MAX_PARALLEL is deprecated; use AF_MAX_PARALLEL instead` notice.
+
+#### Scenario: AF_* wins over the legacy twin
+
+GIVEN both `AF_POLL=5` and `TF_POLL=9` are set
+WHEN settings are loaded
+THEN the poll interval is 5s and no deprecation notice is printed.
 
 #### Scenario: defaults when unset
 
-WHEN no `TF_*` variables are set
+WHEN no `AF_*` or legacy `TF_*` variables are set
 THEN defaults are used (max parallel = number of enabled workers, poll = 15s).
 
 ### Requirement: Optional repos.json defines named repositories
 
 `af run` SHALL look for `repos.json` next to the tasks file, overridable by
-`TF_REPOS_JSON` and `--repos FILE`. The file shape is
+`AF_REPOS_JSON` and `--repos FILE`. The file shape is
 `{"repos": {"<name>": "<path>"}}`; relative paths SHALL resolve against the
 repos.json file's directory. A missing file SHALL mean single-repo mode
-(every task targets `TF_REPO_DIR`).
+(every task targets `AF_REPO_DIR`).
 
 #### Scenario: missing repos.json is single-repo mode
 
 GIVEN no repos.json exists
 WHEN a config loads
-THEN no repositories are registered and every task uses `TF_REPO_DIR`.
+THEN no repositories are registered and every task uses `AF_REPO_DIR`.
 
 #### Scenario: relative repo paths resolve against the file
 
@@ -147,29 +159,29 @@ THEN the `docs` repo resolves to `<config-dir>/../docs-site`.
 
 ### Requirement: Per-task repo resolution with compat fallback
 
-A task's `repo` field SHALL resolve as: `""` → `TF_REPO_DIR`; `"main"` →
-`repos["main"]` if present, else `TF_REPO_DIR`; any other name →
+A task's `repo` field SHALL resolve as: `""` → `AF_REPO_DIR`; `"main"` →
+`repos["main"]` if present, else `AF_REPO_DIR`; any other name →
 `repos[name]`. A name not present in repos.json SHALL produce a warning and
-fall back to `TF_REPO_DIR` (ADR-4: corpus compatibility — never hard-fail
+fall back to `AF_REPO_DIR` (ADR-4: corpus compatibility — never hard-fail
 planning on unresolvable repo names).
 
 #### Scenario: empty repo means the default repo
 
 GIVEN a task with no `repo` field
 WHEN it dispatches
-THEN its worktree, branch, and merge live in `TF_REPO_DIR`.
+THEN its worktree, branch, and merge live in `AF_REPO_DIR`.
 
 #### Scenario: main falls back to the default repo
 
 GIVEN no repos.json and a task with `"repo": "main"`
 WHEN it dispatches
-THEN it uses `TF_REPO_DIR` (single-repo configs keep working).
+THEN it uses `AF_REPO_DIR` (single-repo configs keep working).
 
 #### Scenario: unknown repo warns and falls back
 
 GIVEN a task with `"repo": "docs"` and no `docs` entry in repos.json
 WHEN the run starts
-THEN a warning is printed and the task dispatches against `TF_REPO_DIR`.
+THEN a warning is printed and the task dispatches against `AF_REPO_DIR`.
 
 ### Requirement: Per-task turn cap and readonly task fields
 
@@ -178,7 +190,7 @@ above.
 
 - `max_turns` — an integer >= 1 capping the number of LLM round-trips for a
   `cli: "builtin"` attempt of THIS task. It SHALL override the worker's
-  `max_turns`, then `TF_AGENT_MAX_TURNS`, then the harness default of 32, only
+  `max_turns`, then `AF_AGENT_MAX_TURNS`, then the harness default of 32, only
   for this task. Validation SHALL reject `max_turns: 0` or negative with a
   hard error naming the task. Absent = no per-task override.
 - `readonly` — a boolean (default `false`). When `true` the task is
