@@ -119,7 +119,7 @@ fn a_finished_task_wakes_the_dispatcher_immediately() {
     // Per-task artifacts: the stub knob must ride the sandbox env
     // allowlist (ADR-10).
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_TOUCH,FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH_FROM_TASK",
     );
     std::env::set_var("FAKE_AGENT_TOUCH_FROM_TASK", "1");

@@ -49,9 +49,10 @@ fn gate_replay_defaults_to_true_and_parses() {
 }
 
 /// The replay decision reaches the gate PROCESS (lifecycle spec): the
-/// acceptance gate observes `TF_GATE_REPLAY` in its own environment — the
+/// acceptance gate observes `AF_GATE_REPLAY` in its own environment — the
 /// literal `"1"` when the task's replay flag is on, `"0"` when it opted
-/// out — so a user-authored gate can detect a resumed/replayed run.
+/// out — so a user-authored gate can detect a resumed/replayed run. The
+/// legacy `TF_GATE_REPLAY` twin is still exported for existing gates.
 // spec: lifecycle/gate-replay-contract#replay-decision-reaches-the-gate
 #[cfg(unix)]
 #[test]
@@ -60,18 +61,18 @@ fn replay_decision_reaches_the_gate_environment() {
     use std::time::Duration;
 
     let d = tmpdir("env-probe");
-    // A gate that prints its own TF_GATE_REPLAY value.
-    let probe = "printf '%s' \"$TF_GATE_REPLAY\"";
+    // A gate that prints its own AF_GATE_REPLAY / TF_GATE_REPLAY values.
+    let probe = "printf '%s-%s' \"$AF_GATE_REPLAY\" \"$TF_GATE_REPLAY\"";
     let on = run_accept(probe, &d, &[], Duration::from_secs(5), true);
     assert!(
-        on.passed() && on.stdout == "1",
-        "replay on ⇒ gate sees TF_GATE_REPLAY=1 (got {:?})",
+        on.passed() && on.stdout == "1-1",
+        "replay on ⇒ gate sees AF_GATE_REPLAY=1 and legacy TF_GATE_REPLAY=1 (got {:?})",
         on.stdout
     );
     let off = run_accept(probe, &d, &[], Duration::from_secs(5), false);
     assert!(
-        off.passed() && off.stdout == "0",
-        "replay off ⇒ gate sees TF_GATE_REPLAY=0 (got {:?})",
+        off.passed() && off.stdout == "0-0",
+        "replay off ⇒ gate sees AF_GATE_REPLAY=0 and legacy TF_GATE_REPLAY=0 (got {:?})",
         off.stdout
     );
 

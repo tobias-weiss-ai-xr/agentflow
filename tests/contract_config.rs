@@ -626,7 +626,7 @@ fn detect_cycle_accepts_dags_and_rejects_cycles_and_bad_deps() {
     );
 }
 
-/// `parse_gate_env` splits `TF_GATE_ENV` on whitespace and then on the FIRST
+/// `parse_gate_env` splits `AF_GATE_ENV` on whitespace and then on the FIRST
 /// `=` of each token; tokens without an `=` are dropped. An empty (or
 /// whitespace-only) string yields an empty vec.
 #[test]
@@ -683,7 +683,7 @@ fn parse_gate_env_contract() {
 /// (`AF_CONTRACT_LOOKUP_*`, saved/restored by `EnvVar` so the ambient
 /// environment survives byte-identical), cargo runs each integration-test
 /// FILE as its own process, and the sibling `Settings::from_env` test below
-/// touches only `TF_*` names — so the two can never overlap on a key.
+/// touches only `AF_*`/`TF_*` names — so the two can never overlap on a key.
 #[test]
 fn env_lookup_pairs_contract() {
     let _restore = [
@@ -968,12 +968,13 @@ impl Drop for EnvVar {
 
 /// `Settings::from_env` is the ONLY public constructor, and it reads PROCESS
 /// env. cargo runs each integration-test FILE as its own process, and this is
-/// the only test in this binary that touches `TF_*` (or constructs
-/// `Settings`), so the mutations cannot race a sibling here. Every mutation
-/// goes through `EnvVar` (restored on drop) and all assertions for a phase
-/// are ordered together inside this single test.
+/// the only test in this binary that touches the `AF_*`/`TF_*` names (or
+/// constructs `Settings`), so the mutations cannot race a sibling here. Every
+/// mutation goes through `EnvVar` (restored on drop) and all assertions for a
+/// phase are ordered together inside this single test.
 // spec: config/environment-overrides#defaults-when-unset
 // spec: config/environment-overrides#overrides-applied
+// spec: config/environment-overrides#legacy-tf-fallback
 #[test]
 fn settings_env_defaults_and_overrides_contract() {
     // Belt-and-braces serialization within THIS binary (see docs above):
@@ -981,7 +982,20 @@ fn settings_env_defaults_and_overrides_contract() {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
-    const KEYS: [&str; 11] = [
+    const KEYS_AF: [&str; 11] = [
+        "AF_REPO_DIR",
+        "AF_STATE_DIR",
+        "AF_WORKTREE_ROOT",
+        "AF_MAX_PARALLEL",
+        "AF_BRANCH_PREFIX",
+        "AF_POLL",
+        "AF_GATE_ENV",
+        "AF_TASKS_JSON",
+        "AF_WORKERS_JSON",
+        "AF_AGENT_TIMEOUT_S",
+        "AF_SANDBOX_CMD",
+    ];
+    const KEYS_TF: [&str; 11] = [
         "TF_REPO_DIR",
         "TF_STATE_DIR",
         "TF_WORKTREE_ROOT",
@@ -994,10 +1008,19 @@ fn settings_env_defaults_and_overrides_contract() {
         "TF_AGENT_TIMEOUT_S",
         "TF_SANDBOX_CMD",
     ];
+    // Unset BOTH prefixes so a phase is deterministic regardless of the host
+    // environment (the legacy names would otherwise answer as fallbacks).
+    fn clear_all() -> Vec<EnvVar> {
+        KEYS_AF
+            .into_iter()
+            .map(EnvVar::remove)
+            .chain(KEYS_TF.into_iter().map(EnvVar::remove))
+            .collect()
+    }
 
-    // Phase 1: every TF_* unset => documented defaults.
+    // Phase 1: every AF_*/TF_* unset => documented defaults.
     {
-        let _cleared: Vec<EnvVar> = KEYS.into_iter().map(EnvVar::remove).collect();
+        let _cleared = clear_all();
         let s = Settings::from_env();
         assert_eq!(s.repo_dir, PathBuf::from("."));
         assert_eq!(s.state_dir, PathBuf::from("state"));
@@ -1016,25 +1039,20 @@ fn settings_env_defaults_and_overrides_contract() {
         assert!(s.sandbox_cmd.is_empty());
     } // Guards drop here: the ambient env is restored before phase 2.
 
-    // Phase 2: explicit values win.
+    // Phase 2: explicit AF_* values win.
     let repo = fresh_dir("settings-repo");
     let state = fresh_dir("settings-state");
     {
-        let _set = vec![
-            // Unset the keys we are NOT overriding, so the phase is
-            // deterministic regardless of the host environment.
-            EnvVar::remove("TF_WORKTREE_ROOT"),
-            EnvVar::remove("TF_TASKS_JSON"),
-            EnvVar::remove("TF_WORKERS_JSON"),
-            EnvVar::remove("TF_SANDBOX_CMD"),
-            EnvVar::set("TF_REPO_DIR", repo.to_str().unwrap()),
-            EnvVar::set("TF_STATE_DIR", state.to_str().unwrap()),
-            EnvVar::set("TF_BRANCH_PREFIX", "contract"),
-            EnvVar::set("TF_MAX_PARALLEL", "5"),
-            EnvVar::set("TF_POLL", "3"),
-            EnvVar::set("TF_AGENT_TIMEOUT_S", "42"),
-            EnvVar::set("TF_GATE_ENV", "A=1 B=hello"),
-        ];
+        let mut _set = clear_all();
+        _set.extend([
+            EnvVar::set("AF_REPO_DIR", repo.to_str().unwrap()),
+            EnvVar::set("AF_STATE_DIR", state.to_str().unwrap()),
+            EnvVar::set("AF_BRANCH_PREFIX", "contract"),
+            EnvVar::set("AF_MAX_PARALLEL", "5"),
+            EnvVar::set("AF_POLL", "3"),
+            EnvVar::set("AF_AGENT_TIMEOUT_S", "42"),
+            EnvVar::set("AF_GATE_ENV", "A=1 B=hello"),
+        ]);
         let s = Settings::from_env();
         assert_eq!(s.repo_dir, repo);
         assert_eq!(s.state_dir, state);
@@ -1050,6 +1068,45 @@ fn settings_env_defaults_and_overrides_contract() {
                 ("B".to_string(), "hello".to_string()),
             ]
         );
+    }
+
+    // Phase 3: the legacy TF_* names still drive every setting (fallback).
+    let legacy_repo = fresh_dir("settings-repo-legacy");
+    let legacy_state = fresh_dir("settings-state-legacy");
+    {
+        let mut _set = clear_all();
+        _set.extend([
+            EnvVar::set("TF_REPO_DIR", legacy_repo.to_str().unwrap()),
+            EnvVar::set("TF_STATE_DIR", legacy_state.to_str().unwrap()),
+            EnvVar::set("TF_BRANCH_PREFIX", "legacy"),
+            EnvVar::set("TF_MAX_PARALLEL", "7"),
+            EnvVar::set("TF_POLL", "9"),
+            EnvVar::set("TF_AGENT_TIMEOUT_S", "41"),
+            EnvVar::set("TF_GATE_ENV", "L=1"),
+        ]);
+        let s = Settings::from_env();
+        assert_eq!(s.repo_dir, legacy_repo, "legacy TF_REPO_DIR applies");
+        assert_eq!(s.state_dir, legacy_state, "legacy TF_STATE_DIR applies");
+        assert_eq!(s.worktree_root, legacy_state.join("worktrees"));
+        assert_eq!(s.branch_prefix, "legacy");
+        assert_eq!(s.max_parallel, 7);
+        assert_eq!(s.poll_secs, 9);
+        assert_eq!(s.agent_timeout_s, 41);
+        assert_eq!(s.gate_env, vec![("L".to_string(), "1".to_string())]);
+    }
+
+    // Phase 4: with BOTH set, AF_* wins and the legacy twin is ignored.
+    {
+        let mut _set = clear_all();
+        _set.extend([
+            EnvVar::set("AF_BRANCH_PREFIX", "af-wins"),
+            EnvVar::set("TF_BRANCH_PREFIX", "tf-loses"),
+            EnvVar::set("AF_POLL", "11"),
+            EnvVar::set("TF_POLL", "12"),
+        ]);
+        let s = Settings::from_env();
+        assert_eq!(s.branch_prefix, "af-wins", "AF_* takes precedence");
+        assert_eq!(s.poll_secs, 11, "AF_* takes precedence");
     }
 }
 

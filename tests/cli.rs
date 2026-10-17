@@ -45,19 +45,19 @@ impl Cli {
     }
 
     /// Run `af` like [`Cli::af`], layered with extra environment variables
-    /// (used to exercise the `TF_NO_REUSE=1` escape hatch). The child still
+    /// (used to exercise the `AF_NO_REUSE=1` escape hatch). The child still
     /// inherits the test process env for everything not overridden here.
     fn af_env(&self, args: &[&str], env: &[(&str, &str)]) -> (i32, String) {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_af"));
         cmd.args(args)
-            .env("TF_TASKS_JSON", self.dir.join("config").join("tasks.json"))
+            .env("AF_TASKS_JSON", self.dir.join("config").join("tasks.json"))
             .env(
-                "TF_WORKERS_JSON",
+                "AF_WORKERS_JSON",
                 self.dir.join("config").join("workers.json"),
             )
-            .env("TF_STATE_DIR", self.dir.join("state"))
-            .env("TF_REPO_DIR", self.dir.join("repo"))
-            .env("TF_WORKTREE_ROOT", self.dir.join("wt"));
+            .env("AF_STATE_DIR", self.dir.join("state"))
+            .env("AF_REPO_DIR", self.dir.join("repo"))
+            .env("AF_WORKTREE_ROOT", self.dir.join("wt"));
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -175,13 +175,13 @@ fn missing_config_errors_exit_two() {
     let cli = Cli::new();
     let out = Command::new(env!("CARGO_BIN_EXE_af"))
         .args(["status"])
-        .env("TF_TASKS_JSON", cli.dir.join("config").join("nope.json"))
+        .env("AF_TASKS_JSON", cli.dir.join("config").join("nope.json"))
         .env(
-            "TF_WORKERS_JSON",
+            "AF_WORKERS_JSON",
             cli.dir.join("config").join("workers.json"),
         )
-        .env("TF_STATE_DIR", cli.dir.join("state"))
-        .env("TF_REPO_DIR", cli.dir.join("repo"))
+        .env("AF_STATE_DIR", cli.dir.join("state"))
+        .env("AF_REPO_DIR", cli.dir.join("repo"))
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
@@ -1317,7 +1317,7 @@ fn clean_sweeps_archived_rejected_branches_and_keeps_running_ones() {
     ] }"#;
     let cli = Cli::new_with_tasks(tasks);
 
-    // A real scratch repo: `af clean` sweeps refs in TF_REPO_DIR.
+    // A real scratch repo: `af clean` sweeps refs in AF_REPO_DIR.
     let repo = cli.dir.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     let run_git = |args: &[&str]| {
@@ -1888,13 +1888,13 @@ fn run_with_tf_no_reuse_never_reuses_an_archived_branch() {
     seed_rejected_branch(&cli, "N", 333, "WORK.txt", "done\n");
     let repo = cli.dir.join("repo");
 
-    let (code, out) = cli.af_env(&["run"], &[("TF_NO_REUSE", "1")]);
+    let (code, out) = cli.af_env(&["run"], &[("AF_NO_REUSE", "1")]);
     // The archive is perfectly reusable (in scope, gate would pass), but the
     // escape hatch forces a fresh agent — which fails here.
     assert_ne!(code, 0, "opt-out buys a fresh agent: {out}");
     assert!(
         !out.contains("reused archived branch"),
-        "TF_NO_REUSE=1 must never reuse: {out}"
+        "AF_NO_REUSE=1 must never reuse: {out}"
     );
     assert!(
         branch_exists(&repo, "tf/N-rejected-333"),
@@ -2067,12 +2067,21 @@ fn config_worker_schema_loads_enabled_workers() {
 // spec: config/environment-overrides
 // spec: config/environment-overrides#overrides-applied
 // spec: config/environment-overrides#defaults-when-unset
+// spec: config/environment-overrides#legacy-tf-fallback
 #[test]
-fn settings_from_env_honors_tf_overrides_and_defaults() {
+fn settings_from_env_honors_af_overrides_and_defaults() {
     // Mutates process-global env; every other test in this binary spawns
     // `af` with explicit .env() overrides (or never reads these vars), so
-    // the window is safe. Vars are removed again before the default arm.
+    // the window is safe. Both prefixes are cleared again before the default
+    // arm, and the legacy names are cleared too so a host export cannot leak
+    // in through the fallback.
     for k in [
+        "AF_REPO_DIR",
+        "AF_STATE_DIR",
+        "AF_MAX_PARALLEL",
+        "AF_BRANCH_PREFIX",
+        "AF_POLL",
+        "AF_GATE_ENV",
         "TF_REPO_DIR",
         "TF_STATE_DIR",
         "TF_MAX_PARALLEL",
@@ -2089,12 +2098,12 @@ fn settings_from_env_honors_tf_overrides_and_defaults() {
     assert_eq!(st.max_parallel, 0, "0 = one per enabled worker");
 
     // Overrides applied.
-    std::env::set_var("TF_REPO_DIR", "/tmp/ov-repo");
-    std::env::set_var("TF_STATE_DIR", "/tmp/ov-state");
-    std::env::set_var("TF_MAX_PARALLEL", "2");
-    std::env::set_var("TF_BRANCH_PREFIX", "ov");
-    std::env::set_var("TF_POLL", "5");
-    std::env::set_var("TF_GATE_ENV", "K=1");
+    std::env::set_var("AF_REPO_DIR", "/tmp/ov-repo");
+    std::env::set_var("AF_STATE_DIR", "/tmp/ov-state");
+    std::env::set_var("AF_MAX_PARALLEL", "2");
+    std::env::set_var("AF_BRANCH_PREFIX", "ov");
+    std::env::set_var("AF_POLL", "5");
+    std::env::set_var("AF_GATE_ENV", "K=1");
     let st = Settings::from_env();
     assert_eq!(st.repo_dir, std::path::PathBuf::from("/tmp/ov-repo"));
     assert_eq!(st.state_dir, std::path::PathBuf::from("/tmp/ov-state"));
@@ -2103,7 +2112,27 @@ fn settings_from_env_honors_tf_overrides_and_defaults() {
     assert_eq!(st.poll_secs, 5);
     assert_eq!(st.gate_env, vec![("K".to_string(), "1".to_string())]);
 
+    // Legacy TF_* names still work when the AF_* twin is absent.
+    std::env::remove_var("AF_POLL");
+    std::env::remove_var("AF_BRANCH_PREFIX");
+    std::env::set_var("TF_POLL", "7");
+    std::env::set_var("TF_BRANCH_PREFIX", "legacy");
+    let st = Settings::from_env();
+    assert_eq!(st.poll_secs, 7, "legacy TF_POLL applies as fallback");
+    assert_eq!(st.branch_prefix, "legacy");
+
+    // AF_* wins when BOTH are set.
+    std::env::set_var("AF_POLL", "8");
+    let st = Settings::from_env();
+    assert_eq!(st.poll_secs, 8, "AF_POLL takes precedence over TF_POLL");
+
     for k in [
+        "AF_REPO_DIR",
+        "AF_STATE_DIR",
+        "AF_MAX_PARALLEL",
+        "AF_BRANCH_PREFIX",
+        "AF_POLL",
+        "AF_GATE_ENV",
         "TF_REPO_DIR",
         "TF_STATE_DIR",
         "TF_MAX_PARALLEL",
@@ -2113,6 +2142,34 @@ fn settings_from_env_honors_tf_overrides_and_defaults() {
     ] {
         std::env::remove_var(k);
     }
+}
+
+// spec: config/environment-overrides#legacy-tf-fallback
+#[test]
+fn legacy_tf_env_warns_once_on_stderr() {
+    // Spawn the binary with only the legacy name set: the value must still
+    // take effect AND a deprecation notice must reach stderr, exactly once.
+    let cli = Cli::new();
+    let out = Command::new(env!("CARGO_BIN_EXE_af"))
+        .args(["status", "--json"])
+        .env("AF_TASKS_JSON", cli.dir.join("config").join("tasks.json"))
+        .env(
+            "AF_WORKERS_JSON",
+            cli.dir.join("config").join("workers.json"),
+        )
+        .env("AF_REPO_DIR", cli.dir.join("repo"))
+        .env("AF_WORKTREE_ROOT", cli.dir.join("wt"))
+        .env_remove("AF_STATE_DIR")
+        .env("TF_STATE_DIR", cli.dir.join("state"))
+        .output()
+        .expect("spawn af");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let line = "warning: TF_STATE_DIR is deprecated; use AF_STATE_DIR instead";
+    assert_eq!(
+        stderr.matches(line).count(),
+        1,
+        "exactly one deprecation notice on stderr: {stderr:?}"
+    );
 }
 
 // spec: config/optional-repos-json-defines-named-repositories
@@ -2304,7 +2361,7 @@ fn repo_resolution_empty_and_main_fall_back_to_the_default_repo() {
     use agentflow::config::Task;
 
     // No repos.json: single-repo mode, so both "" and "main" resolve to
-    // TF_REPO_DIR and neither warns ("main" is the canonical default name).
+    // AF_REPO_DIR and neither warns ("main" is the canonical default name).
     let dir = std::env::temp_dir().join(format!("af-cli-repores-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

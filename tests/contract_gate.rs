@@ -12,11 +12,11 @@
 //! * the gate is `sh -c <accept>` on unix (`cmd /C <accept>` on windows);
 //! * the child INHERITS the full parent environment (`EnvMode::Inherit`),
 //!   then the caller-supplied `env` pairs are applied on top, then
-//!   `TF_GATE_REPLAY`;
-//! * `TF_GATE_REPLAY` is the literal string `"1"` when `replay == true` and
-//!   `"0"` when `replay == false`. The runner synthesizes NO `TF_TASK_ID` /
-//!   `TF_ACCEPTANCE`: per-task values travel through the caller's `env`
-//!   argument (populated from `Settings.gate_env` ← `TF_GATE_ENV`), so that
+//!   `AF_GATE_REPLAY` (and its legacy `TF_GATE_REPLAY` twin);
+//! * `AF_GATE_REPLAY` is the literal string `"1"` when `replay == true` and
+//!   `"0"` when `replay == false`. The runner synthesizes NO `AF_TASK_ID` /
+//!   `AF_ACCEPTANCE`: per-task values travel through the caller's `env`
+//!   argument (populated from `Settings.gate_env` ← `AF_GATE_ENV`), so that
 //!   is exactly what this file pins;
 //! * exit 0 ⇒ `CmdKind::Success`; any other issue ⇒ `CmdKind::NonZero`
 //!   (with `code`), `CmdKind::Timeout` on timeout, `CmdKind::Missing` when
@@ -85,23 +85,31 @@ fn gate_contract_exit_codes_and_env() {
         bad.combined()
     );
 
-    // The replay flag is rendered verbatim as "1" / "0" (see src/gate.rs).
+    // The replay flag is rendered verbatim as "1" / "0" under the canonical
+    // `AF_GATE_REPLAY` (see src/gate.rs); the legacy `TF_GATE_REPLAY` twin is
+    // still exported so existing gate scripts keep working.
     let on = run_accept(
-        "printf '%s' \"$TF_GATE_REPLAY\"",
+        "printf '%s-%s' \"$AF_GATE_REPLAY\" \"$TF_GATE_REPLAY\"",
         &d,
         &[],
         Duration::from_secs(5),
         true,
     );
-    assert_eq!(on.stdout, "1", "replay == true ⇒ TF_GATE_REPLAY=\"1\"");
+    assert_eq!(
+        on.stdout, "1-1",
+        "replay == true ⇒ AF_GATE_REPLAY=TF_GATE_REPLAY=\"1\""
+    );
     let off = run_accept(
-        "printf '%s' \"$TF_GATE_REPLAY\"",
+        "printf '%s-%s' \"$AF_GATE_REPLAY\" \"$TF_GATE_REPLAY\"",
         &d,
         &[],
         Duration::from_secs(5),
         false,
     );
-    assert_eq!(off.stdout, "0", "replay == false ⇒ TF_GATE_REPLAY=\"0\"");
+    assert_eq!(
+        off.stdout, "0-0",
+        "replay == false ⇒ AF_GATE_REPLAY=TF_GATE_REPLAY=\"0\""
+    );
 }
 
 /// A gate that exits 0 passes; one that exits 1, 2 or 127 fails. The failure
@@ -140,28 +148,29 @@ fn gate_exit_zero_passes_and_non_zero_fails() {
 fn gate_receives_the_task_env_contract() {
     let d = fresh_dir("env");
 
-    // The runner synthesizes ONLY `TF_GATE_REPLAY`; task id / acceptance
-    // values are caller-supplied pairs (Settings.gate_env ← TF_GATE_ENV).
-    // Model them explicitly and pin the exact strings the gate observes.
+    // The runner synthesizes ONLY `AF_GATE_REPLAY` (plus its legacy
+    // `TF_GATE_REPLAY` twin); task id / acceptance values are caller-supplied
+    // pairs (Settings.gate_env ← AF_GATE_ENV). Model them explicitly and pin
+    // the exact strings the gate observes.
     let declared = pairs(&[
         ("AF_GATE_TASK_ID", "r5-contract-gate"),
         ("AF_GATE_ACCEPTANCE", "cargo test"),
     ]);
     let script = "printf 'replay=%s\\ntask=%s\\naccept=%s\\n' \
-                  \"$TF_GATE_REPLAY\" \"$AF_GATE_TASK_ID\" \"$AF_GATE_ACCEPTANCE\"";
+                  \"$AF_GATE_REPLAY\" \"$AF_GATE_TASK_ID\" \"$AF_GATE_ACCEPTANCE\"";
 
     let on = run_accept(script, &d, &declared, Duration::from_secs(5), true);
     assert!(on.passed(), "env-probe gate must pass: {:?}", on.combined());
     assert_eq!(
         on.stdout, "replay=1\ntask=r5-contract-gate\naccept=cargo test\n",
-        "declared pairs + TF_GATE_REPLAY=\"1\" all reach the gate"
+        "declared pairs + AF_GATE_REPLAY=\"1\" all reach the gate"
     );
 
     let off = run_accept(script, &d, &declared, Duration::from_secs(5), false);
     assert!(off.passed());
     assert_eq!(
         off.stdout, "replay=0\ntask=r5-contract-gate\naccept=cargo test\n",
-        "the same pairs reach the gate with TF_GATE_REPLAY=\"0\""
+        "the same pairs reach the gate with AF_GATE_REPLAY=\"0\""
     );
 
     // Inherit mode: the parent environment is not stripped.

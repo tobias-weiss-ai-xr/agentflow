@@ -1,5 +1,5 @@
 //! Single-writer lock tests: two `af run` processes must never share one
-//! TF_STATE_DIR (pi-durable's "one process owns a storage at a time").
+//! AF_STATE_DIR (pi-durable's "one process owns a storage at a time").
 
 use agentflow::state::Store;
 use std::path::PathBuf;

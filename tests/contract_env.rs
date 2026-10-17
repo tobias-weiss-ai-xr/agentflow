@@ -173,7 +173,7 @@ fn subprocess_env_is_allowlisted() {
     let _ce = EnvRestore::set("GIT_COMMITTER_EMAIL", "af-contract@example.invalid");
 
     // Passthrough lookup pinned "unset" so the BASE contract is asserted
-    // regardless of the host's TF_AGENT_ENV_PASSTHROUGH (that escape hatch
+    // regardless of the host's AF_AGENT_ENV_PASSTHROUGH (that escape hatch
     // is covered by the e2e suite).
     let (pairs_static, allow) = agent_env(
         &worker_with_key_env(Some("AF_CONTRACT_WORKER_API_KEY")),

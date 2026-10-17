@@ -51,10 +51,10 @@ fn fixture(tasks_json: &str, workers_json: &str) -> Fixture {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // The sandbox strips the agent child's env; the example_agent knobs must
-    // ride TF_AGENT_ENV_PASSTHROUGH (includes FAKE_AGENT_EXIT, which these
+    // ride AF_AGENT_ENV_PASSTHROUGH (includes FAKE_AGENT_EXIT, which these
     // tests set to make an accidental agent re-dispatch observable).
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
     );
     let dir = std::env::temp_dir().join(format!("af-journal-{}-{n}", std::process::id()));
@@ -194,7 +194,7 @@ fn resume_from_agent_done_skips_agent() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     std::env::set_var("FAKE_AGENT_EXIT", "7");
     std::env::remove_var("FAKE_AGENT_TOUCH");
-    // FAKE_AGENT_EXIT rides the fixture's TF_AGENT_ENV_PASSTHROUGH into the
+    // FAKE_AGENT_EXIT rides the fixture's AF_AGENT_ENV_PASSTHROUGH into the
     // sandboxed agent child.
     let f = one_task_fixture();
     seed_attempt_branch(&f, "tf/A", "DONE.txt", "work from the dead attempt\n");

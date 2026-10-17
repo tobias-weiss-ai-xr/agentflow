@@ -19,7 +19,7 @@
 //! (e.g. to last-wins), which is out of this task's file scope. NO change
 //! to the stub was made or needed. Instead, receipt is observed at the
 //! process boundary by a recording wrapper riding the documented
-//! `TF_SANDBOX_CMD` hook (the same argv-observation point
+//! `AF_SANDBOX_CMD` hook (the same argv-observation point
 //! tests/e2e.rs::sandbox_wrapper_cmd_is_prepended_to_agent_argv uses):
 //! the wrapper appends its `$@` to a file and then `exec`s through to the
 //! REAL stub, so the full pipeline — spawn → agent → gate → merge — still
@@ -64,14 +64,14 @@ struct Fixture {
 
 /// Mirrors tests/e2e.rs::fixture: scratch git repo, temp tasks/workers
 /// files, `agentflow::config::load`, hand-built `Settings`. The FAKE_AGENT
-/// knobs must ride `TF_AGENT_ENV_PASSTHROUGH` because the sandbox strips
+/// knobs must ride `AF_AGENT_ENV_PASSTHROUGH` because the sandbox strips
 /// the agent child's env.
 fn fixture(tasks_json: &str, workers_json: &str, tag: &str) -> Fixture {
     let dir = std::env::temp_dir().join(format!("af-worker-args-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_TOUCH_FROM_MODEL",
     );
     // Deterministic stub knobs: default touch/exit, no env surprises.
@@ -121,7 +121,7 @@ fn fixture(tasks_json: &str, workers_json: &str, tag: &str) -> Fixture {
     Fixture { dir, repo, cfg, st }
 }
 
-/// A `/bin/sh` wrapper for `TF_SANDBOX_CMD` that records its `$@` (one
+/// A `/bin/sh` wrapper for `AF_SANDBOX_CMD` that records its `$@` (one
 /// argument per line) and then `exec`s through to the real child, so the
 /// run still completes end-to-end while the exact argv is captured.
 fn recording_wrapper(dir: &Path) -> PathBuf {

@@ -51,10 +51,10 @@ fn fixture(
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // The sandbox strips the agent child's env; the example_agent knobs
-    // must ride TF_AGENT_ENV_PASSTHROUGH (FAKE_AGENT_HANG_MS is the stall
+    // must ride AF_AGENT_ENV_PASSTHROUGH (FAKE_AGENT_HANG_MS is the stall
     // producer these tests rely on).
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_HANG_MS",
     );
     let dir = std::env::temp_dir().join(format!("af-watchdog-{}-{n}", std::process::id()));

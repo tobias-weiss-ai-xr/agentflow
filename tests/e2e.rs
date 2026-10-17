@@ -38,9 +38,9 @@ fn fixture(tasks_json: &str, workers_json: &str) -> Fixture {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // The sandbox strips the agent child's env; the example_agent knobs must
-    // ride TF_AGENT_ENV_PASSTHROUGH (tests that override it set their own).
+    // ride AF_AGENT_ENV_PASSTHROUGH (tests that override it set their own).
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
     );
     let dir = std::env::temp_dir().join(format!("af-e2e-{}-{n}", std::process::id()));
@@ -126,7 +126,7 @@ fn worker_json_command(max_attempts: u32) -> String {
 /// attempt commits real work and THEN stalls silently. `exec` replaces the
 /// shell with the hanging stub, so the watchdog's kill reaches the process it
 /// measured (no orphaned grandchild still editing the worktree). The stub's
-/// env knobs must ride `TF_AGENT_ENV_PASSTHROUGH` — the agent child's env is
+/// env knobs must ride `AF_AGENT_ENV_PASSTHROUGH` — the agent child's env is
 /// stripped otherwise and the test would silently measure nothing.
 #[cfg(unix)]
 fn work_then_hang_agent(dir: &Path) -> PathBuf {
@@ -205,7 +205,7 @@ fn happy_path_dependency_and_merge() {
     // produces a genuine committed change instead of re-creating A's file (a
     // no-change attempt must not reach Done). Ride the sandbox passthrough.
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_TOUCH_FROM_MODEL,FAKE_AGENT_TOUCH_FROM_TASK,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
     );
     std::env::set_var("FAKE_AGENT_TOUCH_FROM_TASK", "1");
@@ -337,7 +337,7 @@ fn committed_work_survives_agent_transport_crash() {
     // The stub's knobs ride the sandbox env passthrough; this knob is new,
     // so list it alongside the fixture defaults.
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_EXIT_AFTER_COMMIT",
     );
     let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
@@ -586,7 +586,7 @@ fn agent_env_is_allowlisted() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     std::env::set_var("AF_TEST_KEY", "keyvalue-123");
     std::env::set_var("AF_TEST_LEAK", "leak-456");
-    std::env::set_var("TF_AGENT_ENV_PASSTHROUGH", "AF_TEST_EXTRA");
+    std::env::set_var("AF_AGENT_ENV_PASSTHROUGH", "AF_TEST_EXTRA");
     std::env::set_var("AF_TEST_EXTRA", "extra-789");
     std::env::remove_var("FAKE_AGENT_EXIT");
     std::env::remove_var("FAKE_AGENT_TOUCH");
@@ -610,7 +610,7 @@ fn agent_env_is_allowlisted() {
     // The probe vars must ride the passthrough — they are not in the default
     // allowlist (which is exactly the behavior under test).
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "AF_TEST_EXTRA,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
     );
     assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
@@ -641,7 +641,7 @@ fn agent_env_is_allowlisted() {
     for k in [
         "AF_TEST_KEY",
         "AF_TEST_LEAK",
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "AF_TEST_EXTRA",
         "FAKE_AGENT_ENV",
         "FAKE_AGENT_ENV_NAMES",
@@ -771,7 +771,7 @@ fn parallel_multi_worker_dispatch_runs_concurrently_and_merges() {
     // The stub knobs must ride the sandbox env allowlist (ADR-10); the
     // fixture's default passthrough does not include them, so override it.
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_TOUCH_FROM_MODEL,FAKE_AGENT_SLEEP_MS",
     );
     std::env::set_var("FAKE_AGENT_TOUCH_FROM_MODEL", "1");
@@ -966,7 +966,7 @@ fn subprocess_helper_times_out_and_classifies() {
     assert_eq!(out.kind, CmdKind::Missing);
 }
 
-/// Sandbox wrapper hook (sandbox spec): `TF_SANDBOX_CMD` is a command prefix
+/// Sandbox wrapper hook (sandbox spec): `AF_SANDBOX_CMD` is a command prefix
 /// prepended to the agent argv. A wrapper script records the argv it was
 /// invoked with and exits 0 without creating the gate's file — the attempt
 /// fails the gate, but the recording proves the wrapper ran first. (The
@@ -1105,7 +1105,7 @@ fn self_heal_removes_stale_worktrees_across_repos() {
 }
 
 /// The mirror of `sandbox_wrapper_cmd_is_prepended_to_agent_argv`: with
-/// `TF_SANDBOX_CMD` UNSET the agent argv is unchanged — the child is
+/// `AF_SANDBOX_CMD` UNSET the agent argv is unchanged — the child is
 /// invoked as `<agent-cli> --provider … --model … -p @prompt` with no
 /// wrapper prefix. The "agent" is a recording script that logs `$0` and
 /// `$@` so the no-op is observed from the child's own argv.
@@ -1545,7 +1545,7 @@ fn a_merge_conflict_keeps_the_agents_work_on_an_archived_branch() {
     // The stub writes `{out}\n`, so the file content is the single value.
     std::env::set_var("FAKE_AGENT_OUT", "agent version");
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES,FAKE_AGENT_SLEEP_MS",
     );
     std::env::set_var("FAKE_AGENT_SLEEP_MS", "1500");
@@ -1734,7 +1734,7 @@ fn a_dirty_worktree_is_committed_before_the_attempt_is_judged() {
     // The no-commit knob must ride the sandbox passthrough, else the agent
     // child never sees it (and the test measures nothing).
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES,FAKE_AGENT_NO_COMMIT",
     );
     std::env::set_var("FAKE_AGENT_TOUCH", "TOUCHED.txt");
@@ -1792,7 +1792,7 @@ fn a_dirty_worktree_is_committed_before_the_attempt_is_judged() {
     std::env::remove_var("FAKE_AGENT_OUT");
     std::env::remove_var("FAKE_AGENT_NO_COMMIT");
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
     );
 }
@@ -1817,7 +1817,7 @@ fn an_uncommittable_dirty_tree_fails_the_attempt_cleanly() {
     // Leave the work uncommitted and ride the passthrough so the orchestrator
     // must commit it for us.
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES,FAKE_AGENT_NO_COMMIT",
     );
     std::env::set_var("FAKE_AGENT_TOUCH", "B.txt");
@@ -1868,7 +1868,7 @@ fn an_uncommittable_dirty_tree_fails_the_attempt_cleanly() {
     std::env::remove_var("FAKE_AGENT_OUT");
     std::env::remove_var("FAKE_AGENT_NO_COMMIT");
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
     );
 }
@@ -1890,7 +1890,7 @@ fn a_stalled_attempt_merges_its_committed_work_when_gate_passes() {
     // The stub knobs must ride the sandbox passthrough: the agent child's env
     // is stripped otherwise and the test would silently measure nothing.
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
     );
     std::env::set_var("FAKE_AGENT_TOUCH", "DONE.txt");
@@ -1935,7 +1935,7 @@ fn a_stalled_attempt_with_red_gate_keeps_its_committed_branch() {
     std::env::remove_var("FAKE_AGENT_EXIT");
     std::env::remove_var("FAKE_AGENT_HANG_MS");
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
     );
     std::env::set_var("FAKE_AGENT_TOUCH", "DONE.txt");
@@ -1998,7 +1998,7 @@ fn a_timed_out_attempt_merges_its_committed_work_when_gate_passes() {
     std::env::remove_var("FAKE_AGENT_EXIT");
     std::env::remove_var("FAKE_AGENT_HANG_MS");
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
     );
     std::env::set_var("FAKE_AGENT_TOUCH", "DONE.txt");
@@ -2082,6 +2082,7 @@ fn a_run_reuses_a_scope_compatible_archived_branch_without_paying_an_agent() {
     std::env::remove_var("FAKE_AGENT_EXIT");
     std::env::remove_var("FAKE_AGENT_TOUCH");
     std::env::remove_var("FAKE_AGENT_OUT");
+    std::env::remove_var("AF_NO_REUSE");
     std::env::remove_var("TF_NO_REUSE");
     let f = fixture(
         &format!(
@@ -2161,6 +2162,7 @@ fn reuse_writes_a_recovered_receipt() {
     std::env::remove_var("FAKE_AGENT_EXIT");
     std::env::remove_var("FAKE_AGENT_TOUCH");
     std::env::remove_var("FAKE_AGENT_OUT");
+    std::env::remove_var("AF_NO_REUSE");
     std::env::remove_var("TF_NO_REUSE");
     let f = fixture(
         &format!(

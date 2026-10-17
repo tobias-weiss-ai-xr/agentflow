@@ -293,7 +293,7 @@ fn a_budget_stop_does_not_spin() {
 
 /// Dry-run surfaces the exhausted ceiling too — and still creates nothing
 /// and exits 0. The `af` binary is used so the line can be observed on
-/// stdout; `TF_MAX_WALL_CLOCK_S` is the env wiring under test.
+/// stdout; `AF_MAX_WALL_CLOCK_S` is the env wiring under test.
 #[test]
 fn dry_run_surfaces_an_exhausted_budget() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -302,12 +302,12 @@ fn dry_run_surfaces_an_exhausted_budget() {
 
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_af"))
         .args(["run", "--dry-run"])
-        .env("TF_TASKS_JSON", f.st.tasks_file.clone())
-        .env("TF_WORKERS_JSON", f.st.workers_file.clone())
-        .env("TF_STATE_DIR", f.st.state_dir.clone())
-        .env("TF_REPO_DIR", f.repo.clone())
-        .env("TF_WORKTREE_ROOT", f.st.worktree_root.clone())
-        .env("TF_MAX_WALL_CLOCK_S", "500")
+        .env("AF_TASKS_JSON", f.st.tasks_file.clone())
+        .env("AF_WORKERS_JSON", f.st.workers_file.clone())
+        .env("AF_STATE_DIR", f.st.state_dir.clone())
+        .env("AF_REPO_DIR", f.repo.clone())
+        .env("AF_WORKTREE_ROOT", f.st.worktree_root.clone())
+        .env("AF_MAX_WALL_CLOCK_S", "500")
         .output()
         .expect("spawn af");
 

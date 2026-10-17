@@ -13,7 +13,7 @@
 //! streaming events carry a partial total one smaller, so the receipt
 //! assertion also proves the parser took the LAST usage, not the first).
 //! The knobs mutate process-global env vars and must ride
-//! `TF_AGENT_ENV_PASSTHROUGH` (the sandbox strips the agent child's env),
+//! `AF_AGENT_ENV_PASSTHROUGH` (the sandbox strips the agent child's env),
 //! so the tests share one mutex and run serialized.
 
 use agentflow::config::{self, Settings, TaskState};
@@ -25,7 +25,7 @@ use std::sync::Mutex;
 const AGENT: &str = env!("CARGO_BIN_EXE_example_agent");
 
 /// Env-mutation guard (module docs): the FAKE_AGENT_* knobs and
-/// TF_AGENT_ENV_PASSTHROUGH are process-global.
+/// AF_AGENT_ENV_PASSTHROUGH are process-global.
 static ENV_GUARD: Mutex<()> = Mutex::new(());
 
 /// The distinctive total the stub is told to report — and the receipt must
@@ -65,7 +65,7 @@ impl Drop for Fixture {
 
 /// Scratch repo + config + hand-built Settings whose agent CLI is the
 /// bundled stub. Mirrors tests/budget.rs::fixture. The FAKE_AGENT knobs
-/// must ride `TF_AGENT_ENV_PASSTHROUGH` because the sandbox strips the
+/// must ride `AF_AGENT_ENV_PASSTHROUGH` because the sandbox strips the
 /// agent child's env; every knob starts removed so each arm arms exactly
 /// what it needs.
 fn fixture(tasks_json: &str, workers_json: &str, tag: &str) -> Fixture {
@@ -75,7 +75,7 @@ fn fixture(tasks_json: &str, workers_json: &str, tag: &str) -> Fixture {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_JSON,FAKE_AGENT_JSON_TOKENS,FAKE_AGENT_JSON_COST,FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT",
     );
     std::env::remove_var("FAKE_AGENT_JSON");

@@ -40,9 +40,9 @@ fn fixture(tasks_json: &str, workers_json: &str) -> Fixture {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // The sandbox strips the agent child's env; the example_agent knobs must
-    // ride TF_AGENT_ENV_PASSTHROUGH (FAKE_AGENT_TOUCH is included here).
+    // ride AF_AGENT_ENV_PASSTHROUGH (FAKE_AGENT_TOUCH is included here).
     std::env::set_var(
-        "TF_AGENT_ENV_PASSTHROUGH",
+        "AF_AGENT_ENV_PASSTHROUGH",
         "FAKE_AGENT_EXIT,FAKE_AGENT_TOUCH,FAKE_AGENT_OUT,FAKE_AGENT_ENV,FAKE_AGENT_ENV_NAMES",
     );
     let dir = std::env::temp_dir().join(format!("af-scope-{}-{n}", std::process::id()));
@@ -127,7 +127,7 @@ fn out_of_scope_edit_fails_the_attempt() {
         ),
         &worker_json(1),
     );
-    // FAKE_AGENT_TOUCH rides the fixture's TF_AGENT_ENV_PASSTHROUGH.
+    // FAKE_AGENT_TOUCH rides the fixture's AF_AGENT_ENV_PASSTHROUGH.
     std::env::set_var("FAKE_AGENT_TOUCH", "out_of_scope.txt");
 
     let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
