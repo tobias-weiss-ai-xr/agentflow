@@ -1,0 +1,64 @@
+{
+  "_meta": {
+    "project": "nextmail-round1-tls-dns",
+    "description": "Round 1: TLS & Internal DNS — fix stalwart TLS secret name, create internal DNS CoreDNS config, DKIM DNS zone files, LDAP starttls for Dovecot"
+  },
+  "tasks": [
+    {
+      "id": "T1-TLS",
+      "title": "Fix stalwart-server.yaml TLS secret name mismatch (stalwart-tls → stalwart-eval-tls) and add TLS env vars",
+      "deps": [],
+      "priority": 1,
+      "repo": "main",
+      "scope": [
+        "k8s/stalwart/stalwart-server.yaml"
+      ],
+      "accept": "grep 'secretName: stalwart-eval-tls' k8s/stalwart/stalwart-server.yaml && ! grep 'secretName: stalwart-tls$' k8s/stalwart/stalwart-server.yaml",
+      "acceptance_prose": "You work in an isolated git worktree of /home/weissto_local/git/next-mailserver.\n\nCONTEXT: k8s/stalwart/stalwart-server.yaml has a TLS volume that references `secretName: stalwart-tls` (line ~120), but the Certificate in k8s/stalwart/tls-cert.yaml creates a secret named `stalwart-eval-tls`. This mismatch means the volume mount fails silently (no secret exists named `stalwart-tls`). The Certificate has never been applied to the cluster, but when it is, the secret will be `stalwart-eval-tls`.\n\nTASK:\n1. In k8s/stalwart/stalwart-server.yaml, change `secretName: stalwart-tls` to `secretName: stalwart-eval-tls` (the tls volume, ~line 120).\n2. Verify there are no other references to `stalwart-tls` (without the `-eval` suffix) in the file.\n3. Do NOT change any other file. Do NOT change the Certificate name or secretName in tls-cert.yaml — that is correct.\n4. Commit with message: 'fix(stalwart): TLS secret name stalwart-tls → stalwart-eval-tls to match Certificate'\n\nGATE: `grep 'secretName: stalwart-eval-tls' k8s/stalwart/stalwart-server.yaml && ! grep 'secretName: stalwart-tls$' k8s/stalwart/stalwart-server.yaml`",
+      "manual": false
+    },
+    {
+      "id": "T2-DNS",
+      "title": "Create internal DNS CoreDNS config for eval.local zone (stalwart-eval, dovecot-eval, mail.stalwart-eval, etc.)",
+      "deps": [],
+      "priority": 2,
+      "repo": "main",
+      "scope": [
+        "k8s/base/internal-dns.yaml"
+      ],
+      "accept": "python3 -c \"import yaml; docs=list(yaml.safe_load_all(open('k8s/base/internal-dns.yaml'))); assert all(d is not None for d in docs); assert len(docs) >= 1; cm=[d for d in docs if d.get('kind')=='ConfigMap']; assert len(cm) >= 1; assert 'eval.local' in str(cm[0]['data'])\"",
+      "acceptance_prose": "You work in an isolated git worktree of /home/weissto_local/git/next-mailserver.\n\nCONTEXT: The cluster has CoreDNS with a `coredns-custom` ConfigMap in kube-system that supports `import /etc/coredns/custom/*.server` entries. Existing entries: `opendesk.server` (opendesk.internal zone), `opendesk-edu-org.server` (home.opendesk-edu.org split-horizon), `opensuite-idp.override` (rewrite rules). The eval cluster needs internal DNS for *.eval.local domains so that Stalwart, Dovecot, and related services can resolve by friendly names instead of cluster IP addresses.\n\nServices to resolve (ClusterIP addresses from kubectl get svc):\n- stalwart.stalwart-eval.svc.cluster.local → 172.17.227.72 (ports: 25,465,587,143,993,110,995,4190,443,8080)\n- stalwart-postgresql.stalwart-eval.svc.cluster.local → 172.17.234.54 (port 5432)\n- stalwart-minio.stalwart-eval.svc.cluster.local → 172.17.249.180 (ports 9000,9001)\n- dovecot-backend-svc.dovecot-eval.svc.cluster.local → None (headless)\n- dovecot-lb.dovecot-eval.svc.cluster.local → 172.17.211.9 (ports 143,993,24,4190,110,995,587)\n- openldap.dovecot-eval.svc.cluster.local → 172.17.210.178 (ports 389,636)\n- dkimpy-milter.dovecot-eval.svc.cluster.local → 172.17.199.49 (port 8892)\n\nTASK:\n1. Create k8s/base/internal-dns.yaml — a ConfigMap for the coredns-custom namespace (kube-system) with a `.server` entry that creates an `eval.local:53` zone. Use CoreDNS `template` plugin to resolve:\n   - `stalwart.eval.local` → 172.17.227.72\n   - `mail.stalwart.eval.local` → 172.17.227.72\n   - `dovecot.dovecot-eval.eval.local` → 172.17.211.9\n   - `ldap.eval.local` → 172.17.210.178\n   - `dkim.eval.local` → 172.17.199.49\n   - `minio.eval.local` → 172.17.249.180\n   - `postgres.eval.local` → 172.17.234.54\n   - Wildcard: `*.eval.local` → 172.17.227.72 (default to stalwart)\n2. Name the ConfigMap `eval-dns` in namespace `kube-system`. Data key: `eval.local.server`. Include `errors`, `cache 30`, `fallthrough` directives.\n3. Add a comment explaining this is for internal eval DNS resolution.\n4. Commit with message: 'feat(dns): internal DNS CoreDNS config for eval.local zone'\n\nGATE: `python3 -c \"import yaml; docs=list(yaml.safe_load_all(open('k8s/base/internal-dns.yaml'))); assert all(d is not None for d in docs); assert len(docs) >= 1; cm=[d for d in docs if d.get('kind')=='ConfigMap']; assert len(cm) >= 1; assert 'eval.local' in str(cm[0]['data'])\"`",
+      "manual": false
+    },
+    {
+      "id": "T3-DKIM",
+      "title": "Create DKIM/SPF/DMARC DNS zone files for internal DNS (eval.local, student.eval.local, staff.eval.local)",
+      "deps": [],
+      "priority": 3,
+      "repo": "main",
+      "scope": [
+        "k8s/base/dns-zones/db.eval.local",
+        "k8s/base/dns-zones/db.student.eval.local",
+        "k8s/base/dns-zones/db.staff.eval.local",
+        "k8s/base/dns-zones/README.md"
+      ],
+      "accept": "test -f k8s/base/dns-zones/db.eval.local && test -f k8s/base/dns-zones/db.student.eval.local && test -f k8s/base/dns-zones/db.staff.eval.local && test -f k8s/base/dns-zones/README.md && grep -q 'v=spf1' k8s/base/dns-zones/db.eval.local && grep -q 'v=DMARC1' k8s/base/dns-zones/db.eval.local && grep -q 's1._domainkey' k8s/base/dns-zones/db.eval.local",
+      "acceptance_prose": "You work in an isolated git worktree of /home/weissto_local/git/next-mailserver.\n\nCONTEXT: The eval cluster uses dkimpy-milter (port 8892, dovecot-eval namespace) which signs outbound mail for domains: eval.local, student.eval.local, staff.eval.local with selector s1. The DKIM public key is generated by scripts/setup-dkim.sh and stored in a Kubernetes Secret. DNS records (SPF, DKIM, DMARC) are needed for the internal DNS zone so that internal mail clients can verify signatures. These zone files are for the internal DNS (CoreDNS eval.local zone from T2-DNS), NOT for public DNS.\n\nTASK:\n1. Create k8s/base/dns-zones/db.eval.local — a BIND zone file with:\n   - SOA record (ns.eval.local. admin.eval.local. 2026101701 3600 600 86400 3600)\n   - NS record (ns.eval.local.)\n   - A records: stalwart, mail, dovecot, ldap, dkim, minio, postgres, ns\n   - MX record: mail 10 mail.eval.local.\n   - TXT (SPF): v=spf1 mx a:stalwart.eval.local a:mail.eval.local ~all\n   - TXT (DMARC): _dmarc v=DMARC1; p=none; rua=mailto:postmaster@eval.local; ruf=mailto:postmaster@eval.local; fo=1\n   - TXT (DKIM): s1._domainkey v=DKIM1; k=rsa; p=PLACEHOLDER (note: real key from setup-dkim.sh secret)\n2. Create k8s/base/dns-zones/db.student.eval.local — same structure for student.eval.local domain\n3. Create k8s/base/dns-zones/db.staff.eval.local — same structure for staff.eval.local domain\n4. Create k8s/base/dns-zones/README.md explaining these are internal DNS zone files for the eval cluster, not public DNS, and that the DKIM public key placeholder must be replaced with the real key from the dkimpy-milter secret.\n5. Commit with message: 'feat(dns): DKIM/SPF/DMARC zone files for internal eval DNS'\n\nGATE: `test -f k8s/base/dns-zones/db.eval.local && test -f k8s/base/dns-zones/db.student.eval.local && test -f k8s/base/dns-zones/db.staff.eval.local && test -f k8s/base/dns-zones/README.md && grep -q 'v=spf1' k8s/base/dns-zones/db.eval.local && grep -q 'v=DMARC1' k8s/base/dns-zones/db.eval.local && grep -q 's1._domainkey' k8s/base/dns-zones/db.eval.local`",
+      "manual": false
+    },
+    {
+      "id": "T4-LDAP",
+      "title": "Add LDAP starttls to Dovecot config (ldap:// → ldaps:// or starttls=yes)",
+      "deps": [],
+      "priority": 4,
+      "repo": "main",
+      "scope": [
+        "k8s/dovecot/dovecot-backend.yaml",
+        "k8s/dovecot/openldap.yaml"
+      ],
+      "accept": "grep -q 'starttls\\|ldaps://' k8s/dovecot/dovecot-backend.yaml && ! grep -q 'ldap://openldap.dovecot-eval.svc.cluster.local:389' k8s/dovecot/dovecot-backend.yaml",
+      "acceptance_prose": "You work in an isolated git worktree of /home/weissto_local/git/next-mailserver.\n\nCONTEXT: k8s/dovecot/dovecot-backend.yaml currently uses plaintext LDAP: `ldap_uris = ldap://openldap.dovecot-eval.svc.cluster.local:389`. The openldap service exposes both 389 (plaintext) and 636 (LDAPS). For production, LDAP should use TLS. The TLS certificate for dovecot-eval is `dovecot-eval-tls` (mounted at /etc/dovecot/ssl). The openldap deployment (k8s/dovecot/openldap.yaml) exposes port 636 but may not have TLS configured yet.\n\nTASK:\n1. In k8s/dovecot/dovecot-backend.yaml, change `ldap_uris = ldap://openldap.dovecot-eval.svc.cluster.local:389` to `ldap_uris = ldaps://openldap.dovecot-eval.svc.cluster.local:636` and add `ldap_tls = yes` and `ldap_starttls = yes` to the LDAP config block.\n2. If the openldap deployment (k8s/dovecot/openldap.yaml) does not have TLS configured, add a TLS volume mount and env vars for LDAPS. The openldap image supports TLS via env vars: `LDAP_TLS_CRT_FILENAME`, `LDAP_TLS_KEY_FILENAME`, `LDAP_TLS_CA_CRT_FILENAME`. Mount the dovecot-eval-tls secret (or a dedicated openldap-tls secret) at /container/service/slapd/assets/certs.\n3. Add a comment explaining that LDAPS is now used instead of plaintext LDAP.\n4. Commit with message: 'feat(dovecot): LDAP starttls/LDAPS instead of plaintext (port 389 → 636)'\n\nNOTE: The openldap.yaml changes may need the TLS secret to exist first. If adding TLS to openldap is too complex for this task, just change the Dovecot side (ldap_uris to ldaps://) and add a TODO comment in openldap.yaml noting that LDAPS needs to be configured. The gate only checks dovecot-backend.yaml.\n\nGATE: `grep -q 'starttls\\|ldaps://' k8s/dovecot/dovecot-backend.yaml && ! grep -q 'ldap://openldap.dovecot-eval.svc.cluster.local:389' k8s/dovecot/dovecot-backend.yaml`",
+      "manual": false
+    }
+  ]
+}

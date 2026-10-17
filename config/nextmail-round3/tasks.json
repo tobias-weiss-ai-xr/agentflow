@@ -1,0 +1,59 @@
+{
+  "_meta": {
+    "project": "nextmail-round3-security",
+    "description": "Round 3: Security Hardening — restrict Postfix relay, rotate eval credentials, add TLS integration tests"
+  },
+  "tasks": [
+    {
+      "id": "T8-RELAY",
+      "title": "Restrict Postfix mynetworks from 0.0.0.0/0 to cluster CIDRs (close open relay)",
+      "deps": [],
+      "priority": 1,
+      "repo": "main",
+      "scope": [
+        "k8s/dovecot/postfix.yaml"
+      ],
+      "accept": "! grep 'mynetworks = 0.0.0.0/0' k8s/dovecot/postfix.yaml && grep -q 'mynetworks' k8s/dovecot/postfix.yaml && grep -q '10\\.' k8s/dovecot/postfix.yaml",
+      "acceptance_prose": "You work in an isolated git worktree of /home/weissto_local/git/next-mailserver.\n\nCONTEXT: k8s/dovecot/postfix.yaml currently has `mynetworks = 0.0.0.0/0` — an OPEN RELAY. This is documented as eval-only with a warning comment, but it must be restricted before any production use. The cluster uses pod CIDR 172.17.0.0/16 (k3s default) and service CIDR 172.17.192.0/18. The dovecot-eval namespace pods are in 172.17.x.x. The stalwart-eval namespace pods are also in 172.17.x.x. DKIM milter is at 172.17.199.49 (dovecot-eval namespace).\n\nTASK:\n1. In k8s/dovecot/postfix.yaml, change `mynetworks = 0.0.0.0/0` to `mynetworks = 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16` (all private RFC1918 ranges + localhost). This allows internal cluster traffic but blocks external relay abuse.\n2. Update the warning comment to note that mynetworks is now restricted to private ranges.\n3. Do NOT change smtpd_relay_restrictions or smtpd_recipient_restrictions (they already use permit_mynetworks, reject_unauth_destination which is correct).\n4. Commit with message: 'security(postfix): restrict mynetworks from 0.0.0.0/0 to RFC1918 private ranges'\n\nGATE: `! grep 'mynetworks = 0.0.0.0/0' k8s/dovecot/postfix.yaml && grep -q 'mynetworks' k8s/dovecot/postfix.yaml && grep -q '10\\.' k8s/dovecot/postfix.yaml`",
+      "manual": false
+    },
+    {
+      "id": "T9-CRED",
+      "title": "Rotate eval credentials — replace all hardcoded passwords with env-var-driven defaults",
+      "deps": [],
+      "priority": 2,
+      "repo": "main",
+      "scope": [
+        "tests/ha-test-wormhole.sh",
+        "tests/ha-test-dovecot.sh",
+        "tests/ha-test-sharedfs.sh",
+        "tests/ha-test-stalwart.sh",
+        "tests/imap-test.sh",
+        "tests/stalwart-smtp-test.sh",
+        "tests/concurrent-test.sh",
+        "tests/performance/test_concurrent_benchmark.py",
+        "scripts/create-stalwart-user.sh",
+        "scripts/post-deploy.sh",
+        "scripts/ldap-load-test.py",
+        "tests/integration/test_migration_e2e.py",
+        "tests/integration/eval/test_ldap_auth.py"
+      ],
+      "accept": "cnt=$(grep -rn 'Stalwart-Eval-2026\\|eval2026\\|adminpassword' tests/ scripts/ benchmarks/ --include='*.py' --include='*.sh' | grep -v 'conftest\\|getenv\\|os.environ\\|TEST_PASS\\|STALWART_TEST_PASS\\|LDAP_ADMIN_PASSWORD\\|DOVECOT_PASS\\|STALWART_DB_PASSWORD\\|S3_SECRET_KEY' | grep -v '#' | wc -l); test \"$cnt\" -le 3",
+      "acceptance_prose": "You work in an isolated git worktree of /home/weissto_local/git/next-mailserver.\n\nCONTEXT: Many test scripts and benchmark files have hardcoded passwords: 'eval2026', 'adminpassword', 'Stalwart-Eval-2026-Secure-Passphrase!'. These should use environment variables with sensible defaults, following the pattern already established in tests/integration/stalwart/conftest.py (TEST_PASS = os.getenv('STALWART_TEST_PASS', 'Stalwart-Eval-2026-Secure-Passphrase!')).\n\nFiles with hardcoded credentials (DO NOT modify conftest.py — it already uses env vars):\n- tests/ha-test-wormhole.sh: PASS='eval2026'\n- tests/ha-test-dovecot.sh: PASS='eval2026'\n- tests/ha-test-sharedfs.sh: PASS='eval2026'\n- tests/ha-test-stalwart.sh: PASS1='Stalwart-Eval-2026-Secure-Passphrase!', PASS2='Stalwart-Eval-2026-Secure-Passphrase!'\n- tests/imap-test.sh: eval2026 (inline)\n- tests/stalwart-smtp-test.sh: PASS1='Stalwart-Eval-2026-Secure-Passphrase!', PASS2='Stalwart-Eval-2026-Secure-Passphrase!'\n- tests/concurrent-test.sh: eval2026 (inline)\n- tests/performance/test_concurrent_benchmark.py: DOVECOT_PASS='eval2026'\n- scripts/create-stalwart-user.sh: 'eval2026' (inline in JSON payload)\n- scripts/post-deploy.sh: LDAP_ADMIN_PASSWORD='${LDAP_ADMIN_PASSWORD:-adminpassword}' (already env-var-driven — OK)\n- scripts/ldap-load-test.py: 'eval2026' (inline)\n- tests/integration/test_migration_e2e.py: LDAP_PW='adminpassword', eval2026 (inline in CSV)\n- tests/integration/eval/test_ldap_auth.py: 'adminpassword' (inline in ldapsearch args)\n\nTASK:\n1. In each shell script, replace hardcoded passwords with env-var-driven defaults: PASS='${DOVECOT_PASS:-eval2026}' or PASS='${STALWART_TEST_PASS:-Stalwart-Eval-2026-Secure-Passphrase!}'.\n2. In each Python file, replace hardcoded passwords with os.getenv('DOVECOT_PASS', 'eval2026') or os.getenv('STALWART_TEST_PASS', 'Stalwart-Eval-2026-Secure-Passphrase!') or os.getenv('LDAP_ADMIN_PASSWORD', 'adminpassword').\n3. For scripts/post-deploy.sh — it already uses ${LDAP_ADMIN_PASSWORD:-adminpassword}, leave it as-is.\n4. For test_migration_e2e.py: LDAP_PW = os.getenv('LDAP_ADMIN_PASSWORD', 'adminpassword'), and the CSV row should use os.getenv('DOVECOT_PASS', 'eval2026').\n5. For test_ldap_auth.py: use os.getenv('LDAP_ADMIN_PASSWORD', 'adminpassword') in the ldapsearch args.\n6. Do NOT change k8s/ yaml files (those are deployment manifests, not test scripts).\n7. Do NOT change conftest.py files (they already use env vars).\n8. Commit with message: 'security: replace hardcoded eval credentials with env-var-driven defaults'\n\nGATE: The gate counts remaining hardcoded credentials (excluding conftest, getenv, env var references, and comments). A few may remain in test data files or comments — the gate allows up to 3 remaining (for edge cases like inline test data that can't easily be env-var-driven).\n\nGATE: `cnt=$(grep -rn 'Stalwart-Eval-2026\\|eval2026\\|adminpassword' tests/ scripts/ benchmarks/ --include='*.py' --include='*.sh' | grep -v 'conftest\\|getenv\\|os.environ\\|TEST_PASS\\|STALWART_TEST_PASS\\|LDAP_ADMIN_PASSWORD\\|DOVECOT_PASS\\|STALWART_DB_PASSWORD\\|S3_SECRET_KEY' | grep -v '#' | wc -l); test \"$cnt\" -le 3`",
+      "manual": false
+    },
+    {
+      "id": "T10-TLS-TEST",
+      "title": "Add TLS integration tests (IMAPS/SMTPS with internal CA cert verification)",
+      "deps": [],
+      "priority": 3,
+      "repo": "main",
+      "scope": [
+        "tests/integration/stalwart/test_tls_internal_ca.py"
+      ],
+      "accept": "python3 -m pytest tests/integration/stalwart/test_tls_internal_ca.py -o 'addopts=-p no:warnings' --co -q 2>&1 | grep -q 'test_tls_ca_cert_exists\\|test_tls_imaps_connect\\|test_tls_smtps_connect'",
+      "acceptance_prose": "You work in an isolated git-worktree of /home/weissto_local/git/next-mailserver.\n\nCONTEXT: The eval cluster has TLS certificates (stalwart-eval-tls, dovecot-eval-tls) signed by the internal mail-eval-ca. Once applied, IMAPS (993), SMTPS (465), and HTTPS (443) should use these certs. Tests are needed to verify: (1) the CA cert exists in the cluster, (2) IMAPS connections use the cert, (3) SMTPS connections use the cert, (4) the cert is valid for the service hostname.\n\nThese are INTEGRATION tests — they require a running cluster. They should be skipped if the cluster is not available (use pytest.skip with a clear reason).\n\nTASK:\n1. Create tests/integration/stalwart/test_tls_internal_ca.py with the following tests:\n   a) test_tls_ca_cert_exists: Verify the mail-eval-ca-secret exists in mail-infra namespace and contains a ca.crt key. Use kubectl via subprocess. Skip if kubectl fails or cert not found.\n   b) test_tls_stalwart_cert_ready: Verify the stalwart-eval-tls Certificate in stalwart-eval namespace is Ready. Use kubectl. Skip if not found.\n   c) test_tls_dovecot_cert_ready: Verify the dovecot-eval-tls Certificate in dovecot-eval namespace is Ready. Use kubectl. Skip if not found.\n   d) test_tls_imaps_connect: Connect to stalwart IMAPS (port 3993 via port-forward) and verify the TLS cert is presented. Use ssl.create_default_context() with cafile=ca.crt. Skip if connection fails.\n   e) test_tls_smtps_connect: Connect to stalwart SMTPS (port 3465 via port-forward) and verify TLS. Skip if connection fails.\n   f) test_tls_cert_hostname: Verify the cert CN/SAN matches *.stalwart-eval.svc.cluster.local. Skip if cert not available.\n2. Use the stalwart_port_forward fixture from tests/integration/stalwart/conftest.py for port forwarding.\n3. Import TEST_PASS from conftest.\n4. Mark all tests with @pytest.mark.stalwart and @pytest.mark.integration.\n5. Commit with message: 'test(tls): integration tests for internal CA-signed TLS certs (IMAPS, SMTPS, cert verification)'\n\nGATE: `python3 -m pytest tests/integration/stalwart/test_tls_internal_ca.py -o 'addopts=-p no:warnings' --co -q 2>&1 | grep -q 'test_tls_ca_cert_exists\\|test_tls_imaps_connect\\|test_tls_smtps_connect'`",
+      "manual": false
+    }
+  ]
+}

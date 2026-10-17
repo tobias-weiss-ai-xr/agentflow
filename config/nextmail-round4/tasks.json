@@ -1,0 +1,35 @@
+{
+  "_meta": {
+    "project": "nextmail-round4-quality",
+    "description": "Round 4: Test & Benchmark Quality — multi-pod load generator, fix remaining F841 unused variables"
+  },
+  "tasks": [
+    {
+      "id": "T11-LOAD",
+      "title": "Add --pods N flag to sessions.py and auth-storm.py for multi-pod distributed load generation",
+      "deps": [],
+      "priority": 1,
+      "repo": "main",
+      "scope": [
+        "benchmarks/campus35k/sessions.py",
+        "benchmarks/campus35k/auth-storm.py"
+      ],
+      "accept": "python3 -c \"import ast, sys; tree=ast.parse(open('benchmarks/campus35k/sessions.py').read()); args=[a.arg for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name=='main' for a in node.args.args]; assert 'pods' in args or any('pods' in str(a) for a in ast.walk(tree)), 'sessions.py missing pods parameter'; tree2=ast.parse(open('benchmarks/campus35k/auth-storm.py').read()); args2=[a.arg for node in ast.walk(tree2) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name=='main' for a in node.args.args]; assert 'pods' in args2 or any('pods' in str(a) for a in ast.walk(tree2)), 'auth-storm.py missing pods parameter'\"",
+      "acceptance_prose": "You work in an isolated git worktree of /home/weissto_local/git/next-mailserver.\n\nCONTEXT: benchmarks/campus35k/sessions.py and auth-storm.py currently run from a single pod. The arc42 risk 'Single-pod load generator saturates at C=200' documents that the load generator itself becomes the bottleneck at C=200 (achieved only 175.5/200 mean concurrency). A multi-pod generator (≥2 pods) is needed before probing >200 concurrent. The scripts already support --concurrency, --duration, --domain, --user-range flags.\n\nTASK:\n1. In benchmarks/campus35k/sessions.py:\n   a) Add a `--pods N` command-line argument (default 1). When N > 1, the script should either: (i) print instructions for running N pods (kubectl run with the script as a configmap), OR (ii) actually launch N kubectl run pods that each run the script with --concurrency split across pods. Option (i) is simpler and safer for a first implementation.\n   b) When --pods N is specified, print a message like: 'To run with N pods, execute: kubectl run sessions-load-{i} --image=python:3-slim --restart=Never --command -- python3 /opt/sessions.py --concurrency C/N --duration D --domain DOMAIN' for each pod.\n   c) Add a `parse_pods(spec)` helper function that parses the --pods argument (similar to existing parse_user_range).\n   d) Do NOT break existing behavior when --pods is not specified (default 1).\n2. In benchmarks/campus35k/auth-storm.py:\n   a) Same changes: add `--pods N` argument, `parse_pods()` helper, and multi-pod launch instructions.\n3. Commit with message: 'feat(bench): multi-pod load generator (--pods N) for sessions.py and auth-storm.py'\n\nGATE: `python3 -c \"import ast; tree=ast.parse(open('benchmarks/campus35k/sessions.py').read()); args=[a.arg for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name=='main' for a in node.args.args]; assert 'pods' in args or any('pods' in str(a) for a in ast.walk(tree)), 'sessions.py missing pods parameter'; tree2=ast.parse(open('benchmarks/campus35k/auth-storm.py').read()); args2=[a.arg for node in ast.walk(tree2) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name=='main' for a in node.args.args]; assert 'pods' in args2 or any('pods' in str(a) for a in ast.walk(tree2)), 'auth-storm.py missing pods parameter'\"`",
+      "manual": false
+    },
+    {
+      "id": "T12-F841",
+      "title": "Fix remaining F841 unused variables in test_idle_notification.py and code quality cleanup",
+      "deps": [],
+      "priority": 2,
+      "repo": "main",
+      "scope": [
+        "tests/integration/stalwart/test_idle_notification.py"
+      ],
+      "accept": "ruff check tests/integration/stalwart/test_idle_notification.py --select F841 2>&1 | grep -q 'All checks passed' || ruff check tests/integration/stalwart/test_idle_notification.py --select F841 2>&1 | wc -l | grep -q '^0$'",
+      "acceptance_prose": "You work in an isolated git worktree of /home/weissto_local/git/next-mailserver.\n\nCONTEXT: tests/integration/stalwart/test_idle_notification.py has F841 unused variable warnings at lines 277 and 286 (initial_count, notification_count). These are pre-existing and were identified during the bug hunt round 2. The variables are assigned but never used in assertions.\n\nTASK:\n1. Run `ruff check tests/integration/stalwart/test_idle_notification.py --select F841` to identify all F841 warnings.\n2. For each F841 warning, either:\n   a) Use the variable in an assertion (preferred — the variable was probably meant to be checked), OR\n   b) Rename to `_` (if the variable is intentionally unused, e.g., a function return value that's part of an API contract), OR\n   c) Remove the assignment entirely if the function call has no side effects.\n3. For `initial_count` (line ~277): this is likely the count before an IDLE operation. It should be used in an assertion like `assert initial_count >= 0` or compared with the post-IDLE count.\n4. For `notification_count` (line ~286): this is likely the count of IDLE notifications received. It should be used in an assertion like `assert notification_count >= 0` or `assert notification_count == expected`.\n5. Do NOT change any other file. Do NOT remove tests or change test logic — only fix the unused variable warnings.\n6. Commit with message: 'fix(tests): F841 unused variables in test_idle_notification.py (initial_count, notification_count)'\n\nGATE: `ruff check tests/integration/stalwart/test_idle_notification.py --select F841` must report zero F841 warnings.",
+      "manual": false
+    }
+  ]
+}

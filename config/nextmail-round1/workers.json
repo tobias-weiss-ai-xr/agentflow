@@ -1,0 +1,28 @@
+{
+  "defaults": {
+    "accept_timeout_s": 600,
+    "max_attempts": 3,
+    "retry_delay_s": 30,
+    "agent_timeout_s": 3600
+  },
+  "workers": [
+    {
+      "name": "af-nm-r1a",
+      "provider": "local",
+      "model": "deepseek-v4-flash/local",
+      "api_base": "http://localhost:5103/v1",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "enabled": true,
+      "cli": "pi"
+    },
+    {
+      "name": "af-nm-r1b",
+      "provider": "local",
+      "model": "deepseek-v4-flash/local",
+      "api_base": "http://localhost:5103/v1",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "enabled": true,
+      "cli": "pi"
+    }
+  ]
+}
