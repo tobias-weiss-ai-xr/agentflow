@@ -1199,7 +1199,10 @@ fn per_task_max_turns_parses_and_validates() {
         ONE_WORKER,
     );
     let err = load(&t2, &w2).unwrap_err();
-    assert!(err.contains("A") && err.contains("max_turns"), "naming the task: {err}");
+    assert!(
+        err.contains("A") && err.contains("max_turns"),
+        "naming the task: {err}"
+    );
 
     let d3 = fresh_dir("task-maxturns-absent");
     let (t3, w3) = write_config(&d3, ONE_TASK, ONE_WORKER);
@@ -1223,7 +1226,9 @@ fn task_readonly_parses_and_validates() {
     let cfg = load(&tasks, &workers).expect("readonly task loads");
     assert!(cfg.by_id["R"].readonly, "readonly flag parses to true");
     assert!(
-        !cfg.warnings.iter().any(|w| w.contains("no acceptance gate")),
+        !cfg.warnings
+            .iter()
+            .any(|w| w.contains("no acceptance gate")),
         "a readonly task must not warn about a missing gate: {:?}",
         cfg.warnings
     );

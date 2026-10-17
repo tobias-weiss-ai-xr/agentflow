@@ -25,3 +25,6 @@ result*
 /config/sso-logout-fix/
 /state-*/
 /state-*.sh
+
+/config/self-improve/
+/state-self-improve/
