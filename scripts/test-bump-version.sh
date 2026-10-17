@@ -21,6 +21,9 @@ version = "0.1.0"
 EOF
 printf 'LOCKED 0.1.0\n' > Cargo.lock
 printf '  agentflow:0.1.0 run --dry-run\n' > README.md
+# Ignore the stub cargo/af/scripts so bump-version.sh's working-tree-clean guard
+# (git status --porcelain) isn't tripped by untracked stub files.
+printf 'bin/\ntarget/\nscripts/\n' > .gitignore
 git add -A
 git commit -q -m init
 
