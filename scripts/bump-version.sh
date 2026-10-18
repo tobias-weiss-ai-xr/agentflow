@@ -62,3 +62,4 @@ git tag -a "v$NEW" -m "v$NEW"
 
 echo "done: v$NEW"
 echo "next: git push && git push --tags"
+echo "note: fleet deploy should use dist builds from tag v$NEW (see scripts/dist/*, ansible/playbooks/agentflow-sync.yaml)"
