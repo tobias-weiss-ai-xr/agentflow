@@ -422,7 +422,7 @@ fn hot_reload(
     match crate::config::load_full(
         &st.tasks_file,
         &st.workers_file,
-        std::env::var("TF_REPOS_JSON").ok().map(PathBuf::from),
+        crate::config::af_var("AF_REPOS_JSON").ok().map(PathBuf::from),
     ) {
         Ok(c) => Some(c),
         Err(e) => {
