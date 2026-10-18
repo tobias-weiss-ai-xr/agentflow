@@ -54,7 +54,7 @@ impl Router {
             // pre-filters interrupted receipts before replaying (see
             // `run_loop`), exactly as before this statistic existed.
             let dur = rec.counts_as_verdict().then_some(rec.wall_clock_s);
-            r.record(&rec.worker, rec.outcome == "merged", dur);
+            r.record(&rec.worker, rec.is_success(), dur);
         }
         r
     }

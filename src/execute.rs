@@ -97,6 +97,16 @@ pub fn agent_env(
 /// The function returns:
 /// - `Outcome::Merged` on gate pass + successful merge
 /// - `Outcome::Failed(reason)` on any failure (scope, gate, merge, timeout, etc.)
+///
+/// Map an `Outcome` to its persisted receipt string.
+fn outcome_name(o: &Outcome) -> &'static str {
+    match o {
+        Outcome::Merged => "merged",
+        Outcome::Verified => "verified",
+        Outcome::Failed(_) => "failed",
+    }
+}
+
 pub fn execute_task(
     ctx: &ExecCtx,
     worker: &Worker,
@@ -107,11 +117,7 @@ pub fn execute_task(
     let start = std::time::Instant::now();
     let (outcome, spend) = execute_attempt(ctx, worker, id, attempt, log_path);
     // Receipt for EVERY attempt (merged + failed) — routing/cost substrate.
-    let outcome_name = match outcome {
-        Outcome::Merged => "merged",
-        Outcome::Verified => "verified",
-        Outcome::Failed(_) => "failed",
-    };
+    let outcome_name = outcome_name(&outcome);
     let error = match &outcome {
         Outcome::Failed(e) => Some(e.lines().next().unwrap_or("").chars().take(200).collect()),
         Outcome::Merged | Outcome::Verified => None,
@@ -1267,13 +1273,12 @@ mod tests {
     }
 
     #[test]
-    fn receipt_of_verified_outcome_maps_to_verified_string() {
-        // The receipt serializer maps Outcome::Verified to "verified".
-        let out = match Outcome::Verified {
-            Outcome::Verified => "verified",
-            _ => "merged",
-        };
-        assert_eq!(out, "verified");
+    fn outcome_name_maps_verified_to_verified_string() {
+        // The production outcome→receipt-string mapping must treat a verified
+        // attempt as "verified" (exercises the real `outcome_name` fn).
+        assert_eq!(outcome_name(&Outcome::Verified), "verified");
+        assert_eq!(outcome_name(&Outcome::Merged), "merged");
+        assert_eq!(outcome_name(&Outcome::Failed("x".into())), "failed");
     }
 
     #[test]

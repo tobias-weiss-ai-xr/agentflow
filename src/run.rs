@@ -83,7 +83,7 @@ fn reap(
         // receipts.
         router.record(
             &worker_name,
-            matches!(outcome, Outcome::Merged),
+            matches!(outcome, Outcome::Merged | Outcome::Verified),
             Some(wall_s),
         );
         // Journal reconciliation: attempt threads persist phase boundaries
@@ -2223,7 +2223,7 @@ pub fn cost(cfg: &Config, st: &Settings, filter: &CostFilter) -> String {
     let mut worker_receipts: HashMap<String, Vec<&Receipt>> = HashMap::new();
     for r in selected.iter().copied().filter(|r| r.counts_as_verdict()) {
         let e = by_worker.iter_mut().find(|(n, _, _)| n == &r.worker);
-        let won = r.outcome == "merged";
+        let won = r.is_success();
         match e {
             Some((_, w, n)) => {
                 *n += 1;

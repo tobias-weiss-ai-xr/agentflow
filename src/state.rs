@@ -117,7 +117,7 @@ pub struct Receipt {
     pub ts: u64,
     #[serde(default = "default_outcome")]
     pub outcome: String,
-    /// First line of the failure reason (≤200 chars); None on merged
+    /// First line of the failure reason (≤200 chars); None on merged/verified
     /// attempts and for legacy receipts.
     #[serde(default)]
     pub error: Option<String>,
@@ -156,6 +156,14 @@ impl Receipt {
     /// exclude both from the numerator AND the denominator.
     pub fn counts_as_verdict(&self) -> bool {
         self.outcome == "merged" || self.outcome == "failed" || self.outcome == "verified"
+    }
+
+    /// Whether this receipt represents a successful outcome (a verdict).
+    ///
+    /// `merged` and `verified` are both successes (they are verdicts);
+    /// `failed` is not.
+    pub fn is_success(&self) -> bool {
+        self.outcome == "merged" || self.outcome == "verified"
     }
 }
 
@@ -640,6 +648,40 @@ mod tests {
     }
 
     #[test]
+    fn is_success_treats_merged_and_verified_as_successes() {
+        for outcome in ["merged", "verified"] {
+            let r = Receipt {
+                task: "A".into(),
+                attempt: 1,
+                worker: "w1".into(),
+                model: "m".into(),
+                wall_clock_s: 1.0,
+                tokens: None,
+                ts: 0,
+                outcome: outcome.into(),
+                error: None,
+                cost_micros: None,
+                contracts: None,
+            };
+            assert!(r.is_success(), "{outcome} must count as a success");
+        }
+        let failed = Receipt {
+            task: "A".into(),
+            attempt: 1,
+            worker: "w1".into(),
+            model: "m".into(),
+            wall_clock_s: 1.0,
+            tokens: None,
+            ts: 0,
+            outcome: "failed".into(),
+            error: Some("boom".into()),
+            cost_micros: None,
+            contracts: None,
+        };
+        assert!(!failed.is_success(), "failed must NOT count as a success");
+    }
+
+    #[test]
     fn contract_verdict_round_trips() {
         let cv = ContractVerdict {
             contract: "C-M1".into(),
@@ -647,5 +689,7 @@ mod tests {
         };
         let s = serde_json::to_string(&cv).unwrap();
         assert_eq!(s, r#"{"contract":"C-M1","verdict":"pass"}"#);
+        let back: ContractVerdict = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, cv);
     }
 }
