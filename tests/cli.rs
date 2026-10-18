@@ -1655,7 +1655,7 @@ fn recover_with_attempt_flag_selects_the_right_archive() {
     let (code, out) = cli.af(&["recover", "--task", "C", "--attempt", "1"]);
     assert_eq!(code, 0, "recover --attempt 1 exits 0: {out}");
     assert_eq!(
-        std::fs::read_to_string(repo.join("WORK.txt")).unwrap(),
+        std::fs::read_to_string(repo.join("WORK.txt")).unwrap().replace("\r\n", "\n").replace("\r", "\n"),
         "attempt-one\n",
         "the requested attempt's work is merged, not the newest: {out}"
     );
@@ -1691,7 +1691,7 @@ fn recover_attempt_flag_picks_newest_without_flag() {
     let (code, out) = cli.af(&["recover", "--task", "C"]);
     assert_eq!(code, 0, "recover without --attempt exits 0: {out}");
     assert_eq!(
-        std::fs::read_to_string(repo.join("WORK.txt")).unwrap(),
+        std::fs::read_to_string(repo.join("WORK.txt")).unwrap().replace("\r\n", "\n").replace("\r", "\n"),
         "attempt-two\n",
         "the newest archive wins without --attempt: {out}"
     );
