@@ -1016,6 +1016,68 @@ fn mark_resumed_failure(
     }
 }
 
+/// Verify-task tail of the resume: the gate already passed (or the agent
+/// stopped with no committed change), so the attempt branch is NEVER merged —
+/// it is archived under `<branch>-rejected-<now>` so the durable work survives
+/// for recovery while the base branch stays clean, then the attempt branch +
+/// worktree are dropped. The task is marked Done and a `verified` receipt is
+/// recorded, mirroring `execute_attempt`'s verify branch. Returns true.
+fn finish_resume_verify(
+    st: &Settings,
+    status: &mut HashMap<String, TaskStatus>,
+    id: &str,
+    repo: &Path,
+    branch: &str,
+) -> bool {
+    // Archive a COPY of the attempt branch tip when it carries real work
+    // beyond the base (same commit-ahead guard `preserve_work` uses), so the
+    // paid-for agent work survives the cleanup that follows. `None` attempt
+    // keeps the legacy `<branch>-rejected-<now>` name, exactly like the
+    // startup-heal archiving in `worktree::clean`.
+    let kept = match worktree::current_branch(repo).ok() {
+        Some(base) if matches!(worktree::commits_ahead(repo, &base, branch), Ok(n) if n > 0) => {
+            worktree::archive_branch(repo, branch, None, crate::state::now_ts())
+        }
+        _ => None,
+    };
+    if let Some(name) = &kept {
+        println!("  ✓ {id} resumed to done (verify archived on {name}, agent not re-run)");
+    } else {
+        println!("  ✓ {id} resumed to done (verify archived nothing, agent not re-run)");
+    }
+    if let Some(s) = status.get_mut(id) {
+        s.state = TaskState::Done;
+        s.last_error = None;
+        s.phase = Some(AttemptPhase::GatePassed);
+    }
+    // Drop the attempt branch + worktree (best-effort, exactly like the merge
+    // resume's cleanup). The archived COPY survives this.
+    worktree::remove(
+        repo,
+        &worktree::Worktree {
+            path: st.worktree_root.join(id),
+            branch: branch.to_string(),
+        },
+    );
+    // Record the verified outcome for the resumed (counted) attempt.
+    let store = Store::new(st.state_dir.clone());
+    let attempt = status.get(id).map(|s| s.attempts).unwrap_or(0);
+    let _ = store.append_receipt(&Receipt {
+        task: id.to_string(),
+        attempt,
+        worker: UNKNOWN_WORKER.to_string(),
+        model: UNKNOWN_WORKER.to_string(),
+        wall_clock_s: 0.0,
+        tokens: None,
+        ts: crate::state::now_ts(),
+        outcome: "verified".to_string(),
+        error: None,
+        cost_micros: None,
+        contracts: None,
+    });
+    true
+}
+
 /// Shared tail of both resume paths: land the attempt branch in the base
 /// IDEMPOTENTLY (merge — or just record merged when the branch is already
 /// an ancestor / the task's merge commit is already in the base), mark the
@@ -1033,6 +1095,12 @@ fn finish_resume_merge(
     let Some(task) = cfg.by_id.get(id) else {
         return false;
     };
+    // A verify task NEVER merges: the crash-recovery resume archives the
+    // branch and records `verified` instead, exactly like the live execute
+    // path's verify branch.
+    if task.verify {
+        return finish_resume_verify(st, status, id, repo, branch);
+    }
     let already_merged = branch_merged_into_head(repo, branch) || merge_commit_in_base(repo, id);
     let merged = if already_merged {
         Ok(()) // idempotent: record merged without a second merge
@@ -2939,6 +3007,62 @@ mod tests {
         assert!(
             !branch_exists(&repo, "tf/T1"),
             "branch consumed by the merge"
+        );
+
+        cleanup(&repo);
+    }
+
+    #[test]
+    fn heal_stale_attempt_verify_archives_never_merges_and_records_verified() {
+        let repo = scratch_repo();
+        let base = repo.parent().unwrap().to_path_buf();
+        // The agent's durable work: a commit on the attempt branch.
+        git_cmd(&repo, &["checkout", "-b", "tf/T1"]);
+        std::fs::write(repo.join("f.txt"), "agent work\n").unwrap();
+        git_cmd(&repo, &["commit", "-am", "agent work"]);
+        git_cmd(&repo, &["checkout", "main"]);
+
+        let mut st = settings(base.join("state"));
+        st.repo_dir = repo.clone();
+        // A verify task: the gate already passed; the resume must archive, never merge.
+        let mut verify_task = task("T1");
+        verify_task.verify = true;
+        let cfg = cfg_with(vec![verify_task]);
+        let mut status = HashMap::new();
+        status.insert("T1".into(), running(1, Some(AttemptPhase::GatePassed)));
+
+        heal_stale_attempt(&cfg, &st, &mut status, "T1", 3);
+
+        assert_eq!(status["T1"].state, TaskState::Done);
+        assert_eq!(status["T1"].phase, Some(AttemptPhase::GatePassed));
+        assert_eq!(status["T1"].last_error, None);
+        // The base branch is UNTOUCHED: the verify task's work is archived, not merged.
+        assert_eq!(
+            std::fs::read_to_string(repo.join("f.txt"))
+                .unwrap()
+                .replace("\r\n", "\n")
+                .replace("\r", "\n"),
+            "base\n",
+            "the verify branch must never reach the base"
+        );
+        assert!(
+            !branch_exists(&repo, "tf/T1"),
+            "the attempt branch is consumed (archived then removed)"
+        );
+        // The durable work survives under an archived rejected branch.
+        let archived = worktree::archived_branches(&repo, "tf");
+        assert!(
+            archived.iter().any(|b| b.starts_with("tf/T1-rejected-")),
+            "the verify work is preserved under an archived branch: {archived:?}"
+        );
+        // A `verified` receipt is recorded for the resumed attempt.
+        let store = Store::new(st.state_dir.clone());
+        let receipts = store.load_receipts();
+        assert!(
+            receipts
+                .iter()
+                .any(|r| r.task == "T1" && r.outcome == "verified"),
+            "a verified receipt is recorded: {receipts:?}"
         );
 
         cleanup(&repo);

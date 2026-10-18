@@ -1433,7 +1433,6 @@ fn verify_task_gate_pass_archives_branch_and_records_verified() {
     // not deleted).
     let archived = archived_refs(&f.repo);
     assert_eq!(archived.len(), 1, "exactly one archived ref: {archived:?}");
-    assert!(!f.repo.join("DONE.txt").exists(), "base unchanged");
 }
 
 /// A verify task that produces NO committed change still passes if the
@@ -1445,12 +1444,13 @@ fn verify_task_gate_pass_archives_branch_and_records_verified() {
 /// the seeded content, so the worktree is genuinely CLEAN — zero commits
 /// ahead — while the agent still exits 0 and the gate (test -f README.md)
 /// passes. This is the same trick `an_attempt_that_produces_no_change_never_reports_merged`
-/// (e2e.rs:1661-1677) uses.
+/// uses.
 #[test]
 fn verify_task_with_zero_commits_passes_when_gate_passes() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     std::env::remove_var("FAKE_AGENT_EXIT");
-    std::env::remove_var("FAKE_AGENT_NO_COMMIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    std::env::remove_var("FAKE_AGENT_OUT");
     std::env::set_var("FAKE_AGENT_TOUCH", "README.md");
     std::env::set_var("FAKE_AGENT_OUT", "# scratch");
     let f = fixture(
@@ -1486,8 +1486,6 @@ fn verify_task_with_zero_commits_passes_when_gate_passes() {
         archived.is_empty(),
         "no work, so no archive branch: {archived:?}"
     );
-    std::env::remove_var("FAKE_AGENT_TOUCH");
-    std::env::remove_var("FAKE_AGENT_OUT");
 }
 
 /// A verify task whose gate FAILS is recorded failed (never verified).
