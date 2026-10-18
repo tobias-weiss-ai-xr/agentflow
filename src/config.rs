@@ -112,6 +112,14 @@ pub struct Task {
     /// `readonly` with an `accept` gate (contradictory). Default `false`.
     #[serde(default)]
     pub readonly: bool,
+    /// Verify-only task: the acceptance gate is the SOLE deliverable. The
+    /// agent runs and the gate must pass, but the branch is NEVER merged —
+    /// it is archived instead, and the attempt records `outcome: verified`.
+    /// A task that produces no committed change still passes if the gate
+    /// exits 0. Validation rejects combining `verify` with `manual`,
+    /// `readonly`, or a missing `accept` gate. Default `false`.
+    #[serde(default)]
+    pub verify: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -361,6 +369,22 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
         if t.max_turns == Some(0) {
             return Err(format!("task '{}': max_turns must be >= 1", t.id));
         }
+        // Verify checks run before the readonly+accept check so that a
+        // verify+readonly task reports "verify task cannot be readonly"
+        // (rather than the readonly+accept message). A verify task always
+        // has an accept gate (enforced above), so this ordering is safe.
+        if t.verify && t.accept.is_none() {
+            return Err(format!(
+                "task '{}': verify task must declare an accept gate",
+                t.id
+            ));
+        }
+        if t.verify && t.manual {
+            return Err(format!("task '{}': verify task cannot be manual", t.id));
+        }
+        if t.verify && t.readonly {
+            return Err(format!("task '{}': verify task cannot be readonly", t.id));
+        }
         if t.readonly && t.accept.is_some() {
             return Err(format!(
                 "task '{}': readonly task cannot declare an accept gate",
@@ -368,7 +392,7 @@ fn validate(tasks: &[Task], workers: &[Worker]) -> Result<Vec<String>, String> {
             ));
         }
         // No gate and not manual: legacy corpus runs these gate-less; warn.
-        if t.accept.is_none() && !t.manual && !t.readonly {
+        if t.accept.is_none() && !t.manual && !t.readonly && !t.verify {
             warnings.push(format!(
                 "task '{}': no acceptance gate and not manual — gate will be skipped",
                 t.id
@@ -946,6 +970,51 @@ mod tests {
         );
         let e = load(&d.join("tasks.json"), &d.join("workers.json")).unwrap_err();
         assert!(e.contains("readonly task cannot declare"), "{e}");
+    }
+
+    #[test]
+    fn verify_without_gate_is_rejected() {
+        let d = tmpdir("cfg-verify-nogate");
+        wt(
+            &d.join("tasks.json"),
+            r#"{ "tasks": [ { "id": "A", "title": "t", "verify": true } ] }"#,
+        );
+        wt(
+            &d.join("workers.json"),
+            r#"{ "workers": [ { "name": "w1", "provider": "p", "model": "m" } ] }"#,
+        );
+        let e = load(&d.join("tasks.json"), &d.join("workers.json")).unwrap_err();
+        assert!(e.contains("verify task must declare an accept gate"), "{e}");
+    }
+
+    #[test]
+    fn verify_plus_manual_is_rejected() {
+        let d = tmpdir("cfg-verify-manual");
+        wt(
+            &d.join("tasks.json"),
+            r#"{ "tasks": [ { "id": "A", "title": "t", "verify": true, "manual": true, "accept": "true" } ] }"#,
+        );
+        wt(
+            &d.join("workers.json"),
+            r#"{ "workers": [ { "name": "w1", "provider": "p", "model": "m" } ] }"#,
+        );
+        let e = load(&d.join("tasks.json"), &d.join("workers.json")).unwrap_err();
+        assert!(e.contains("verify task cannot be manual"), "{e}");
+    }
+
+    #[test]
+    fn verify_plus_readonly_is_rejected() {
+        let d = tmpdir("cfg-verify-readonly");
+        wt(
+            &d.join("tasks.json"),
+            r#"{ "tasks": [ { "id": "A", "title": "t", "verify": true, "readonly": true, "accept": "true" } ] }"#,
+        );
+        wt(
+            &d.join("workers.json"),
+            r#"{ "workers": [ { "name": "w1", "provider": "p", "model": "m" } ] }"#,
+        );
+        let e = load(&d.join("tasks.json"), &d.join("workers.json")).unwrap_err();
+        assert!(e.contains("verify task cannot be readonly"), "{e}");
     }
 
     #[test]
