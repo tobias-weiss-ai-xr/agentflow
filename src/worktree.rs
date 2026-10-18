@@ -691,7 +691,10 @@ mod tests {
         git_cmd(&wt.path, &["commit", "-m", "task work"]);
         merge(&repo, &wt.branch, &locks, "merge T1").unwrap();
         assert_eq!(
-            std::fs::read_to_string(repo.join("f.txt")).unwrap().replace("\r\n","\n").replace("\r","\n"),
+            std::fs::read_to_string(repo.join("f.txt"))
+                .unwrap()
+                .replace("\r\n", "\n")
+                .replace("\r", "\n"),
             "changed\n"
         );
         assert_eq!(current_branch(&repo).unwrap(), "main");
@@ -787,7 +790,10 @@ mod tests {
             "attached worktree sits on the kept branch tip — no re-created branch"
         );
         assert_eq!(
-            std::fs::read_to_string(wt2.path.join("f.txt")).unwrap().replace("\r\n","\n").replace("\r","\n"),
+            std::fs::read_to_string(wt2.path.join("f.txt"))
+                .unwrap()
+                .replace("\r\n", "\n")
+                .replace("\r", "\n"),
             "agent work\n",
             "the committed agent work is intact"
         );

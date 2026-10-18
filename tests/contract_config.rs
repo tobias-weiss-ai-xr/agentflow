@@ -974,7 +974,8 @@ impl Drop for EnvVar {
 /// phase are ordered together inside this single test.
 // spec: config/environment-overrides#defaults-when-unset
 // spec: config/environment-overrides#overrides-applied
-// spec: config/environment-overrides#legacy-tf-fallback
+// spec: config/environment-overrides#legacy-tf-names-still-apply-with-a-warning
+// spec: config/environment-overrides#af-wins-over-the-legacy-twin
 #[test]
 fn settings_env_defaults_and_overrides_contract() {
     // Belt-and-braces serialization within THIS binary (see docs above):

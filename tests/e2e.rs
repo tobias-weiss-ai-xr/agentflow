@@ -191,6 +191,8 @@ fn happy_path_dependency_and_merge() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
     std::env::remove_var("FAKE_AGENT_EXIT");
     std::env::remove_var("FAKE_AGENT_TOUCH");
+    std::env::remove_var("FAKE_AGENT_TOUCH_FROM_MODEL");
+    std::env::remove_var("FAKE_AGENT_SLEEP_MS");
     let f = fixture(
         &format!(
             r#"{{ "tasks": [
@@ -847,6 +849,10 @@ fn parallel_multi_worker_dispatch_runs_concurrently_and_merges() {
     // No leftover worktrees for either task.
     assert!(!f.st.worktree_root.join("A").exists());
     assert!(!f.st.worktree_root.join("B").exists());
+    // These stub knobs are process-global; restore so later tests are not
+    // influenced by them (tests share one mutex, not one clean env).
+    std::env::remove_var("FAKE_AGENT_TOUCH_FROM_MODEL");
+    std::env::remove_var("FAKE_AGENT_SLEEP_MS");
 }
 
 /// Task on a repo that exists on disk but is not a git repo: the attempt
@@ -1496,7 +1502,10 @@ fn merge_conflict_fails_the_task_branch_cleanly() {
     );
     // Never force-pushed: main keeps its own version of the file.
     assert_eq!(
-        std::fs::read_to_string(repo.join("shared.txt")).unwrap(),
+        std::fs::read_to_string(repo.join("shared.txt"))
+            .unwrap()
+            .replace("\r\n", "\n")
+            .replace("\r", "\n"),
         "main change\n"
     );
     // The conflict was aborted, not staged: the working tree is clean.
@@ -1595,7 +1604,10 @@ fn a_merge_conflict_keeps_the_agents_work_on_an_archived_branch() {
     );
     // Nothing merged: main keeps its own advancing change (never force-pushed).
     assert_eq!(
-        std::fs::read_to_string(f.repo.join("work.txt")).unwrap(),
+        std::fs::read_to_string(f.repo.join("work.txt"))
+            .unwrap()
+            .replace("\r\n", "\n")
+            .replace("\r", "\n"),
         "main version\n"
     );
     // The archived branch is discoverable and really contains the agent work.
@@ -2114,7 +2126,10 @@ fn a_run_reuses_a_scope_compatible_archived_branch_without_paying_an_agent() {
         "base contains the archived change"
     );
     assert_eq!(
-        std::fs::read_to_string(f.repo.join("DONE.txt")).unwrap(),
+        std::fs::read_to_string(f.repo.join("DONE.txt"))
+            .unwrap()
+            .replace("\r\n", "\n")
+            .replace("\r", "\n"),
         "example-agent: task complete\n"
     );
     // … and the archived branch was consumed (its content now lives in base).

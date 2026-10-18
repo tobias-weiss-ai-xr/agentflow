@@ -1657,7 +1657,10 @@ fn recover_with_attempt_flag_selects_the_right_archive() {
     let (code, out) = cli.af(&["recover", "--task", "C", "--attempt", "1"]);
     assert_eq!(code, 0, "recover --attempt 1 exits 0: {out}");
     assert_eq!(
-        std::fs::read_to_string(repo.join("WORK.txt")).unwrap().replace("\r\n", "\n").replace("\r", "\n"),
+        std::fs::read_to_string(repo.join("WORK.txt"))
+            .unwrap()
+            .replace("\r\n", "\n")
+            .replace("\r", "\n"),
         "attempt-one\n",
         "the requested attempt's work is merged, not the newest: {out}"
     );
@@ -1693,7 +1696,10 @@ fn recover_attempt_flag_picks_newest_without_flag() {
     let (code, out) = cli.af(&["recover", "--task", "C"]);
     assert_eq!(code, 0, "recover without --attempt exits 0: {out}");
     assert_eq!(
-        std::fs::read_to_string(repo.join("WORK.txt")).unwrap().replace("\r\n", "\n").replace("\r", "\n"),
+        std::fs::read_to_string(repo.join("WORK.txt"))
+            .unwrap()
+            .replace("\r\n", "\n")
+            .replace("\r", "\n"),
         "attempt-two\n",
         "the newest archive wins without --attempt: {out}"
     );
@@ -1880,7 +1886,7 @@ fn run_falls_through_a_gate_failing_archived_branch() {
     assert_eq!(agent_spawns(&cli, "G"), 1, "the agent WAS dispatched");
 }
 
-// spec: lifecycle/pre-dispatch-reuse-of-an-archived-branch#tf-no-reuse-opts-out
+// spec: lifecycle/pre-dispatch-reuse-of-an-archived-branch#af-no-reuse-opts-out
 #[test]
 fn run_with_tf_no_reuse_never_reuses_an_archived_branch() {
     let tasks = r#"{ "tasks": [
@@ -2342,7 +2348,7 @@ fn config_worker_schema_loads_enabled_workers() {
 // spec: config/environment-overrides
 // spec: config/environment-overrides#overrides-applied
 // spec: config/environment-overrides#defaults-when-unset
-// spec: config/environment-overrides#legacy-tf-fallback
+// spec: config/environment-overrides#legacy-tf-names-still-apply-with-a-warning
 #[test]
 fn settings_from_env_honors_af_overrides_and_defaults() {
     // Mutates process-global env; every other test in this binary spawns
@@ -2419,7 +2425,7 @@ fn settings_from_env_honors_af_overrides_and_defaults() {
     }
 }
 
-// spec: config/environment-overrides#legacy-tf-fallback
+// spec: config/environment-overrides#legacy-tf-names-still-apply-with-a-warning
 #[test]
 fn legacy_tf_env_warns_once_on_stderr() {
     // Spawn the binary with only the legacy name set: the value must still

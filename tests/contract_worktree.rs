@@ -167,7 +167,10 @@ fn worktree_lifecycle_and_merge_contract() {
         "base repo stays on its original branch"
     );
     assert_eq!(
-        std::fs::read_to_string(s.repo.join("f.txt")).unwrap(),
+        std::fs::read_to_string(s.repo.join("f.txt"))
+            .unwrap()
+            .replace("\r\n", "\n")
+            .replace("\r", "\n"),
         "base\n",
         "base working tree untouched by create"
     );
@@ -193,7 +196,10 @@ fn worktree_lifecycle_and_merge_contract() {
     );
     merge(&s.repo, &wt1.branch, &locks, "merge T1").expect("disjoint branch merges");
     assert_eq!(
-        std::fs::read_to_string(s.repo.join("f.txt")).unwrap(),
+        std::fs::read_to_string(s.repo.join("f.txt"))
+            .unwrap()
+            .replace("\r\n", "\n")
+            .replace("\r", "\n"),
         "from T1\n",
         "merged content is on the base branch"
     );
@@ -285,7 +291,10 @@ fn conflicting_merge_aborts_and_leaves_base_usable() {
         "working tree clean after abort (no conflicted files staged)"
     );
     assert_eq!(
-        std::fs::read_to_string(s.repo.join("f.txt")).unwrap(),
+        std::fs::read_to_string(s.repo.join("f.txt"))
+            .unwrap()
+            .replace("\r\n", "\n")
+            .replace("\r", "\n"),
         "main version\n",
         "the base side of the conflict survives"
     );
@@ -349,11 +358,17 @@ fn merge_locks_serialize_and_are_send_sync() {
 
     // Both branches' files are present: neither merge clobbered the other.
     assert_eq!(
-        std::fs::read_to_string(s.repo.join("a.txt")).unwrap(),
+        std::fs::read_to_string(s.repo.join("a.txt"))
+            .unwrap()
+            .replace("\r\n", "\n")
+            .replace("\r", "\n"),
         "a\n"
     );
     assert_eq!(
-        std::fs::read_to_string(s.repo.join("b.txt")).unwrap(),
+        std::fs::read_to_string(s.repo.join("b.txt"))
+            .unwrap()
+            .replace("\r\n", "\n")
+            .replace("\r", "\n"),
         "b\n"
     );
     assert_eq!(current_branch(&s.repo).unwrap(), "main");
