@@ -45,6 +45,7 @@ A `verify` task is a **no-merge acceptance task**: its deliverable is a passing 
 
 - `verify: true` **and** `manual: true` — a verify task must run its gate; skipping it is contradictory.
 - `verify: true` **and** `readonly: true` — `readonly` forbids the gate (`config.rs:364-369` already rejects `readonly`+`accept`); a verify task's gate is its whole point, so `readonly` + `verify` is contradictory.
+- `verify: true` **without an `accept` gate** — the gate is a verify task's sole deliverable; a verify task with no gate would "pass" with nothing verified. This is a hard validation error (unlike the `no gate and not manual` warning at `config.rs:371-376`).
 
 ---
 
@@ -162,6 +163,6 @@ This reuses the same `receipts` input and the loop that builds the block at line
 
 ## Testing
 
-- Unit: `Outcome::Verified` receipt mapping; `counts_as_verdict` includes `verified`; validate rejects `verify`+`manual` and `verify`+`readonly`.
+- Unit: `Outcome::Verified` receipt mapping; `counts_as_verdict` includes `verified`; validate rejects `verify`+`manual`, `verify`+`readonly`, and `verify` without an `accept` gate.
 - Contract/CLI: a `verify` task whose agent produces 0 commits and a passing gate yields `verified` and does **not** merge (branch archived, base unchanged); a failing gate yields `failed`; `accept_report.json` parsed → per-contract verdicts surface in `status --json`.
 - Retry seeding: a failed verify task with `contracts` seeds failing contract names into the next attempt prompt.
