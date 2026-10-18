@@ -1403,6 +1403,116 @@ fn failed_receipt_carries_the_failure_reason() {
     );
 }
 
+/// A verify task whose gate passes is recorded `verified`, the branch is
+/// archived (not merged), and the base branch is untouched.
+#[test]
+fn verify_task_gate_pass_archives_branch_and_records_verified() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"verify it","verify":true,"scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("DONE.txt")
+        ),
+        &worker_json(1),
+    );
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
+
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Done, "verify task ends done");
+
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].outcome, "verified", "receipt records verified");
+
+    // Nothing merged: DONE.txt must NOT exist in the base repo.
+    assert!(!f.repo.join("DONE.txt").exists(), "verify never merges");
+
+    // The attempt branch is archived under tf/A-rejected-* (not merged,
+    // not deleted).
+    let archived = archived_refs(&f.repo);
+    assert_eq!(archived.len(), 1, "exactly one archived ref: {archived:?}");
+    assert!(!f.repo.join("DONE.txt").exists(), "base unchanged");
+}
+
+/// A verify task that produces NO committed change still passes if the
+/// gate exits 0 (the gate is the sole deliverable).
+///
+/// The fixture seeds `README.md` with `# scratch\n` (e2e.rs:58) and the stub
+/// writes `{FAKE_AGENT_OUT}\n` into `FAKE_AGENT_TOUCH`. Setting the touch to
+/// README.md with out `# scratch` makes the write byte-for-byte identical to
+/// the seeded content, so the worktree is genuinely CLEAN — zero commits
+/// ahead — while the agent still exits 0 and the gate (test -f README.md)
+/// passes. This is the same trick `an_attempt_that_produces_no_change_never_reports_merged`
+/// (e2e.rs:1661-1677) uses.
+#[test]
+fn verify_task_with_zero_commits_passes_when_gate_passes() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_NO_COMMIT");
+    std::env::set_var("FAKE_AGENT_TOUCH", "README.md");
+    std::env::set_var("FAKE_AGENT_OUT", "# scratch");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"verify no-change","verify":true,"scope":["README.md"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("README.md")
+        ),
+        &worker_json(1),
+    );
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
+
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    assert_eq!(receipts.len(), 1, "one receipt: {receipts:?}");
+    assert_eq!(
+        receipts[0].outcome, "verified",
+        "no-change verify still passes"
+    );
+
+    // The base is untouched: no new commit on main, and nothing archived
+    // (there is no work to preserve).
+    let revs = std::process::Command::new("git")
+        .args(["rev-list", "--count", "main"])
+        .current_dir(&f.repo)
+        .output()
+        .expect("git runs");
+    let revs = String::from_utf8_lossy(&revs.stdout).trim().to_string();
+    assert_eq!(
+        revs, "1",
+        "base branch must have exactly the seed commit: {revs}"
+    );
+    let archived = archived_refs(&f.repo);
+    assert!(
+        archived.is_empty(),
+        "no work, so no archive branch: {archived:?}"
+    );
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    std::env::remove_var("FAKE_AGENT_OUT");
+}
+
+/// A verify task whose gate FAILS is recorded failed (never verified).
+#[test]
+fn verify_task_gate_failure_is_failed_not_verified() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"verify it","verify":true,"scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("NEVER.txt") // the agent never creates NEVER.txt
+        ),
+        &worker_json(1),
+    );
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 2);
+
+    let st = Store::new(f.st.state_dir.clone()).load();
+    assert_eq!(st["A"].state, TaskState::Failed);
+
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].outcome, "failed", "gate failure is failed");
+}
+
 /// Restart after a partial run (state spec): task A is already `done` from
 /// a previous process; the restart must NOT re-run A (no new attempt, no
 /// new receipt) and must continue with the remaining task B.

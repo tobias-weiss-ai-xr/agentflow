@@ -555,17 +555,23 @@ fn execute_attempt(
             }
         };
         if ahead == 0 {
-            let secs = attempt_start.elapsed().as_secs();
-            append(&format!(
-                "-- agent produced no change: 0 commits ahead of {base_branch} after {secs}s"
-            ));
-            cleanup(&repo, &wt);
-            return (
-                Outcome::Failed(format!(
-                    "agent produced no change: 0 commits ahead of {base_branch} after {secs}s"
-                )),
-                spend,
-            );
+            // A verify task treats the gate as the sole deliverable: it may
+            // pass with zero commits ahead (the gate is checked in the
+            // worktree below). Non-verify tasks still treat no-change as a
+            // failure.
+            if !task.verify {
+                let secs = attempt_start.elapsed().as_secs();
+                append(&format!(
+                    "-- agent produced no change: 0 commits ahead of {base_branch} after {secs}s"
+                ));
+                cleanup(&repo, &wt);
+                return (
+                    Outcome::Failed(format!(
+                        "agent produced no change: 0 commits ahead of {base_branch} after {secs}s"
+                    )),
+                    spend,
+                );
+            }
         }
     }
 
@@ -677,6 +683,17 @@ fn execute_attempt(
     }
 
     // 4) Merge (serialized per repo; never force-push).
+    if task.verify {
+        // Verify task: the gate already passed (or the agent stopped and
+        // produced no committed change). The branch is NEVER merged — it is
+        // archived under `<branch>-rejected-<now>` so the work survives for
+        // recovery while the base branch stays clean. The receipt outcome is
+        // `verified`.
+        append("-- verify passed; archiving branch (no merge) --");
+        let _ = preserve_and_note(&repo, &wt, id, attempt, &mut append);
+        cleanup(&repo, &wt);
+        return (Outcome::Verified, spend);
+    }
     let msg = format!("af: {} — {}", task.id, task.title);
     if let Err(e) = worktree::merge(&repo, &wt.branch, &ctx.merge_locks, &msg) {
         append(&format!("-- merge failed: {e}"));
