@@ -2883,7 +2883,7 @@ mod tests {
         assert_eq!(status["T1"].phase, Some(AttemptPhase::GatePassed));
         assert_eq!(status["T1"].last_error, None);
         assert_eq!(
-            std::fs::read_to_string(repo.join("f.txt")).unwrap(),
+            std::fs::read_to_string(repo.join("f.txt")).unwrap().replace("\r\n","\n").replace("\r","\n"),
             "agent work\n",
             "the committed agent work reached the base branch"
         );
