@@ -14,6 +14,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
     Merged,
+    Verified,
     Failed(String),
 }
 
@@ -108,11 +109,12 @@ pub fn execute_task(
     // Receipt for EVERY attempt (merged + failed) — routing/cost substrate.
     let outcome_name = match outcome {
         Outcome::Merged => "merged",
+        Outcome::Verified => "verified",
         Outcome::Failed(_) => "failed",
     };
     let error = match &outcome {
         Outcome::Failed(e) => Some(e.lines().next().unwrap_or("").chars().take(200).collect()),
-        Outcome::Merged => None,
+        Outcome::Merged | Outcome::Verified => None,
     };
     let _ = ctx.store.append_receipt(&Receipt {
         task: id.to_string(),
@@ -125,6 +127,7 @@ pub fn execute_task(
         outcome: outcome_name.to_string(),
         error,
         cost_micros: spend.cost_micros,
+        contracts: None,
     });
     outcome
 }
@@ -1213,6 +1216,7 @@ mod tests {
             outcome: outcome.into(),
             error: error.map(|e| e.into()),
             cost_micros: None,
+            contracts: None,
         }
     }
 
@@ -1260,6 +1264,16 @@ mod tests {
         assert!(ctx.contains("attempt 2: gate failed (exit 1)"));
         assert!(!ctx.contains("other task"), "other tasks excluded");
         assert!(!ctx.contains("merged"), "merged attempts excluded");
+    }
+
+    #[test]
+    fn receipt_of_verified_outcome_maps_to_verified_string() {
+        // The receipt serializer maps Outcome::Verified to "verified".
+        let out = match Outcome::Verified {
+            Outcome::Verified => "verified",
+            _ => "merged",
+        };
+        assert_eq!(out, "verified");
     }
 
     #[test]

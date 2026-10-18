@@ -197,6 +197,7 @@ mod tests {
             outcome: outcome.into(),
             error: None,
             cost_micros: None,
+            contracts: None,
         }
     }
 

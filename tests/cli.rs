@@ -139,6 +139,7 @@ impl Cli {
                 outcome: "merged".into(),
                 error: None,
                 cost_micros: None,
+                contracts: None,
             })
             .unwrap();
     }
@@ -317,6 +318,7 @@ fn cost_last_shows_the_latest_attempt_per_task() {
             outcome: outcome.into(),
             error: None,
             cost_micros: None,
+            contracts: None,
         };
     for r in [
         receipt("A", 1, 1_000, 30.0, "w1", "failed"),
@@ -397,6 +399,7 @@ fn cost_since_filters_receipts_by_time() {
         outcome: outcome.into(),
         error: None,
         cost_micros: None,
+        contracts: None,
     };
     for r in [
         receipt(1, 1_600_000_000, 100.0, "w1", "failed"), // 2020-09-13
@@ -483,6 +486,7 @@ fn cost_report_surfaces_wasted_spend() {
                 outcome: outcome.into(),
                 error: error.map(str::to_string),
                 cost_micros: None,
+                contracts: None,
             }
         };
     for r in [
@@ -594,6 +598,7 @@ fn cost_report_shows_relative_expense_when_no_provider_reports_a_price() {
         outcome: "merged".into(),
         error: None,
         cost_micros: None,
+        contracts: None,
     };
     store
         .append_receipt(&receipt("A", 1_000, 1.0, "w1", Some(1_000_000)))
@@ -694,6 +699,7 @@ fn a_declared_price_beats_the_params_proxy_in_the_cost_report() {
         outcome: "merged".into(),
         error: None,
         cost_micros: None,
+        contracts: None,
     };
     // w1: 500k tokens at $2/Mtok = $1.0000.
     store
@@ -789,6 +795,7 @@ fn cost_report_shows_a_declared_rate_even_when_no_tokens_were_recorded() {
                 outcome: "merged".into(),
                 error: None,
                 cost_micros: None,
+                contracts: None,
             })
             .unwrap();
     }
@@ -857,6 +864,7 @@ fn receipts_naming_an_absent_worker_are_footnoted_not_fatal() {
             outcome: "merged".into(),
             error: None,
             cost_micros: None,
+            contracts: None,
         };
     store
         .append_receipt(&receipt("A", 1, 1_000, 1.0, "ghost", 1_000_000))
@@ -952,6 +960,7 @@ fn the_cost_report_prefers_a_measured_cost_over_a_declared_one() {
         outcome: "merged".into(),
         error: None,
         cost_micros: cost,
+        contracts: None,
     };
     // A: one MEASURED attempt on the priced worker — the measurement wins.
     store
@@ -1075,6 +1084,7 @@ fn the_cost_report_shows_the_duration_the_router_reads() {
         outcome: outcome.into(),
         error: None,
         cost_micros: None,
+        contracts: None,
     };
     // w1: two verdict attempts (2.0s + 6.0s) → MEAN_S 4.0. w2: one (3.0s).
     store
@@ -1765,6 +1775,7 @@ fn recover_writes_a_recovered_receipt() {
             outcome: "failed".into(),
             error: Some("acceptance gate failed (exit 1): boom".into()),
             cost_micros: None,
+            contracts: None,
         })
         .unwrap();
 
@@ -2219,6 +2230,7 @@ fn cost_prints_per_worker_trust_section() {
                 outcome: outcome.into(),
                 error: None,
                 cost_micros: None,
+                contracts: None,
             })
             .unwrap();
     }

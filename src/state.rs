@@ -98,6 +98,14 @@ fn default_outcome() -> String {
     "merged".to_string()
 }
 
+/// A single per-contract verdict from an optional `accept_report.json`.
+/// Stored as a Vec (not a HashMap) to preserve file/key ordering.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ContractVerdict {
+    pub contract: String,
+    pub verdict: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Receipt {
     pub task: String,
@@ -120,6 +128,10 @@ pub struct Receipt {
     /// reported 0 is recorded as `None`, never as a measured free run.
     #[serde(default)]
     pub cost_micros: Option<u64>,
+    /// Per-contract verdicts from an optional `accept_report.json`
+    /// (verify tasks). `None` when no report was present/parseable.
+    #[serde(default)]
+    pub contracts: Option<Vec<ContractVerdict>>,
 }
 
 /// Outcome recorded for an attempt lost because the orchestrator itself died
@@ -136,14 +148,14 @@ pub const OUTCOME_RECOVERED: &str = "recovered";
 impl Receipt {
     /// Does this outcome count as a verdict on the WORKER's reliability?
     ///
-    /// Only `merged` and `failed` are verdicts. [`OUTCOME_INTERRUPTED`] is
+    /// `merged`, `failed`, and `verified` are verdicts. [`OUTCOME_INTERRUPTED`] is
     /// excluded because the attempt was lost when the orchestrator itself
     /// died (no agent result, no gate result); [`OUTCOME_RECOVERED`] is
     /// excluded because no agent ran at all — recovery re-validates and
     /// merges work that was already paid for. Every trust statistic must
     /// exclude both from the numerator AND the denominator.
     pub fn counts_as_verdict(&self) -> bool {
-        self.outcome == "merged" || self.outcome == "failed"
+        self.outcome == "merged" || self.outcome == "failed" || self.outcome == "verified"
     }
 }
 
@@ -583,6 +595,7 @@ mod tests {
                 outcome: "merged".into(),
                 error: None,
                 cost_micros: None,
+                contracts: None,
             })
             .unwrap();
         store
@@ -597,6 +610,7 @@ mod tests {
                 outcome: "failed".into(),
                 error: Some("agent exited 7".into()),
                 cost_micros: None,
+                contracts: None,
             })
             .unwrap();
         let rs = store.load_receipts();
@@ -605,5 +619,33 @@ mod tests {
         assert_eq!(rs[0].wall_clock_s, 12.5);
         let total: f64 = rs.iter().map(|r| r.wall_clock_s).sum();
         assert!((total - 19.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn verified_counts_as_a_verdict() {
+        let r = Receipt {
+            task: "A".into(),
+            attempt: 1,
+            worker: "w1".into(),
+            model: "m".into(),
+            wall_clock_s: 1.0,
+            tokens: None,
+            ts: 0,
+            outcome: "verified".into(),
+            error: None,
+            cost_micros: None,
+            contracts: None,
+        };
+        assert!(r.counts_as_verdict(), "verified must count as a verdict");
+    }
+
+    #[test]
+    fn contract_verdict_round_trips() {
+        let cv = ContractVerdict {
+            contract: "C-M1".into(),
+            verdict: "pass".into(),
+        };
+        let s = serde_json::to_string(&cv).unwrap();
+        assert_eq!(s, r#"{"contract":"C-M1","verdict":"pass"}"#);
     }
 }

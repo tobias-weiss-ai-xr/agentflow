@@ -447,6 +447,7 @@ fn the_router_prefers_the_faster_worker_only_when_trust_and_cost_tie() {
         outcome: outcome.into(),
         error: None,
         cost_micros: None,
+        contracts: None,
     };
     let r = Router::from_receipts(&[
         receipt("w1", 2.0, "merged"),

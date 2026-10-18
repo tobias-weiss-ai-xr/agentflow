@@ -141,6 +141,7 @@ fn seed_receipt(st: &Settings, task: &str, wall_clock_s: f64) {
             outcome: "merged".into(),
             error: None,
             cost_micros: None,
+            contracts: None,
         })
         .unwrap();
 }

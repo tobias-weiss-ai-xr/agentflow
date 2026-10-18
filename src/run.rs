@@ -105,6 +105,11 @@ fn reap(
                 s.last_error = None;
                 println!("  ✓ {id} done (attempt {})", s.attempts);
             }
+            Outcome::Verified => {
+                s.state = TaskState::Done;
+                s.last_error = None;
+                println!("  ✓ {id} verified (attempt {})", s.attempts);
+            }
             Outcome::Failed(err) => {
                 s.last_error = Some(err.clone());
                 if s.attempts >= max_attempts {
@@ -206,6 +211,7 @@ fn append_recovered_receipt(store: &Store, st: &Settings, task_id: &str, branch:
         outcome: OUTCOME_RECOVERED.to_string(),
         error: None,
         cost_micros: None,
+        contracts: None,
     });
 }
 
@@ -1239,6 +1245,7 @@ fn heal_stale_attempt(
             outcome: OUTCOME_INTERRUPTED.to_string(),
             error: Some(error),
             cost_micros: None,
+            contracts: None,
         });
         // RerunAgent, or a resume that lost its artifacts (always safe):
         // apply the budget to the now-counted attempt — Ready for a fresh
@@ -2978,6 +2985,7 @@ mod tests {
             outcome: outcome.into(),
             error: None,
             cost_micros: None,
+            contracts: None,
         };
         store.append_receipt(&receipt("A", 10.0, "merged")).unwrap();
         store.append_receipt(&receipt("A", 5.5, "failed")).unwrap();
@@ -3023,6 +3031,7 @@ mod tests {
             outcome: "failed".into(),
             error: error.map(str::to_string),
             cost_micros: None,
+            contracts: None,
         };
         // No error on the receipt → the literal key.
         assert_eq!(waste_cause(&r(None)), "unknown");
@@ -3118,6 +3127,7 @@ mod tests {
                 outcome: outcome.into(),
                 error: None,
                 cost_micros: None,
+                contracts: None,
             };
         // A: a failed retry then a merge on another worker. B: a same-ts
         // tie between attempts 1/2 — the greater attempt must win. C: two
@@ -3231,6 +3241,7 @@ mod tests {
             outcome: outcome.into(),
             error: None,
             cost_micros: None,
+            contracts: None,
         };
         store
             .append_receipt(&rcpt(1, 1_600_000_000, 100.0, "w1", "failed"))
@@ -3311,6 +3322,7 @@ mod tests {
             outcome: outcome.into(),
             error: None,
             cost_micros: None,
+            contracts: None,
         };
         // The mean over the verdict attempts, one decimal.
         let merged = rcpt(2.0, "merged");
@@ -3385,6 +3397,7 @@ mod tests {
             outcome: "merged".into(),
             error: None,
             cost_micros: None,
+            contracts: None,
         };
         // Every attempt Priced: the dollars SUM (500k + 250k at $2/Mtok).
         let r1 = rcpt("pw", Some(500_000));
@@ -3473,6 +3486,7 @@ mod tests {
             outcome: "merged".into(),
             error: None,
             cost_micros: cost,
+            contracts: None,
         };
         // One measured + one price-estimated attempt → named source plus
         // the estimate count, exactly the shape the report prints.
@@ -3525,6 +3539,7 @@ mod tests {
             outcome: "merged".into(),
             error: None,
             cost_micros: cost,
+            contracts: None,
         };
         // Measured beats declared: 500k tokens at $2/Mtok would estimate to
         // $1.0000, but the provider reported $0.0123 — the measurement wins
