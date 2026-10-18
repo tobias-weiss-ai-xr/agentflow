@@ -333,7 +333,7 @@ fn reuse_before_dispatch(
     if status
         .get(&task.id)
         .and_then(|s| s.last_error.as_deref())
-        .map_or(false, |e| e.contains("acceptance gate failed"))
+        .is_some_and(|e| e.contains("acceptance gate failed"))
     {
         considered.insert(task.id.clone());
         return false;
