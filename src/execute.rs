@@ -176,6 +176,16 @@ fn failure_context(receipts: &[Receipt], task_id: &str, attempt: u32) -> Option<
     for r in prior {
         let why = r.error.as_deref().unwrap_or("(unknown failure)");
         out.push_str(&format!("- attempt {}: {}\n", r.attempt, why));
+        if let Some(cs) = &r.contracts {
+            let failing: Vec<&str> = cs
+                .iter()
+                .filter(|c| c.verdict != "pass")
+                .map(|c| c.contract.as_str())
+                .collect();
+            if !failing.is_empty() {
+                out.push_str(&format!("  - failing contracts: {}\n", failing.join(", ")));
+            }
+        }
     }
     Some(out)
 }
@@ -1324,6 +1334,50 @@ mod tests {
         assert!(ctx.contains("attempt 2: gate failed (exit 1)"));
         assert!(!ctx.contains("other task"), "other tasks excluded");
         assert!(!ctx.contains("merged"), "merged attempts excluded");
+    }
+
+    fn receipt_with_contracts(
+        task: &str,
+        attempt: u32,
+        outcome: &str,
+        contracts: &[&str],
+    ) -> Receipt {
+        Receipt {
+            task: task.into(),
+            attempt,
+            worker: "w".into(),
+            model: "m".into(),
+            wall_clock_s: 1.0,
+            tokens: None,
+            ts: 0,
+            outcome: outcome.into(),
+            error: None,
+            cost_micros: None,
+            contracts: Some(
+                contracts
+                    .iter()
+                    .map(|c| ContractVerdict {
+                        contract: c.to_string(),
+                        verdict: "fail".into(),
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    #[test]
+    fn failure_context_appends_failing_contracts_from_prior_receipts() {
+        let rs = vec![
+            receipt_with_contracts("A", 1, "failed", &["C-M1", "C-M2"]),
+            receipt_with_contracts("B", 1, "failed", &["C-OTHER"]),
+        ];
+        let ctx = failure_context(&rs, "A", 2).unwrap();
+        assert!(ctx.contains("C-M1"), "failing contract seeded: {ctx}");
+        assert!(ctx.contains("C-M2"), "failing contract seeded: {ctx}");
+        assert!(
+            !ctx.contains("C-OTHER"),
+            "other task's contracts excluded: {ctx}"
+        );
     }
 
     #[test]
