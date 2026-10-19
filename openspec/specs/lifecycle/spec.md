@@ -158,6 +158,35 @@ THEN the task does not reach `done`, the receipt outcome is not `merged`, and th
 WHEN the attempt's merge succeeds
 THEN `af` verifies the attempt branch tip is an ancestor of the base branch before reporting the attempt as merged.
 
+### Requirement: Verify tasks
+
+A task with `verify: true` SHALL treat its acceptance gate as the SOLE
+deliverable: the task succeeds when the gate exits 0, whether or not the agent
+produced any committed change. The zero-commit failure SHALL NOT apply to a
+verify task — a verify task may pass having committed nothing. A verify task
+SHALL NEVER merge its branch to the base; on success `af` SHALL archive the
+branch under `<branch>-rejected-<now>` and SHALL record the receipt outcome as
+`verified`. On failure the receipt SHALL record the failure as normal, and the
+branch SHALL be archived for retry exactly as a non-verify attempt. An optional
+`accept_report.json` in the worktree root (`{"C-M1":"pass", ...}`) SHALL be
+parsed best-effort into per-contract verdicts stored on the receipt, surfaced
+in `status --json` (the `verify`, `verdict` and `contracts` fields) and seeded
+into retry prompts as a `failing contracts:` line in the "Previous attempts"
+block; a report that is absent or unparsable SHALL NOT fail the attempt.
+Validation SHALL reject a task that declares `verify` together with `manual` or
+`readonly`, or that declares `verify` without an `accept` gate.
+
+#### Scenario: verify task passes and archives
+
+GIVEN a `verify: true` task whose acceptance gate is the sole deliverable
+WHEN the gate exits 0, even if the agent committed nothing
+THEN the branch is archived as `<branch>-rejected-<now>` and never merged, and the receipt records `outcome: "verified"`.
+
+#### Scenario: verify task gate fails
+
+GIVEN a `verify: true` task whose acceptance gate exits non-zero
+THEN the receipt records the failure (never `verified`), the branch is archived for retry, and no merge happens.
+
 ### Requirement: Pre-dispatch reuse of an archived branch
 
 When a task becomes ready and a worker is about to be picked/dispatched,

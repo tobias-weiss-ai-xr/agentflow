@@ -25,6 +25,7 @@ providers directly.
 - **Measured routing** — every attempt leaves a receipt with its outcome; free workers are picked by UCB1 (track record + exploration), per-worker trust shown in `af cost`; ties among equally trusted workers go to the cheaper declared basis, then to the faster measured mean, and only then to config order
 - **Retry memory** — failed attempts record their error; retry prompts list the task's earlier failures so the agent doesn't repeat them
 - **Exact acceptance gates** — each task declares a shell command that must exit 0 before merge
+- **Verification tasks** — `verify: true` makes the gate the sole deliverable: the branch is archived (never merged) and the receipt records `verified`; an optional `accept_report.json` of per-contract verdicts is parsed best-effort and surfaced in `status --json` and retry prompts
 - **Honest success** — `Merged` means the base really contains the work, and it is never inferred from an exit code: if the agent exits 0 leaving a dirty worktree the harness commits that tree before judging it (so the scope check, the gate and the merge all see the same content), an attempt that ends with zero commits ahead of the base is a failure rather than a silent `Done`, and the merge is verified against the base before it is reported
 - **Work preserved on every failure path** — a stall, a timeout, a non-zero agent exit, a scope violation, a merge conflict or an interrupted campaign all archive the attempt's branch as `<branch>-rejected-[<attempt>-]<ts>`; `af recover`, or the next `af run`, can then land that work without paying an agent for it twice
 - **Dependency DAG** — `deps` ordering, critical-path priority, deadlock detection
@@ -316,6 +317,7 @@ to block the command: the readable history is still accounted for.
 | `gate_replay` | Whether the gate is replay-safe (default `true`); `false` = side effects |
 | `max_turns` | Per-task turn cap for builtin workers (overrides the worker's `max_turns`, then `AF_AGENT_MAX_TURNS`, then 32). Suggest 12-16 for write+commit+gate tasks; 6 Often too tight. After a `turn cap N reached` failure, the retry automatically runs with `2 × N` (ceiling 128) — evidence from receipts, so it survives `--resume`. Gate-heavy tasks (e.g. a whole-workspace `cargo clippy` in `accept`) need 32-48+; keep the gate as narrow as the scope. |
 | `readonly` | `true` = investigation-only: the builtin harness rejects `write`/`edit`, the attempt counts done on a normal agent stop (no gate, no merge) |
+| `verify` | `true` = verification task: the acceptance gate is the sole deliverable; the branch is archived (never merged) and the receipt records `verified`. Rejected with `manual`, `readonly`, or no `accept` gate. |
 
 Replay contract: the `accept` command MUST be idempotent; declare
 `gate_replay: false` for a gate with side effects — an interrupted such gate
