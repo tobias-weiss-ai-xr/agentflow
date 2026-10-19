@@ -1340,7 +1340,7 @@ mod tests {
         task: &str,
         attempt: u32,
         outcome: &str,
-        contracts: &[&str],
+        contracts: &[(&str, &str)],
     ) -> Receipt {
         Receipt {
             task: task.into(),
@@ -1356,9 +1356,9 @@ mod tests {
             contracts: Some(
                 contracts
                     .iter()
-                    .map(|c| ContractVerdict {
-                        contract: c.to_string(),
-                        verdict: "fail".into(),
+                    .map(|(name, verdict)| ContractVerdict {
+                        contract: name.to_string(),
+                        verdict: verdict.to_string(),
                     })
                     .collect(),
             ),
@@ -1368,8 +1368,8 @@ mod tests {
     #[test]
     fn failure_context_appends_failing_contracts_from_prior_receipts() {
         let rs = vec![
-            receipt_with_contracts("A", 1, "failed", &["C-M1", "C-M2"]),
-            receipt_with_contracts("B", 1, "failed", &["C-OTHER"]),
+            receipt_with_contracts("A", 1, "failed", &[("C-M1", "fail"), ("C-M2", "fail")]),
+            receipt_with_contracts("B", 1, "failed", &[("C-OTHER", "fail")]),
         ];
         let ctx = failure_context(&rs, "A", 2).unwrap();
         assert!(ctx.contains("C-M1"), "failing contract seeded: {ctx}");
@@ -1378,6 +1378,30 @@ mod tests {
             !ctx.contains("C-OTHER"),
             "other task's contracts excluded: {ctx}"
         );
+    }
+
+    #[test]
+    fn failure_context_skips_pass_contracts_and_omits_empty_failing_list() {
+        let rs = vec![receipt_with_contracts(
+            "A",
+            1,
+            "failed",
+            &[("C-M1", "pass"), ("C-M2", "pass")],
+        )];
+        let ctx = failure_context(&rs, "A", 2).unwrap();
+        assert!(
+            !ctx.contains("failing contracts:"),
+            "no failing line when all pass: {ctx}"
+        );
+        let rs2 = vec![receipt_with_contracts(
+            "A",
+            1,
+            "failed",
+            &[("C-M1", "pass"), ("C-M2", "fail")],
+        )];
+        let ctx2 = failure_context(&rs2, "A", 2).unwrap();
+        assert!(ctx2.contains("C-M2"), "failing contract seeded: {ctx2}");
+        assert!(!ctx2.contains("C-M1"), "passing contract excluded: {ctx2}");
     }
 
     #[test]
