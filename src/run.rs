@@ -1703,9 +1703,24 @@ pub fn stop_cmd(st: &Settings) -> i32 {
 /// `af api status --json`.
 pub fn status_json(cfg: &Config, st: &Settings) -> String {
     let status = Store::new(st.state_dir.clone()).load();
+    let receipts = Store::new(st.state_dir.clone()).load_receipts();
     let mut map = serde_json::Map::new();
     for t in &cfg.tasks {
         let s = status.get(&t.id).cloned().unwrap_or_default();
+        // Latest surviving receipt for this task (last winning attempt).
+        let latest = receipts
+            .iter()
+            .rev()
+            .find(|r| r.task == t.id && r.counts_as_verdict());
+        let verdict = latest.map(|r| r.outcome.as_str()).unwrap_or("none");
+        let contracts = latest
+            .and_then(|r| r.contracts.as_ref())
+            .map(|c| {
+                c.iter()
+                    .map(|v| serde_json::json!({ "contract": v.contract, "verdict": v.verdict }))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         map.insert(
             t.id.clone(),
             serde_json::json!({
@@ -1713,6 +1728,9 @@ pub fn status_json(cfg: &Config, st: &Settings) -> String {
                 "state": format!("{:?}", s.state).to_lowercase(),
                 "attempts": s.attempts,
                 "last_error": s.last_error,
+                "verify": t.verify,
+                "verdict": verdict,
+                "contracts": contracts,
             }),
         );
     }
@@ -2838,7 +2856,13 @@ mod tests {
     fn status_json_serializes_task_fields_from_the_store() {
         let base = unique_base("json");
         let st = settings(base.clone());
-        let cfg = cfg_with(vec![task("A"), task("B")]);
+        let cfg = cfg_with(vec![
+            Task {
+                verify: true,
+                ..task("A")
+            },
+            task("B"),
+        ]);
         let mut status = HashMap::new();
         status.insert(
             "A".into(),
@@ -2852,6 +2876,24 @@ mod tests {
             },
         );
         Store::new(st.state_dir.clone()).save(&status).unwrap();
+        Store::new(st.state_dir.clone())
+            .append_receipt(&Receipt {
+                task: "A".into(),
+                attempt: 1,
+                worker: "w1".into(),
+                model: "m".into(),
+                wall_clock_s: 1.0,
+                tokens: None,
+                ts: 1,
+                outcome: "verified".into(),
+                error: None,
+                cost_micros: None,
+                contracts: Some(vec![crate::state::ContractVerdict {
+                    contract: "C-M1".into(),
+                    verdict: "pass".into(),
+                }]),
+            })
+            .unwrap();
 
         let out = status_json(&cfg, &st);
         let v: serde_json::Value = serde_json::from_str(&out).expect("status_json is valid JSON");
@@ -2859,10 +2901,15 @@ mod tests {
         assert_eq!(v["A"]["state"], "failed");
         assert_eq!(v["A"]["attempts"], 2);
         assert_eq!(v["A"]["last_error"], "nope");
+        assert_eq!(v["A"]["verify"], true, "verify flag surfaced");
+        assert_eq!(v["A"]["verdict"], "verified", "latest verdict surfaced");
+        assert_eq!(v["A"]["contracts"][0]["contract"], "C-M1");
+        assert_eq!(v["A"]["contracts"][0]["verdict"], "pass");
         // Absent task falls back to the defaults.
         assert_eq!(v["B"]["state"], "ready");
         assert_eq!(v["B"]["attempts"], 0);
         assert!(v["B"]["last_error"].is_null());
+        assert_eq!(v["B"]["verdict"], "none", "no receipt for B");
 
         let _ = std::fs::remove_dir_all(&base);
     }
