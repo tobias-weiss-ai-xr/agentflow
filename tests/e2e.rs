@@ -1511,6 +1511,39 @@ fn verify_task_gate_failure_is_failed_not_verified() {
     assert_eq!(receipts[0].outcome, "failed", "gate failure is failed");
 }
 
+/// A verify task whose gate writes `accept_report.json` records the
+/// per-contract verdicts on the receipt, sorted by contract key.
+#[test]
+fn verify_task_records_accept_report_contracts_on_receipt() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    // The gate writes accept_report.json AND passes (exit 0). The inner
+    // quotes are JSON-escaped (`\"`) so the whole gate embeds cleanly in the
+    // tasks.json `accept` string; the shell then receives a plain object.
+    let gate = format!(
+        "{} && printf '%s' '{{\\\"C-M2\\\":\\\"fail\\\",\\\"C-M1\\\":\\\"pass\\\"}}' > accept_report.json",
+        gate_cmd("DONE.txt")
+    );
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"verify contracts","verify":true,"scope":["DONE.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate
+        ),
+        &worker_json(1),
+    );
+    assert_eq!(run::run_loop(&f.cfg, &f.st, &RunOptions::default()), 0);
+
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    assert_eq!(receipts.len(), 1);
+    let contracts = receipts[0].contracts.as_ref().expect("contracts present");
+    assert_eq!(contracts.len(), 2);
+    assert_eq!(contracts[0].contract, "C-M1");
+    assert_eq!(contracts[0].verdict, "pass");
+    assert_eq!(contracts[1].contract, "C-M2");
+    assert_eq!(contracts[1].verdict, "fail");
+}
+
 /// Restart after a partial run (state spec): task A is already `done` from
 /// a previous process; the restart must NOT re-run A (no new attempt, no
 /// new receipt) and must continue with the remaining task B.

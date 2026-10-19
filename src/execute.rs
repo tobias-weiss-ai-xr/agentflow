@@ -4,7 +4,7 @@
 //! outcome.
 
 use crate::config::{Config, Settings, Worker};
-use crate::state::{now_ts, AttemptPhase, Receipt, Store};
+use crate::state::{now_ts, AttemptPhase, ContractVerdict, Receipt, Store};
 use crate::{gate, worktree};
 use std::fs;
 use std::io::Write;
@@ -115,7 +115,7 @@ pub fn execute_task(
     log_path: &Path,
 ) -> Outcome {
     let start = std::time::Instant::now();
-    let (outcome, spend) = execute_attempt(ctx, worker, id, attempt, log_path);
+    let (outcome, spend, contracts) = execute_attempt(ctx, worker, id, attempt, log_path);
     // Receipt for EVERY attempt (merged + failed) — routing/cost substrate.
     let outcome_name = outcome_name(&outcome);
     let error = match &outcome {
@@ -133,9 +133,24 @@ pub fn execute_task(
         outcome: outcome_name.to_string(),
         error,
         cost_micros: spend.cost_micros,
-        contracts: None,
+        contracts,
     });
     outcome
+}
+
+/// Best-effort per-contract acceptance report (verify tasks). Reads
+/// `accept_report.json` from the worktree root (the gate's cwd). The file is
+/// an object `{"C-M1":"pass","C-M2":"fail",...}`. Missing or unparseable
+/// reports yield `None` and NEVER fail the task — the gate's exit code is the
+/// sole pass/fail authority; the report only adds per-contract detail.
+fn parse_accept_report(wt_path: &Path) -> Option<Vec<ContractVerdict>> {
+    let raw = std::fs::read_to_string(wt_path.join("accept_report.json")).ok()?;
+    let map: std::collections::BTreeMap<String, String> = serde_json::from_str(&raw).ok()?;
+    Some(
+        map.into_iter()
+            .map(|(contract, verdict)| ContractVerdict { contract, verdict })
+            .collect(),
+    )
 }
 
 /// Episodic retry memory (ADR-13): prior failed attempts of this task, as a
@@ -228,7 +243,7 @@ fn execute_attempt(
     id: &str,
     attempt: u32,
     log_path: &Path,
-) -> (Outcome, Spend) {
+) -> (Outcome, Spend, Option<Vec<ContractVerdict>>) {
     // Attempt start: the no-change failure names how long the attempt ran.
     let attempt_start = std::time::Instant::now();
     let task = match ctx.cfg.by_id.get(id) {
@@ -237,6 +252,7 @@ fn execute_attempt(
             return (
                 Outcome::Failed(format!("unknown task {id}")),
                 Spend::default(),
+                None,
             )
         }
     };
@@ -251,7 +267,7 @@ fn execute_attempt(
     let (wt, reused) =
         match materialize_worktree(&repo, &ctx.st.worktree_root, id, &ctx.st.branch_prefix) {
             Ok(w) => w,
-            Err(e) => return (Outcome::Failed(e), Spend::default()),
+            Err(e) => return (Outcome::Failed(e), Spend::default(), None),
         };
     let wt_path = wt.path.clone();
     // Token usage lifted out of the agent's JSON transcript, when the
@@ -310,6 +326,7 @@ fn execute_attempt(
             return (
                 Outcome::Failed(format!("cannot write prompt: {e}")),
                 Spend::default(),
+                None,
             );
         }
 
@@ -411,7 +428,7 @@ fn execute_attempt(
             } else {
                 agent_out.stderr.clone()
             };
-            return (Outcome::Failed(format!("{reason}{kept}")), spend);
+            return (Outcome::Failed(format!("{reason}{kept}")), spend, None);
         }
         // JSON output mode (r9-token-capture): the stream is telemetry,
         // not the log — render it for the human and lift the token usage
@@ -477,7 +494,7 @@ fn execute_attempt(
                 };
                 // The spend was real (and captured) even though the attempt
                 // failed — the receipt is the cost ledger.
-                return (Outcome::Failed(format!("{reason}{kept}")), spend);
+                return (Outcome::Failed(format!("{reason}{kept}")), spend, None);
             }
             append(&format!(
                 "-- agent exited non-zero but committed work ahead of {base_branch:?}; judging committed work --"
@@ -495,7 +512,7 @@ fn execute_attempt(
         append("-- readonly task: agent stopped normally; done without gate or merge --");
         let _ = preserve_and_note(&repo, &wt, id, attempt, &mut append);
         cleanup(&repo, &wt);
-        return (Outcome::Merged, spend);
+        return (Outcome::Merged, spend, None);
     }
 
     // 2a) WORK INTEGRITY (r13): make the agent's work durable BEFORE it is
@@ -520,7 +537,7 @@ fn execute_attempt(
                 // any dirty edit) before cleanup removes the branch.
                 let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
                 cleanup(&repo, &wt);
-                return (Outcome::Failed(format!("{e}{kept}")), spend);
+                return (Outcome::Failed(format!("{e}{kept}")), spend, None);
             }
         };
         // Durable first. A commit failure (e.g. a pre-commit hook rejected
@@ -538,6 +555,7 @@ fn execute_attempt(
                     "cannot commit the agent's uncommitted work: {e}{kept}"
                 )),
                 spend,
+                None,
             );
         }
         // NO CHANGE IS NOT SUCCESS. `Merged` is the harness's claim that the
@@ -551,7 +569,7 @@ fn execute_attempt(
             Err(e) => {
                 let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
                 cleanup(&repo, &wt);
-                return (Outcome::Failed(format!("{e}{kept}")), spend);
+                return (Outcome::Failed(format!("{e}{kept}")), spend, None);
             }
         };
         if ahead == 0 {
@@ -570,6 +588,7 @@ fn execute_attempt(
                         "agent produced no change: 0 commits ahead of {base_branch} after {secs}s"
                     )),
                     spend,
+                    None,
                 );
             }
         }
@@ -588,7 +607,7 @@ fn execute_attempt(
             Err(e) => {
                 let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
                 cleanup(&repo, &wt);
-                return (Outcome::Failed(format!("{e}{kept}")), spend);
+                return (Outcome::Failed(format!("{e}{kept}")), spend, None);
             }
         };
         let changed = match changed_paths(&wt_path, &base_branch) {
@@ -596,7 +615,7 @@ fn execute_attempt(
             Err(e) => {
                 let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
                 cleanup(&repo, &wt);
-                return (Outcome::Failed(format!("{e}{kept}")), spend);
+                return (Outcome::Failed(format!("{e}{kept}")), spend, None);
             }
         };
         let violations = scope_violations(&changed, &task.scope);
@@ -619,6 +638,7 @@ fn execute_attempt(
                     task.scope.join(", ")
                 )),
                 spend,
+                None,
             );
         }
     }
@@ -673,6 +693,7 @@ fn execute_attempt(
                         gate_out.combined().trim()
                     )),
                     spend,
+                    None,
                 );
             }
             // Effect sandwich, boundary 3 (commit outcome AFTER the gate
@@ -688,11 +709,22 @@ fn execute_attempt(
         // produced no committed change). The branch is NEVER merged — it is
         // archived under `<branch>-rejected-<now>` so the work survives for
         // recovery while the base branch stays clean. The receipt outcome is
-        // `verified`.
+        // `verified`, and per-contract verdicts from an optional
+        // `accept_report.json` ride the receipt.
         append("-- verify passed; archiving branch (no merge) --");
+        let contracts = parse_accept_report(&wt_path);
+        if let Some(c) = &contracts {
+            append(&format!(
+                "-- accept_report: {} --",
+                c.iter()
+                    .map(|v| format!("{}={}", v.contract, v.verdict))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
         let _ = preserve_and_note(&repo, &wt, id, attempt, &mut append);
         cleanup(&repo, &wt);
-        return (Outcome::Verified, spend);
+        return (Outcome::Verified, spend, contracts);
     }
     let msg = format!("af: {} — {}", task.id, task.title);
     if let Err(e) = worktree::merge(&repo, &wt.branch, &ctx.merge_locks, &msg) {
@@ -703,7 +735,7 @@ fn execute_attempt(
         // a courtesy: when it yields `None` the message is unchanged.
         let kept = preserve_and_note(&repo, &wt, id, attempt, &mut append);
         cleanup(&repo, &wt);
-        return (Outcome::Failed(format!("{e}{kept}")), spend);
+        return (Outcome::Failed(format!("{e}{kept}")), spend, None);
     }
     // BELT AND BRACES (r13): `Merged` is a claim that the base contains the
     // attempt's work. Prove the branch tip really is an ancestor of the
@@ -720,11 +752,12 @@ fn execute_attempt(
                 wt.branch
             )),
             spend,
+            None,
         );
     }
     append("-- merged --");
     cleanup(&repo, &wt);
-    (Outcome::Merged, spend)
+    (Outcome::Merged, spend, None)
 }
 
 fn cleanup(repo: &Path, wt: &worktree::Worktree) {
@@ -1417,6 +1450,45 @@ b.md"
         assert!(out.contains("test -f done"));
         assert!(out.contains("gpt-x/openai"));
         assert!(out.contains("attempt 1: boom"), "context appended");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_accept_report_reads_verdict_map_sorted_by_key() {
+        let dir = std::env::temp_dir().join(format!("af-accept-rep-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(
+            dir.join("accept_report.json"),
+            r#"{"C-M2":"fail","C-M1":"pass","C-A1":"pass"}"#,
+        )
+        .unwrap();
+        let got = parse_accept_report(&dir).unwrap();
+        // Sorted by contract key: C-A1, C-M1, C-M2.
+        let keys: Vec<&str> = got.iter().map(|c| c.contract.as_str()).collect();
+        assert_eq!(keys, vec!["C-A1", "C-M1", "C-M2"]);
+        assert_eq!(got[0].verdict, "pass");
+        assert_eq!(got[1].verdict, "pass");
+        assert_eq!(got[2].verdict, "fail");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_accept_report_missing_file_returns_none() {
+        let dir = std::env::temp_dir().join(format!("af-accept-miss-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        assert!(
+            parse_accept_report(&dir).is_none(),
+            "missing report is best-effort"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_accept_report_bad_json_returns_none() {
+        let dir = std::env::temp_dir().join(format!("af-accept-bad-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("accept_report.json"), "not json").unwrap();
+        assert!(parse_accept_report(&dir).is_none(), "bad report is ignored");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
