@@ -140,12 +140,16 @@ pub fn execute_task(
 
 /// Best-effort per-contract acceptance report (verify tasks). Reads
 /// `accept_report.json` from the worktree root (the gate's cwd). The file is
-/// an object `{"C-M1":"pass","C-M2":"fail",...}`. Missing or unparseable
-/// reports yield `None` and NEVER fail the task — the gate's exit code is the
-/// sole pass/fail authority; the report only adds per-contract detail.
+/// an object `{"C-M1":"pass","C-M2":"fail",...}`. Missing, empty (an empty
+/// object `{}` or an empty file), or unparseable reports yield `None` and NEVER
+/// fail the task — the gate's exit code is the sole pass/fail authority; the
+/// report only adds per-contract detail.
 fn parse_accept_report(wt_path: &Path) -> Option<Vec<ContractVerdict>> {
     let raw = std::fs::read_to_string(wt_path.join("accept_report.json")).ok()?;
     let map: std::collections::BTreeMap<String, String> = serde_json::from_str(&raw).ok()?;
+    if map.is_empty() {
+        return None;
+    }
     Some(
         map.into_iter()
             .map(|(contract, verdict)| ContractVerdict { contract, verdict })
@@ -1489,6 +1493,30 @@ b.md"
         let _ = std::fs::create_dir_all(&dir);
         std::fs::write(dir.join("accept_report.json"), "not json").unwrap();
         assert!(parse_accept_report(&dir).is_none(), "bad report is ignored");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_accept_report_non_string_value_returns_none() {
+        let dir = std::env::temp_dir().join(format!("af-accept-nonstr-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("accept_report.json"), r#"{"C-M1":1}"#).unwrap();
+        assert!(
+            parse_accept_report(&dir).is_none(),
+            "non-string verdict is ignored"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_accept_report_empty_object_returns_none() {
+        let dir = std::env::temp_dir().join(format!("af-accept-empty-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("accept_report.json"), r#"{}"#).unwrap();
+        assert!(
+            parse_accept_report(&dir).is_none(),
+            "empty report is ignored"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
