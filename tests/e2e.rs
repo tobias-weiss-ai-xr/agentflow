@@ -1405,6 +1405,7 @@ fn failed_receipt_carries_the_failure_reason() {
 
 /// A verify task whose gate passes is recorded `verified`, the branch is
 /// archived (not merged), and the base branch is untouched.
+// spec: lifecycle/verify-tasks#verify-task-passes-and-archives
 #[test]
 fn verify_task_gate_pass_archives_branch_and_records_verified() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -1489,6 +1490,7 @@ fn verify_task_with_zero_commits_passes_when_gate_passes() {
 }
 
 /// A verify task whose gate FAILS is recorded failed (never verified).
+// spec: lifecycle/verify-tasks#verify-task-gate-fails
 #[test]
 fn verify_task_gate_failure_is_failed_not_verified() {
     let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
