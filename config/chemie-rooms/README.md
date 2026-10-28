@@ -45,6 +45,13 @@ real data (manifest + molar_heat) after the LLM merged a hollow version
 (fields always null; gate only checked field presence). Lesson: after
 risky data-wiring tasks, verify REAL values on main, not just gate pass.
 
+PHOTOS: reached the achievable maximum 91/92 (Promethium-61 has no free
+image left at Wikimedia; 27 elements never had a free one — ©
+images-of-elements only). Wikimedia 429 is IP-wide and outlives the
+`retry-after: 600` hint; the reliable bypass is own-thumb construction on
+**thumb.wikimedia.org** (1280px — 1024px yields 400 from thumbor) with
+a wsrv.nl-proxy fallback (never url-encode the proxy `url` param).
+
 ## Campaign: merge discipline
 
 - **af merged LOCAL-only**: `af run` commits the task branch onto the local
