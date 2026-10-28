@@ -36,6 +36,15 @@ Validated worker/model definitions for the chemie-lernen.org campaigns
   `accept` gate → merge to main) works with `tud/mistral-medium-3.5-128b`
   via `cli: "builtin"` + litellm api_base + MASTER key.
 
+## Outcome (2026-10-28)
+
+ALL 6 tasks DONE and live-deployed (chemie-lernen.org). Merges made by af
+are LOCAL-only — the operator pushed each batch, which triggered the GH
+deploy. Final operator fix after T-03b: the generator wired `mh`/`ph` to
+real data (manifest + molar_heat) after the LLM merged a hollow version
+(fields always null; gate only checked field presence). Lesson: after
+risky data-wiring tasks, verify REAL values on main, not just gate pass.
+
 ## Campaign: merge discipline
 
 - **af merged LOCAL-only**: `af run` commits the task branch onto the local
