@@ -1,0 +1,43 @@
+{
+  "defaults": {
+    "accept_timeout_s": 1800,
+    "max_attempts": 3,
+    "retry_delay_s": 30,
+    "agent_timeout_s": 5400
+  },
+  "workers": [
+    {
+      "name": "chemie-mistral",
+      "provider": "litellm",
+      "model": "tud/mistral-medium-3.5-128b",
+      "api_base": "http://localhost:4000/v1",
+      "api_key_env": "LITELLM_MASTER_KEY",
+      "enabled": true,
+      "cli": "builtin",
+      "max_turns": 64,
+      "price_per_mtok_usd": 0.9
+    },
+    {
+      "name": "chemie-ministral",
+      "provider": "litellm",
+      "model": "tud/ministral-3-14b-instruct",
+      "api_base": "http://localhost:4000/v1",
+      "api_key_env": "LITELLM_MASTER_KEY",
+      "enabled": true,
+      "cli": "builtin",
+      "max_turns": 40,
+      "price_per_mtok_usd": 0.3
+    },
+    {
+      "name": "chemie-gemma",
+      "provider": "litellm",
+      "model": "tud/gemma-4-31b-it",
+      "api_base": "http://localhost:4000/v1",
+      "api_key_env": "LITELLM_MASTER_KEY",
+      "enabled": true,
+      "cli": "builtin",
+      "max_turns": 40,
+      "price_per_mtok_usd": 0.25
+    }
+  ]
+}
