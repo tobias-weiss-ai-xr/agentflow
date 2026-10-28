@@ -49,8 +49,8 @@ export TF_REPO_DIR=/opt/git/hugo-chemie-lernen-org
 export TF_STATE_DIR=/opt/git/taskfleet/state-chemie-rooms
 mkdir -p "$TF_STATE_DIR"
 set -a; source /opt/litellm-compose/.env; set +a   # LITELLM_MASTER_KEY
-./target/release/af validate --tasks config/chemie-rooms/tasks.json --workers config/chemie-rooms/workers.json
-nohup ./target/release/af run --tasks config/chemie-rooms/tasks.json \
+/usr/local/bin/af validate --tasks config/chemie-rooms/tasks.json --workers config/chemie-rooms/workers.json
+nohup /usr/local/bin/af run --tasks config/chemie-rooms/tasks.json \
   --workers config/chemie-rooms/workers.json >"$TF_STATE_DIR/af.log" 2>&1 &
 echo $! > /tmp/chemie-rooms-af.pid
 ```
