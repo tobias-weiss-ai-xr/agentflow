@@ -38,6 +38,24 @@ Validated worker/model definitions for the chemie-lernen.org campaigns
 
 ## Campaign: merge discipline
 
+- **af merged LOCAL-only**: `af run` commits the task branch onto the local
+  `main` but does NOT push. GH Actions deploys (chemie-lernen.org) fire only
+  on PUSH to main — the operator must push afterwards (or run a push loop).
+  Check `git branch -r --contains <merge>` to confirm origin has it.
+- **Gate hot-reload is NOT a mid-flight guard**: af re-reads tasks.json each
+  poll, but an in-flight attempt that completes before the next poll is
+  evaluated against the gate that was loaded when it finished — a changed
+  gate does NOT retro-protect a starting attempt. After risky tasks (assets,
+  downloads), verify merged content on main by hand.
+- **`cli: "builtin"` runs the agent loop IN-PROCESS** (no per-attempt child
+  process to kill). To intervene: `af stop --tasks … --workers …` (drain
+  flag), then if the daemon has no pid file (`state/af.pid` missing under
+  nohup), SIGTERM the daemon PID directly (burns the in-flight attempt's
+  retry budget — acceptable).
+- **Wikimedia upload throttling** (IP-level 429 even for plain curl): do NOT
+  hammer — cooldown then gentle idempotent fetch loop (1 request at a time,
+  90s between runs, keep partial results).
+
 Each task merge to `main` auto-triggers the chemie-lernen.org GH Actions
 deploy (≈7 min, incl. Chat-API docker image — that image build has flaked
 once with a buildx EOF; fix = `gh run rerun`, no code change).
