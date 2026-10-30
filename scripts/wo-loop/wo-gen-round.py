@@ -172,7 +172,7 @@ def build_task(row, batch):
         "acceptance_prose": prose,
         "accept": acceptance,
         "gate_replay": True,
-        "max_turns": 64,
+        "max_turns": 96,
     }
 
 
