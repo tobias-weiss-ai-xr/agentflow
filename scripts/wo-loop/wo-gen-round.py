@@ -50,7 +50,29 @@ D={EDITOR}
 [ -f "$D/{SLUG}.test.mjs" ] || {{ echo 'FAIL: missing {SLUG}.test.mjs'; exit 1; }}
 node "$D/{SLUG}.test.mjs"
 for t in {REGRESSION}; do node "$D/$t.test.mjs" >/dev/null 2>&1 || {{ echo "FAIL: $t.test.mjs"; exit 1; }}; echo "ok $t"; done
-{BIOME} check "$D" 2>&1 | tail -3
+# Lint ONLY agent-ADDED files (biome): existing committed files carry
+# pre-existing violations (e.g. editor.js:36 "use strict") so a full-file
+# check can never pass. Added files are fully agent-authored -> must be clean.
+ADDED=$(git diff --name-only --diff-filter=A main 2>/dev/null || true)
+LINTED=0
+for f in $ADDED; do
+  case "$f" in
+    *.js|*.mjs|*.ts|*.tsx)
+      {BIOME} check "$f" >/dev/null 2>&1 || {{ echo "FAIL: biome $f"; exit 1; }}
+      LINTED=$((LINTED+1));;
+  esac
+done
+# Modified files: syntax check only (node --check), pre-existing debt ignored.
+MOD=$(git diff --name-only --diff-filter=M main 2>/dev/null || true)
+SYNC=0
+for f in $MOD; do
+  case "$f" in
+    *.js|*.mjs)
+      node --check "$f" >/dev/null 2>&1 || {{ echo "FAIL: syntax $f"; exit 1; }}
+      SYNC=$((SYNC+1));;
+  esac
+done
+echo "lint-ok (added:$LINTED modified-syntax:$SYNC)"
 echo '{SLUG}-PASS'
 """
 
@@ -127,8 +149,12 @@ def build_task(row, batch):
         "handlers. You MUST also author a zero-dependency node test at "
         f"{editor}/{slug}.test.mjs in the repo's established style "
         "(node:assert + readFileSync, runnable with 'node "
-        f"{editor}/{slug}.test.mjs') asserting the new behavior — the "
-        "acceptance gate runs it. Commit your work; the gate decides the merge."
+        f"{editor}/{slug}.test.mjs') asserting the new behavior. The gate "
+        "biome-checks NEW/added files, so the test must be biome-clean — "
+        "follow the repo style of the existing *.test.mjs files (biome.json: "
+        "no semicolons, double quotes, 2-space, LF; check with 'biome check "
+        "<file>' before committing). Modified files are syntax-checked only. "
+        "Commit your work; the gate decides the merge."
     )
     return {
         "id": tid,
