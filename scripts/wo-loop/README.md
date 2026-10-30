@@ -63,6 +63,40 @@ editor dir, then runs biome. Task scope is the editor tree; set a per-slug
 | deep1 failure | loop mitigation |
 |---|---|
 | all tasks × 6 attempts deadlocked → manual restart | fresh ids per batch; shelving; batch limit |
-| turn cap 96/128 per task too small for huge specs | `max_turns: 64` per generated task (bounded, retries get fresh budget) |
+| turn cap 96/128 per task too small for huge specs | `max_turns: 96` per generated task (bounded, retries get fresh budget) |
 | manually re-generating tasks.json per round | `wo-gen-round.py` does it from the census queue |
 | pi vision loop = no-op drift / hard resets | af worktrees + gates + merge only on pass; no `reset --hard` |
+
+## Operational lessons (first live batch, 2026-10-30)
+
+- **The gate runs with cwd = the task worktree**, NOT the main repo. Never
+  `cd /home/weiss/git/World-Office/server` in the gate — the agent's committed
+  work lives in `state/worktrees/<task>`, an un-merged worktree is invisible
+  from the main checkout (every gate failed with `missing <slug>.test.mjs`
+  until this was fixed).
+- **Biome must check agent-ADDED files only.** The whole editor dir has ~260
+  pre-existing errors and `editor.js` itself has pre-existing violations
+  (`"use strict"` at line 36), so a dir-wide or full-file biome check can
+  never pass for any agent. Added files are fully agent-authored → must be
+  clean; modified files get `node --check` only.
+- **Git worktrees have no `node_modules`** — reference
+  `.../server/node_modules/.bin/biome` by absolute path inside the gate.
+- **A dirty main checkout kills every archive-reuse merge** ("your local
+  changes would be overwritten"). Under the first (broken) gate, agents
+  `cd`'d to the base repo path themselves and leaked files into main
+  (incl. an untracked `content-controls.test.mjs`). Fix: park the leaked work
+  on a `tf/parked-af-loop-<ts>` branch, restore main clean, prune scratch
+  worktrees.
+- **`af stop` drains and returns 3** → `wo-loop.sh` treats exit 3 as "stop
+  requested" and exits cleanly (systemd Restart=on-failure keeps it up).
+
+## Troubleshooting
+
+- Watch: `journalctl -u wo-loop -f` or `tail -f /home/weiss/.wo-loop/run.log`
+- Receipts: `/home/weiss/.wo-loop/state/receipts/*.json` (outcome,
+  failure_reason)
+- Base repo never dirty: verify `git -C /home/weiss/git/World-Office/server
+  status --porcelain` is empty; if not, park it (see lessons above).
+- Simulate a gate from the worktree contract before editing the template:
+  `git worktree add /tmp/x -b sim main` → author test+change → run gate from
+  `/tmp/x`.
