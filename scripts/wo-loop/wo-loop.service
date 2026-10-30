@@ -1,0 +1,23 @@
+[Unit]
+Description=wo-loop — Autonomous World Office parity dev loop (agentflow-driven)
+Documentation=https://codeberg.org/World-Office/server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/weiss/.wo-loop/wo-loop.sh
+User=weiss
+Group=weiss
+Environment=HOME=/home/weiss
+EnvironmentFile=/etc/environment
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/weiss/.cargo/bin
+Environment=WO_LOOP_DIR=/home/weiss/.wo-loop
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wo-loop
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
