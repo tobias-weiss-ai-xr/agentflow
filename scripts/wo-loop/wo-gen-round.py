@@ -40,15 +40,17 @@ BATCH_LIMIT = int(os.environ.get("WO_BATCH_LIMIT", "3"))
 REGRESSION = ["font-style", "view-styles", "paragraph-shading",
               "paste-sanitize", "comments-thread", "presence-avatar"]
 
+# Gate runs with cwd = af's task worktree (git worktree — NO node_modules),
+# so biome must be referenced by absolute path in the main checkout.
+BIOME = f"{REPO}/node_modules/.bin/biome"
+
 GATE_TEMPLATE = """#!/bin/sh
 set -e
-cd {REPO}
 D={EDITOR}
-N=$(grep -c 'data-cmd' "$D/index.html" || true)
 [ -f "$D/{SLUG}.test.mjs" ] || {{ echo 'FAIL: missing {SLUG}.test.mjs'; exit 1; }}
 node "$D/{SLUG}.test.mjs"
 for t in {REGRESSION}; do node "$D/$t.test.mjs" >/dev/null 2>&1 || {{ echo "FAIL: $t.test.mjs"; exit 1; }}; echo "ok $t"; done
-node_modules/.bin/biome check "$D" 2>&1 | tail -3
+{BIOME} check "$D" 2>&1 | tail -3
 echo '{SLUG}-PASS'
 """
 
@@ -112,7 +114,7 @@ def build_task(row, batch):
     st = load_state().get(slug, {})
     editor = st.get("editor") or EDITOR
     gate = GATE_TEMPLATE.format(REPO=REPO, EDITOR=editor, SLUG=slug,
-                                REGRESSION=" ".join(REGRESSION))
+                                REGRESSION=" ".join(REGRESSION), BIOME=BIOME)
     acceptance = gate
     prose = (
         f"{row['title']} — OnlyOffice parity (slugs:{slug}).\n"
