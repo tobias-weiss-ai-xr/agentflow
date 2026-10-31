@@ -189,10 +189,18 @@ def main():
     st = load_state()
 
     if args.enqueue_all:
+        # Only queue actionable rows. census-artifact = the advisory judged the
+        # gap a capture-pipeline lag (feature exists; census script misses it);
+        # intentional-divergence = deliberate WO design choice. Neither is work.
+        def actionable(r):
+            return not r["title"].startswith(("census-artifact", "intentional-divergence"))
+
         for r in rows:
-            st.setdefault(r["slug"], {"batches_failed": 0, "parked": False})
+            if actionable(r):
+                st.setdefault(r["slug"], {"batches_failed": 0, "parked": False})
         save_state(st)
-        print(f"queued {len(rows)} slugs")
+        print(f"queued {sum(1 for r in rows if actionable(r))} of {len(rows)} slugs "
+              f"(skipped census-artifact/intentional-divergence)")
         return 0
 
     if args.record:
