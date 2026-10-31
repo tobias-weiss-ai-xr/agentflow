@@ -196,40 +196,55 @@ def main():
         return 0
 
     if args.record:
-        # Read receipts: merged -> parked(done); count failed batches per slug.
+        # Read receipts: merged -> parked(done). For failed attempts, count
+        # failures per slug ONLY within the most recent batch that ran (the
+        # task id embeds the batch: WO-<batch>-<slug>), so a slug un-shelved
+        # after an environmental failure gets a clean slate — old batches'
+        # failures must not re-shelve it before its fresh attempt runs.
         rec_dir = Path(args.record) / "receipts"
         merged = {}
-        failed = {}
+        max_batch = 0
         if rec_dir.exists():
             for f in rec_dir.glob("*.json"):
                 try:
                     d = json.loads(f.read_text(encoding="utf-8"))
-                    out = d.get("outcome")
-                    m = re.match(r"^WO-\d+-([\w-]+)", d.get("task", ""))
+                    m = re.match(r"^WO-(\d+)-([\w-]+)", d.get("task", ""))
                     if not m:
                         continue
-                    slug = m.group(1)
-                    if out == "merged":
+                    batch, slug = int(m.group(1)), m.group(2)
+                    max_batch = max(max_batch, batch)
+                    if d.get("outcome") == "merged":
                         merged[slug] = True
-                    elif out in ("failed", "interrupted", "recovered"):
-                        failed[slug] = failed.get(slug, 0) + 1
                 except Exception:
                     pass
+        # second pass: failures in the LATEST batch only
+        latest_fail = {}
+        for f in rec_dir.glob("*.json"):
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+                m = re.match(r"^WO-(\d+)-([\w-]+)", d.get("task", ""))
+                if not m or int(m.group(1)) != max_batch:
+                    continue
+                slug = m.group(2)
+                if d.get("outcome") in ("failed", "interrupted", "recovered"):
+                    latest_fail[slug] = latest_fail.get(slug, 0) + 1
+            except Exception:
+                pass
         for slug, was_merged in merged.items():
             old = st.setdefault(slug, {"batches_failed": 0, "parked": False})
             if not old.get("parked"):
                 old["parked"] = True
                 old["reason"] = "merged (accepted by gate)"
-        for slug, n in failed.items():
+        for slug, n in latest_fail.items():
             old = st.setdefault(slug, {"batches_failed": 0, "parked": False})
-            if old.get("parked") or n < old.get("batches_failed", 0):
+            if old.get("parked"):
                 continue
             old["batches_failed"] = n
             if n >= SHELVE_AFTER and not old.get("parked"):
                 old["parked"] = True
                 old["reason"] = f"shelved after {n} failed batches"
         save_state(st)
-        print(f"recorded: merged={len(merged)} failed_batches={len(failed)}")
+        print(f"recorded: merged={len(merged)} latest-batch-failures={len(latest_fail)}")
         return 0
 
     if args.batch is None:
