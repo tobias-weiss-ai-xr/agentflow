@@ -60,7 +60,7 @@ After the loop merges features, the honest refill is re-running the census
 pipeline so the advisory re-ranks what is *still* missing:
 
 ```
-scp scripts/wo-loop/reseed-queue.py legion:/tmp/
+scp scripts/wo-loop/reseed-queue.py scripts/wo-loop/advisory3.sh legion:/tmp/
 wsl ssh weiss@legion 'cd …/wo-test-harness/census && python3 /tmp/reseed-queue.py'
 # advisory (needs VISION_* env; see notes below) then:
 wsl ssh weiss@legion 'bash /tmp/advisory3.sh'   # deepseek advisory -> ledger-gap.md
