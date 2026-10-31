@@ -51,7 +51,38 @@ Seeds are parsed from the census ledger-gap report
 (`wo-test-harness/census/census/ledger-gap.md`). To add work to the loop:
 
 1. add a row to ledger-gap.md (`### slug — description` + `spec:`/`first step:`),
-2. `python3 wo-gen-round.py --enqueue-all` (won't clobber existing state).
+2. `python3 wo-gen-round.py --enqueue-all` (won't clobber existing state;
+   rows titled `census-artifact`/`intentional-divergence` are skipped).
+
+### Full reseed after a batch of merges (census re-score)
+
+After the loop merges features, the honest refill is re-running the census
+pipeline so the advisory re-ranks what is *still* missing:
+
+```
+scp scripts/wo-loop/reseed-queue.py legion:/tmp/
+wsl ssh weiss@legion 'cd …/wo-test-harness/census && python3 /tmp/reseed-queue.py'
+# advisory (needs VISION_* env; see notes below) then:
+wsl ssh weiss@legion 'bash /tmp/advisory3.sh'   # deepseek advisory -> ledger-gap.md
+python3 wo-gen-round.py --enqueue-all && sudo systemctl start wo-loop
+```
+
+Notes learned the hard way (2026-10-31):
+
+- **build.py writes `census/ledger/ledger.json`; ledger-gap.py reads
+  `census/census/ledger.json`** — sync the copy (`advisory.sh` does).
+- **Reasoning models cannot run the advisory**: glm-5.2, qwen3.5, even
+  mistral-medium burn the whole `max_tokens` on `reasoning_content` and
+  return `content=None` (`'NoneType' object has no attribute 'strip'`).
+  The **local deepseek-v4-flash via litellm `saia/deepseek-v4-flash-0731`**
+  works (7 s, clean JSON, `--chunk 8`).
+- `/etc/environment` is root-only on legion — read the key with
+  `sudo awk`.
+- Never leave a file named `inspect.py` in `/tmp` — running a script from
+  `/tmp` puts it first on `sys.path` and shadows stdlib `import inspect`.
+- The re-score after 18 merges: L0 44 -> 22, interactions clear; the
+  advisory reclassified most shipped slugs as `census-artifact` and
+  surfaced 9 new actionable ones.
 
 The task gate requires the agent to author `<slug>.test.mjs` (its established
 zero-dep node-test style) plus a set of existing regression tests in the same
