@@ -52,6 +52,8 @@ fn receipt(task: &str, attempt: u32, ts: u64) -> Receipt {
         wall_clock_s: 1.0,
         tokens: None,
         turns: None,
+        prompt_tokens: None,
+        completion_tokens: None,
         ts,
         outcome: "merged".to_string(),
         error: None,
@@ -219,10 +221,11 @@ fn legacy_receipts_load_as_merged_with_no_error() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Receipts round-trip the harness turn count, and receipts written before
-/// `turns` existed load with `None` (WO campaign analysis 2026-10-31:
-/// turn-cap was the dominant failure kind — 12 of 19 — but receipts carried
-/// no turn data, so calibration meant grepping free-text logs).
+/// Receipts round-trip the harness turn count and the prompt/completion
+/// token split, and receipts written before those fields existed load with
+/// `None` (WO campaign analysis 2026-10-31: turn-cap was the dominant
+/// failure kind — 12 of 19 — and cost estimation used a guessed 3:1 blend;
+/// both meant grepping logs; now they are first-class receipt data).
 // spec: state/cost-receipts#receipts-roundtrip-turns
 #[test]
 fn receipts_roundtrip_turns_and_default_none_for_legacy() {
@@ -237,6 +240,8 @@ fn receipts_roundtrip_turns_and_default_none_for_legacy() {
             wall_clock_s: 1.0,
             tokens: Some(1000),
             turns: Some(96),
+            prompt_tokens: Some(900),
+            completion_tokens: Some(100),
             ts: 0,
             outcome: "failed".into(),
             error: Some("harness: turn cap 96 reached".into()),
@@ -247,6 +252,16 @@ fn receipts_roundtrip_turns_and_default_none_for_legacy() {
     let loaded = Store::new(dir.clone()).load_receipts();
     assert_eq!(loaded.len(), 1, "receipt loads: {loaded:?}");
     assert_eq!(loaded[0].turns, Some(96), "turns survive the round-trip");
+    assert_eq!(
+        loaded[0].prompt_tokens,
+        Some(900),
+        "prompt split survives the round-trip"
+    );
+    assert_eq!(
+        loaded[0].completion_tokens,
+        Some(100),
+        "completion split survives the round-trip"
+    );
 
     // Legacy shape: no `turns` key at all.
     std::fs::write(
@@ -258,6 +273,14 @@ fn receipts_roundtrip_turns_and_default_none_for_legacy() {
     assert_eq!(loaded.len(), 2);
     let legacy = loaded.iter().find(|r| r.task == "B").unwrap();
     assert_eq!(legacy.turns, None, "legacy receipts load with turns None");
+    assert_eq!(
+        legacy.prompt_tokens, None,
+        "legacy receipts load with prompt_tokens None"
+    );
+    assert_eq!(
+        legacy.completion_tokens, None,
+        "legacy receipts load with completion_tokens None"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

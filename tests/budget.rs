@@ -138,6 +138,8 @@ fn seed_receipt(st: &Settings, task: &str, wall_clock_s: f64) {
             wall_clock_s,
             tokens: None,
             turns: None,
+            prompt_tokens: None,
+            completion_tokens: None,
             ts: 1,
             outcome: "merged".into(),
             error: None,

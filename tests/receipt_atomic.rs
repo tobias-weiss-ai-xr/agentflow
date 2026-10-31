@@ -37,6 +37,8 @@ fn receipt(task: &str, attempt: u32, wall: f64, ts: u64) -> Receipt {
         wall_clock_s: wall,
         tokens: None,
         turns: None,
+        prompt_tokens: None,
+        completion_tokens: None,
         ts,
         outcome: "merged".to_string(),
         error: None,

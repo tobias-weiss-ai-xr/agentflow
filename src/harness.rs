@@ -69,6 +69,10 @@ impl Stop {
 pub struct Output {
     pub final_text: String,
     pub total_tokens: u64,
+    /// Prompt/completion split when the provider reports it (every
+    /// round-trip's `usage` accumulates into both).
+    pub prompt_tokens: Option<u64>,
+    pub completion_tokens: Option<u64>,
     pub turns: u32,
     pub stop: Stop,
     /// Machine-readable failure reason for the receipt (`harness: …`).
@@ -484,6 +488,7 @@ pub fn run(
         json!({"role": "user", "content": prompt}),
     ];
     let (mut total_tokens, mut turns) = (0u64, 0u32);
+    let (mut prompt_tokens, mut completion_tokens) = (None::<u64>, None::<u64>);
     let mut final_text = String::new();
 
     let (env_pairs, env_allow) = crate::execute::agent_env(worker, &|k| std::env::var(k).ok());
@@ -539,6 +544,15 @@ pub fn run(
         if let Some(u) = resp.pointer("/usage/total_tokens").and_then(|t| t.as_u64()) {
             total_tokens = total_tokens.saturating_add(u);
         }
+        // Split accumulation: a provider reporting either side opts in;
+        // missing sides keep the pair partial-but-accumulated (Some only
+        // once seen, so a split-less provider stays None).
+        if let Some(p) = resp.pointer("/usage/prompt_tokens").and_then(|t| t.as_u64()) {
+            prompt_tokens = Some(prompt_tokens.map_or(p, |acc: u64| acc.saturating_add(p)));
+        }
+        if let Some(c) = resp.pointer("/usage/completion_tokens").and_then(|t| t.as_u64()) {
+            completion_tokens = Some(completion_tokens.map_or(c, |acc: u64| acc.saturating_add(c)));
+        }
         let (msg, calls) = match parse_message(&resp) {
             Ok(m) => m,
             Err(e) => break (Stop::ProviderError, Some(format!("harness: {e}"))),
@@ -585,6 +599,8 @@ pub fn run(
     Output {
         final_text,
         total_tokens,
+        prompt_tokens,
+        completion_tokens,
         turns,
         stop,
         error,

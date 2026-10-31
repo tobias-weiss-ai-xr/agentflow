@@ -194,6 +194,8 @@ mod tests {
             wall_clock_s: 1.0,
             tokens: None,
             turns: None,
+            prompt_tokens: None,
+            completion_tokens: None,
             ts: 0,
             outcome: outcome.into(),
             error: None,

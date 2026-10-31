@@ -118,6 +118,15 @@ pub struct Receipt {
     /// for non-agent bookkeeping receipts (recovered/interrupted/verified).
     #[serde(default)]
     pub turns: Option<u32>,
+    /// Prompt-side and completion-side token counts for this attempt
+    /// (accumulated `usage.prompt_tokens` / `usage.completion_tokens`).
+    /// Total stays in `tokens`; the split lets cost estimation drop the
+    /// 3:1 blend guess once measured ratios exist. `None` when the
+    /// provider does not report a split (and on legacy receipts).
+    #[serde(default)]
+    pub prompt_tokens: Option<u64>,
+    #[serde(default)]
+    pub completion_tokens: Option<u64>,
     pub ts: u64,
     #[serde(default = "default_outcome")]
     pub outcome: String,
@@ -604,6 +613,8 @@ mod tests {
                 wall_clock_s: 12.5,
                 tokens: Some(100),
                 turns: None,
+                prompt_tokens: None,
+                completion_tokens: None,
                 ts: 1,
                 outcome: "merged".into(),
                 error: None,
@@ -620,6 +631,8 @@ mod tests {
                 wall_clock_s: 7.0,
                 tokens: None,
                 turns: None,
+                prompt_tokens: None,
+                completion_tokens: None,
                 ts: 2,
                 outcome: "failed".into(),
                 error: Some("agent exited 7".into()),
@@ -645,6 +658,8 @@ mod tests {
             wall_clock_s: 1.0,
             tokens: None,
             turns: None,
+            prompt_tokens: None,
+            completion_tokens: None,
             ts: 0,
             outcome: "verified".into(),
             error: None,
@@ -665,6 +680,8 @@ mod tests {
                 wall_clock_s: 1.0,
                 tokens: None,
                 turns: None,
+                prompt_tokens: None,
+                completion_tokens: None,
                 ts: 0,
                 outcome: outcome.into(),
                 error: None,
@@ -681,6 +698,8 @@ mod tests {
             wall_clock_s: 1.0,
             tokens: None,
             turns: None,
+            prompt_tokens: None,
+            completion_tokens: None,
             ts: 0,
             outcome: "failed".into(),
             error: Some("boom".into()),

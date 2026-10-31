@@ -2349,6 +2349,8 @@ fn reuse_writes_a_recovered_receipt() {
             wall_clock_s: 100.0,
             tokens: None,
             turns: None,
+            prompt_tokens: None,
+            completion_tokens: None,
             ts: 1,
             outcome: "failed".into(),
             error: Some("acceptance gate failed (exit 1): boom".into()),
@@ -2640,4 +2642,41 @@ fn native_failure_with_no_committed_work_cleans_the_branch() {
     );
     // And the worktree dir is gone too (full cleanup, not remove_worktree_only).
     assert!(!f.st.worktree_root.join("A").exists());
+}
+
+// spec: state/cost-receipts#receipts-roundtrip-turns
+#[test]
+fn native_receipt_records_turns_and_token_split() {
+    let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+    std::env::remove_var("FAKE_AGENT_EXIT");
+    std::env::remove_var("FAKE_AGENT_TOUCH");
+    // Two stub turns, each reporting usage 10/5/15 — the receipt must carry
+    // the ACCUMULATED split (20/10/30) plus the turn count, not just totals.
+    let stub = NativeStub::spawn(vec![
+        native_bash_turn("echo work > A.txt && git add A.txt && git commit -m w"),
+        native_bash_turn("echo done"),
+    ]);
+    let f = fixture(
+        &format!(
+            r#"{{ "tasks": [ {{"id":"A","title":"touch a file","scope":["A.txt"],"accept":"{g}"}} ] }}"#,
+            g = gate_cmd("A.txt")
+        ),
+        &native_worker_json(&stub.url, 2, 2),
+    );
+    std::env::set_var("TF_NO_REUSE", "1");
+    let code = run::run_loop(&f.cfg, &f.st, &RunOptions::default());
+    std::env::remove_var("TF_NO_REUSE");
+    assert_eq!(code, 0);
+    let receipts = Store::new(f.st.state_dir.clone()).load_receipts();
+    let r = receipts.iter().find(|r| r.task == "A").unwrap();
+    assert_eq!(r.turns, Some(2), "turn count survives to the receipt");
+    assert_eq!(r.tokens, Some(30), "total accumulates across round-trips");
+    assert_eq!(
+        r.prompt_tokens, Some(20),
+        "prompt split accumulates across round-trips"
+    );
+    assert_eq!(
+        r.completion_tokens, Some(10),
+        "completion split accumulates across round-trips"
+    );
 }

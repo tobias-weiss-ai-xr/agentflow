@@ -118,6 +118,8 @@ fn receipt(task: &str, attempt: u32, worker: &str, outcome: &str, ts: u64) -> Re
         wall_clock_s: 0.0,
         tokens: None,
         turns: None,
+        prompt_tokens: None,
+        completion_tokens: None,
         ts,
         outcome: outcome.into(),
         error: None,

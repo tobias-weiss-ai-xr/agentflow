@@ -130,6 +130,8 @@ pub fn execute_task(
         wall_clock_s: start.elapsed().as_secs_f64(),
         tokens: spend.tokens,
         turns: spend.turns,
+        prompt_tokens: spend.prompt_tokens,
+        completion_tokens: spend.completion_tokens,
         ts: now_ts(),
         outcome: outcome_name.to_string(),
         error,
@@ -248,6 +250,8 @@ fn record_phase(ctx: &ExecCtx, id: &str, phase: AttemptPhase) {
 struct Spend {
     tokens: Option<u64>,
     turns: Option<u32>,
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
     cost_micros: Option<u64>,
 }
 
@@ -399,6 +403,8 @@ fn execute_attempt(
             ));
             spend.tokens = Some(out.total_tokens);
             spend.turns = Some(out.turns);
+            spend.prompt_tokens = out.prompt_tokens;
+            spend.completion_tokens = out.completion_tokens;
             crate::subprocess::CmdOut {
                 kind: out.stop.cmd_kind(),
                 code: if out.stop == crate::harness::Stop::Normal {
@@ -1286,6 +1292,8 @@ mod tests {
             wall_clock_s: 1.0,
             tokens: None,
         turns: None,
+        prompt_tokens: None,
+        completion_tokens: None,
             ts: 0,
             outcome: outcome.into(),
             error: error.map(|e| e.into()),
@@ -1354,6 +1362,8 @@ mod tests {
             wall_clock_s: 1.0,
             tokens: None,
         turns: None,
+        prompt_tokens: None,
+        completion_tokens: None,
             ts: 0,
             outcome: outcome.into(),
             error: None,
