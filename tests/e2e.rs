@@ -2348,6 +2348,7 @@ fn reuse_writes_a_recovered_receipt() {
             model: "gpt-4o".into(),
             wall_clock_s: 100.0,
             tokens: None,
+            turns: None,
             ts: 1,
             outcome: "failed".into(),
             error: Some("acceptance gate failed (exit 1): boom".into()),

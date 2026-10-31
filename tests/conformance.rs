@@ -51,6 +51,7 @@ fn receipt(task: &str, attempt: u32, ts: u64) -> Receipt {
         model: "m".to_string(),
         wall_clock_s: 1.0,
         tokens: None,
+        turns: None,
         ts,
         outcome: "merged".to_string(),
         error: None,
@@ -214,6 +215,49 @@ fn legacy_receipts_load_as_merged_with_no_error() {
         loaded[0].error, None,
         "no failure reason on legacy receipts"
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Receipts round-trip the harness turn count, and receipts written before
+/// `turns` existed load with `None` (WO campaign analysis 2026-10-31:
+/// turn-cap was the dominant failure kind — 12 of 19 — but receipts carried
+/// no turn data, so calibration meant grepping free-text logs).
+// spec: state/cost-receipts#receipts-roundtrip-turns
+#[test]
+fn receipts_roundtrip_turns_and_default_none_for_legacy() {
+    let dir = tmpdir();
+    let store = Store::new(dir.clone());
+    store
+        .append_receipt(&Receipt {
+            task: "A".into(),
+            attempt: 1,
+            worker: "w1".into(),
+            model: "m".into(),
+            wall_clock_s: 1.0,
+            tokens: Some(1000),
+            turns: Some(96),
+            ts: 0,
+            outcome: "failed".into(),
+            error: Some("harness: turn cap 96 reached".into()),
+            cost_micros: None,
+            contracts: None,
+        })
+        .unwrap();
+    let loaded = Store::new(dir.clone()).load_receipts();
+    assert_eq!(loaded.len(), 1, "receipt loads: {loaded:?}");
+    assert_eq!(loaded[0].turns, Some(96), "turns survive the round-trip");
+
+    // Legacy shape: no `turns` key at all.
+    std::fs::write(
+        dir.join("receipts").join("B-1-0.json"),
+        r#"{"task":"B","attempt":1,"worker":"w1","model":"m","wall_clock_s":1.0,"tokens":null,"ts":0,"outcome":"merged","error":null}"#,
+    )
+    .unwrap();
+    let loaded = Store::new(dir.clone()).load_receipts();
+    assert_eq!(loaded.len(), 2);
+    let legacy = loaded.iter().find(|r| r.task == "B").unwrap();
+    assert_eq!(legacy.turns, None, "legacy receipts load with turns None");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

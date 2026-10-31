@@ -443,6 +443,7 @@ fn the_router_prefers_the_faster_worker_only_when_trust_and_cost_tie() {
         model: "m".into(),
         wall_clock_s: wall,
         tokens: None,
+        turns: None,
         ts: 0,
         outcome: outcome.into(),
         error: None,

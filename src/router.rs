@@ -193,6 +193,7 @@ mod tests {
             model: "m".into(),
             wall_clock_s: 1.0,
             tokens: None,
+            turns: None,
             ts: 0,
             outcome: outcome.into(),
             error: None,

@@ -117,6 +117,7 @@ fn receipt(task: &str, attempt: u32, worker: &str, outcome: &str, ts: u64) -> Re
         model: "gpt-4o".into(),
         wall_clock_s: 0.0,
         tokens: None,
+        turns: None,
         ts,
         outcome: outcome.into(),
         error: None,

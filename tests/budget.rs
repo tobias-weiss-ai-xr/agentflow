@@ -137,6 +137,7 @@ fn seed_receipt(st: &Settings, task: &str, wall_clock_s: f64) {
             model: "gpt-4o".into(),
             wall_clock_s,
             tokens: None,
+            turns: None,
             ts: 1,
             outcome: "merged".into(),
             error: None,

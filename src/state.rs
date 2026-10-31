@@ -114,6 +114,10 @@ pub struct Receipt {
     pub model: String,
     pub wall_clock_s: f64,
     pub tokens: Option<u64>,
+    /// Harness turn count for this attempt. `None` for legacy receipts and
+    /// for non-agent bookkeeping receipts (recovered/interrupted/verified).
+    #[serde(default)]
+    pub turns: Option<u32>,
     pub ts: u64,
     #[serde(default = "default_outcome")]
     pub outcome: String,
@@ -599,6 +603,7 @@ mod tests {
                 model: "m".into(),
                 wall_clock_s: 12.5,
                 tokens: Some(100),
+                turns: None,
                 ts: 1,
                 outcome: "merged".into(),
                 error: None,
@@ -614,6 +619,7 @@ mod tests {
                 model: "m".into(),
                 wall_clock_s: 7.0,
                 tokens: None,
+                turns: None,
                 ts: 2,
                 outcome: "failed".into(),
                 error: Some("agent exited 7".into()),
@@ -638,6 +644,7 @@ mod tests {
             model: "m".into(),
             wall_clock_s: 1.0,
             tokens: None,
+            turns: None,
             ts: 0,
             outcome: "verified".into(),
             error: None,
@@ -657,6 +664,7 @@ mod tests {
                 model: "m".into(),
                 wall_clock_s: 1.0,
                 tokens: None,
+                turns: None,
                 ts: 0,
                 outcome: outcome.into(),
                 error: None,
@@ -672,6 +680,7 @@ mod tests {
             model: "m".into(),
             wall_clock_s: 1.0,
             tokens: None,
+            turns: None,
             ts: 0,
             outcome: "failed".into(),
             error: Some("boom".into()),

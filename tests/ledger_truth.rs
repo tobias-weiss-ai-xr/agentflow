@@ -100,6 +100,7 @@ fn receipt(
         model: "m".into(),
         wall_clock_s: wall,
         tokens: None,
+        turns: None,
         ts,
         outcome: outcome.into(),
         error: error.map(str::to_string),

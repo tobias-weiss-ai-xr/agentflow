@@ -129,6 +129,7 @@ pub fn execute_task(
         model: worker.model.clone(),
         wall_clock_s: start.elapsed().as_secs_f64(),
         tokens: spend.tokens,
+        turns: spend.turns,
         ts: now_ts(),
         outcome: outcome_name.to_string(),
         error,
@@ -246,6 +247,7 @@ fn record_phase(ctx: &ExecCtx, id: &str, phase: AttemptPhase) {
 #[derive(Debug, Clone, Copy, Default)]
 struct Spend {
     tokens: Option<u64>,
+    turns: Option<u32>,
     cost_micros: Option<u64>,
 }
 
@@ -396,6 +398,7 @@ fn execute_attempt(
                 out.stop, out.turns, out.total_tokens
             ));
             spend.tokens = Some(out.total_tokens);
+            spend.turns = Some(out.turns);
             crate::subprocess::CmdOut {
                 kind: out.stop.cmd_kind(),
                 code: if out.stop == crate::harness::Stop::Normal {
@@ -1282,6 +1285,7 @@ mod tests {
             model: "m".into(),
             wall_clock_s: 1.0,
             tokens: None,
+        turns: None,
             ts: 0,
             outcome: outcome.into(),
             error: error.map(|e| e.into()),
@@ -1349,6 +1353,7 @@ mod tests {
             model: "m".into(),
             wall_clock_s: 1.0,
             tokens: None,
+        turns: None,
             ts: 0,
             outcome: outcome.into(),
             error: None,
